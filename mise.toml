@@ -9,6 +9,9 @@ betterleaks = "1"
 ghalint = "1"
 # Applies the repository settings declared in .github/infra.yaml. A 0.x minor can break, so the range stays on 0.17.
 "github:babarot/gh-infra" = "0.17"
+# Reports the test coverage in CI (.octocov.yml, ci.yml's coverage job). A 0.x minor can break, so the range stays
+# on 0.83.
+"github:k1LoW/octocov" = "0.83"
 
 [settings]
 lockfile = true
