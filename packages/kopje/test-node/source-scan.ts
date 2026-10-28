@@ -53,7 +53,8 @@ export function resolve(from: string, specifier: string): string {
 
 // A string or template literal: its text parts and interpolated expressions in order, its ancestors (nearest first),
 // and the name of the constant it initializes (`const NAME = '...'`, with or without `as const` or a type; never a
-// `let` or `var`, which may be reassigned).
+// `let` or `var`, which may be reassigned). An expression's source is canonical(), so a guard keyed by it reads the same
+// under any formatter style.
 export type Part = { text: string } | { expression: Node; source: string }
 export type Literal = { node: Node; parts: Part[]; parents: Node[]; constant: string | null }
 
@@ -96,7 +97,7 @@ export function parse(source: Source): Parsed {
 				parts.push({ text: quasi.value.cooked ?? quasi.value.raw })
 				const expression = node.expressions[i]
 				if (expression !== undefined) {
-					parts.push({ expression, source: source.text.slice(expression.start, expression.end) })
+					parts.push({ expression, source: canonical(source.text, expression) })
 				}
 			})
 			literals.push({ node, parts, parents, constant: constantOf(node, parents) })
@@ -105,6 +106,21 @@ export function parse(source: Source): Parsed {
 	const value = { program: result.program, code, literals }
 	parsed.set(source, value)
 	return value
+}
+
+// The source of `node` in one style: each whitespace run as one space, and each string literal single-quoted unless
+// its value holds a single quote, a backslash or a line break (then as written).
+function canonical(text: string, node: Node): string {
+	let out = ''
+	let from = node.start
+	walk(node, (n) => {
+		if (n.type === 'Literal' && typeof n.value === 'string' && !/['\\\n\r\u2028\u2029]/.test(n.value)) {
+			out += `${text.slice(from, n.start)}'${n.value}'`
+			from = n.end
+		}
+	})
+	out += text.slice(from, node.end)
+	return out.replace(/\s+/g, ' ').trim()
 }
 
 function constantOf(node: Node, parents: readonly Node[]): string | null {
@@ -142,6 +158,22 @@ export function walk(node: Node, visit: (node: Node, parents: Node[]) => void, p
 
 export function lineOf(text: string, offset: number): number {
 	return text.slice(0, offset).split('\n').length
+}
+
+// Fixture edits that hold under any formatter style. statement(code) matches `code` as a statement on a line of its
+// own, with any indentation (captured as $1) and an optional semicolon. editOnce replaces the one match of `pattern`
+// (`$1` and the like as in String#replace) and throws unless it matches exactly once, so a fixture cannot silently
+// stop editing the code it names.
+export function statement(code: string): RegExp {
+	return new RegExp(`^([ \\t]*)${code.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')};?$`, 'm')
+}
+
+export function editOnce(text: string, pattern: RegExp, replacement: string): string {
+	const count = [...text.matchAll(new RegExp(pattern.source, pattern.flags.replace('g', '') + 'g'))].length
+	if (count !== 1) {
+		throw new Error(`${pattern} matches ${count} times`)
+	}
+	return text.replace(pattern, replacement)
 }
 
 // The self-check of a guard: `find` (the guard's own finder, given sources) reports each `flagged` fixture's finding

@@ -464,7 +464,7 @@ export function scan(all: readonly Source[]): { reads: Finding[]; misuses: Findi
 					if (part !== null && part !== undefined && SAFE_INTERPOLATIONS.has(singleCall(part.expression) ?? '')) {
 						continue
 					}
-					const expression = part === null ? null : (part?.source.replace(/\s+/g, ' ').trim() ?? '')
+					const expression = part === null ? null : (part?.source ?? '')
 					reads.push({ path, line, read: expression === null ? read : `interpolation ${expression}` })
 				}
 			}

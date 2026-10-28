@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { guardFixtures, parse, resolve, sources, walk, type Source } from './source-scan.js'
+import { editOnce, guardFixtures, parse, resolve, sources, statement, walk, type Source } from './source-scan.js'
 
 // worker -> app/jobs -> {mastodon, federation, web} -> domain -> {db, platform, security}
 // A module may import its own layer or any lower one. Top-level files (worker.ts, store.ts, version.ts) are the entry
@@ -235,40 +235,40 @@ describe('the streaming delete capture sites', () => {
 
 	// Each fixture is inbox.ts as it is, edited, among the real sources.
 	const inbox = SOURCES.find((s) => s.path === 'src/domain/inbox.ts')?.text ?? ''
-	const BOOST = '\tstreamDelete(db, boost.id, now)\n\tconst boosted ='
-	expect(inbox).toContain(BOOST)
+	const BOOST = statement('streamDelete(db, boost.id, now)')
+	const RECOUNT = statement('recountStatus(db, boost.original)')
+	const SIGNATURE = /function removeBoost\(\s*db: Db,/
 	const ON_CREATE =
-		'\tif (created !== undefined) {\n\t\tstreamDelete(db, status.id, now)\n\t\thideRemoteStatus(db, status.id)\n\t}'
-	expect(inbox).toContain(ON_CREATE)
+		/^([ \t]*)if \(created !== undefined\) \{\s*streamDelete\(db, status\.id, now\);?\s*hideRemoteStatus\(db, status\.id\);?\s*\}/m
 	guardFixtures(
 		captureProblems,
 		{
 			flagged: {
 				'a capture in a comment only': [
-					inbox.replace(BOOST, '\t// streamDelete(db, boost.id, now)\n\tconst boosted ='),
+					editOnce(inbox, BOOST, '$1// streamDelete(db, boost.id, now)'),
 					'removeBoost does not capture',
 				],
 				'a capture after the change': [
-					inbox
-						.replace(BOOST, '\tconst boosted =')
-						.replace(
-							'\trecountStatus(db, boost.original)',
-							'\tstreamDelete(db, boost.id, now)\n\trecountStatus(db, boost.original)'
-						),
+					editOnce(
+						editOnce(inbox, BOOST, ''),
+						RECOUNT,
+						'$1streamDelete(db, boost.id, now)\n$1recountStatus(db, boost.original)'
+					),
 					'removeBoost captures after hideRemoteStatus(',
 				],
 				'a capture under a JobBudget': [
-					inbox.replace('function removeBoost(\n\tdb: Db,', 'function removeBoost(\n\tbudget: JobBudget,\n\tdb: Db,'),
+					editOnce(inbox, SIGNATURE, 'function removeBoost(budget: JobBudget, db: Db,'),
 					'removeBoost runs under a budget',
 				],
 				'a capture under a RowBudget': [
-					inbox.replace('function removeBoost(\n\tdb: Db,', 'function removeBoost(\n\tbudget: RowBudget,\n\tdb: Db,'),
+					editOnce(inbox, SIGNATURE, 'function removeBoost(budget: RowBudget, db: Db,'),
 					'removeBoost runs under a budget',
 				],
 				'a capture outside the job creation': [
-					inbox.replace(
+					editOnce(
+						inbox,
 						ON_CREATE,
-						'\tstreamDelete(db, status.id, now)\n\tif (created !== undefined) {\n\t\thideRemoteStatus(db, status.id)\n\t}'
+						'$1streamDelete(db, status.id, now)\n$1if (created !== undefined) {\n$1\thideRemoteStatus(db, status.id)\n$1}'
 					),
 					'deleteObject captures other than when its job is created',
 				],

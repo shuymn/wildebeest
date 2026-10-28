@@ -578,7 +578,7 @@ describe('convert and verify-conversion with --images', () => {
 	it('stops when more local profiles changed than publication announces', async () => {
 		// The converter stops where the Store's importer refuses (src/platform/dump-catalog.ts, Workers types only).
 		const catalog = await readFile(new URL('../src/platform/dump-catalog.ts', import.meta.url), 'utf8')
-		expect(catalog).toContain(`export const MAX_PROFILE_UPDATES = ${MAX_PROFILE_UPDATES}\n`)
+		expect(catalog).toMatch(new RegExp(`^export const MAX_PROFILE_UPDATES = ${MAX_PROFILE_UPDATES};?$`, 'm'))
 		const exportPath = await exportFixture()
 		const imagesDir = join(space.dir, 'images')
 		const exported = await exportImages({
