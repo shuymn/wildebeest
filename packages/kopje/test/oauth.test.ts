@@ -272,6 +272,62 @@ describe("authorize, consent, token, API call", () => {
     expect(await sql(h.store, "SELECT 1 FROM oauth_tokens")).toEqual([]);
   });
 
+  // Hosts the Worker may also answer on: its workers.dev address, another route, the domain with a port.
+  const OTHER_HOSTS = ["kopje.example.workers.dev", "other.kopje.test", "kopje.test:8443"] as const;
+
+  it("shows the consent page on the instance domain only, before verifying Access (WEB-1)", async () => {
+    const h = await withAlice();
+    const app = await registerApp(h);
+    for (const host of OTHER_HOSTS) {
+      const response = await consentPage(h, app, { host });
+      expect(response.status, host).toBe(403);
+      const html = await response.text();
+      expect(html, host).toContain("Sign in at kopje.test, this server");
+      expect(html, host).not.toContain("@alice@");
+    }
+    // Without an assertion too: the host is judged first.
+    const unverified = await consentPage(h, app, { host: OTHER_HOSTS[0], assertion: null });
+    expect(await unverified.text()).toContain("Sign in at kopje.test, this server");
+    const canonical = await consentPage(h, app);
+    expect(canonical.status).toBe(200);
+    expect(await canonical.text()).toContain("@alice@kopje.test");
+  });
+
+  it("refuses a decision posted on another host, issuing nothing (WEB-1)", async () => {
+    const h = await withAlice();
+    const app = await registerApp(h);
+    for (const host of OTHER_HOSTS) {
+      // The form's Origin is the other host's own, so the request passes the Origin check and reaches the host's.
+      const response = await decide(h, app, "approve", { host });
+      expect(response.status, host).toBe(403);
+      expect(await response.text(), host).toContain("Sign in at kopje.test, this server");
+    }
+    expect(await sql(h.store, "SELECT 1 FROM oauth_tokens")).toEqual([]);
+    expect((await decide(h, app, "approve")).status).toBe(302);
+  });
+
+  it("judges the host by the request URL, never by a Host header (WEB-1)", async () => {
+    const h = await withAlice();
+    const app = await registerApp(h);
+    const query = new URLSearchParams({
+      response_type: "code",
+      client_id: app.client_id,
+      redirect_uri: app.redirect_uri,
+      scope: "read",
+    }).toString();
+    const assertion = await h.team.assertion();
+    const at = async (url: string, host: string) => {
+      const request = new Request(`${url}/oauth/authorize?${query}`, {
+        headers: { "cf-access-jwt-assertion": assertion, host },
+      });
+      // The platform keeps the header apart from the URL, so the two can disagree.
+      expect(request.headers.get("host")).toBe(host);
+      return h.send(request);
+    };
+    expect((await at("https://other.kopje.test", "kopje.test")).status).toBe(403);
+    expect((await at("https://kopje.test", "other.kopje.test")).status).toBe(200);
+  });
+
   it("shows client and redirect URI errors on the page, never at an unverified URI", async () => {
     const h = await withAlice();
     const app = await registerApp(h, { scopes: "read" });
@@ -555,6 +611,17 @@ describe("authorize, consent, token, API call", () => {
     const app = await registerApp(h);
     await sql(h.store, "DELETE FROM instance_settings WHERE name = 'access_aud'");
     expect((await consentPage(h, app)).status).toBe(503);
+  });
+
+  it("answers 503 while no domain is fixed, whatever the host", async () => {
+    const h = await withAlice();
+    const app = await registerApp(h);
+    await sql(h.store, "DELETE FROM instance_settings WHERE name = 'domain'");
+    for (const host of ["kopje.test", OTHER_HOSTS[0]]) {
+      const response = await consentPage(h, app, { host });
+      expect(response.status, host).toBe(503);
+      expect(await response.text(), host).toContain("Login has not been set up");
+    }
   });
 
   it("lets login through while the server is readonly", async () => {

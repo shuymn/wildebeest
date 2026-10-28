@@ -34,6 +34,13 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
   quotes; the quotes list reads one candidate past its page for it
   ([docs/visibility.md](docs/visibility.md), "Read bounds"). No migration; `wrangler.jsonc`: unchanged.
 
+### Security
+
+- `/oauth/authorize` answers only on the instance's domain. On another host the Worker is reachable on (its
+  workers.dev address or another route), the consent page and the decision show a 403 page naming the instance's
+  domain, before the sign-in is verified and without a redirect to the app, so the consent page always names the
+  account by the instance's domain (threat model WEB-1). No migration; `wrangler.jsonc`: unchanged.
+
 ## [0.1.0] - 2026-10-28
 
 The first release, published under the npm dist-tag `latest`. Its code is that of 0.1.0-rc.26.

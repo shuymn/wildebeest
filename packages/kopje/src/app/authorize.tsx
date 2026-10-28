@@ -17,8 +17,9 @@ import { STRINGS } from "../web/strings";
 import { CONSENT_HEADERS, PRIVATE_HEADERS } from "./web-headers";
 
 // GET /oauth/authorize shows the consent page; POST /oauth/authorize records the decision. This is the only route
-// behind Cloudflare Access: both methods verify the Access assertion against the team domain and AUD in
-// instance_settings, then resolve its email to a local account. The decision POST must also come from this origin.
+// behind Cloudflare Access: both methods answer only on the instance domain (WEB-1), verify the Access assertion
+// against the team domain and AUD in instance_settings, then resolve its email to a local account. The decision POST
+// must also come from this origin.
 // An identity without an account but with an invitation sees the consent page with the invited username, and its
 // approval makes the account (AUTH-9, domain/account-invitations.ts); the GET writes nothing (WEB-1).
 // `lang` (Mastodon's page locale) has no effect: the page is English only. The pages are the private pages' (WEB-2,
@@ -140,10 +141,13 @@ const AUTHORIZE_PARAMS = [
 ];
 
 type Checked =
-  | { request: AuthorizationRequest; email: string; firstParty: boolean }
+  | { request: AuthorizationRequest; email: string; firstParty: boolean; domain: string }
   | { response: Response | Promise<Response> };
 
-// Access first, then the client: nothing about registered clients is disclosed to a caller Access did not admit.
+// The host, then Access, then the client: another host the Worker answers on (a workers.dev address, another route)
+// is refused before the assertion is verified, so the page and its decision only ever name the instance domain, and
+// nothing about registered clients is disclosed to a caller Access did not admit. The host is the request URL's,
+// which the platform routes by; the Host header is not read.
 async function check(
   c: Context<AuthorizeEnv>,
   deps: AuthorizeDeps,
@@ -153,8 +157,11 @@ async function check(
   const get = (name: string) => fixed[name] ?? params.get(name);
   const clientId = get("client_id") ?? "";
   const context = await storeCall(c, deps, (s, b) => s.authorizeContext(b, { clientId }));
-  if (context.access === null) {
+  if (context.domain === null || context.access === null) {
     return { response: message(c, 503, M.notSetUpTitle, M.notSetUp) };
+  }
+  if (new URL(c.req.url).host !== context.domain) {
+    return { response: message(c, 403, M.invalidRequestTitle, M.otherHost(context.domain)) };
   }
   const identity = await verifyAccessJwt(c.req.header(ACCESS_HEADER), context.access, deps);
   if (!identity.ok) {
@@ -200,7 +207,7 @@ async function check(
   if ("error" in request) {
     return { response: authorizationError(c, redirectUri, state, request) };
   }
-  return { request, email: identity.email, firstParty: context.firstParty };
+  return { request, email: identity.email, firstParty: context.firstParty, domain: context.domain };
 }
 
 // The signed-in account cannot authorize (none, suspended, or more than one). The client and callback are verified by now, so the
@@ -271,7 +278,7 @@ export function authorizeRoutes(deps: AuthorizeDeps): Hono<AuthorizeEnv> {
     if ("response" in checked) {
       return checked.response;
     }
-    const { request, email, firstParty } = checked;
+    const { request, email, firstParty, domain } = checked;
     const state = await storeCall(c, deps, (s, b) => s.signInState(b, { email }));
     if (state.status === "suspended" || state.status === "no_account" || state.status === "ambiguous") {
       return accountRefused(c, request, state.status);
@@ -292,7 +299,7 @@ export function authorizeRoutes(deps: AuthorizeDeps): Hono<AuthorizeEnv> {
         appName={request.client.name}
         website={request.client.website}
         username={username}
-        domain={new URL(c.req.url).host}
+        domain={domain}
         scopes={request.scopes}
         fields={fields}
         firstParty={firstParty}

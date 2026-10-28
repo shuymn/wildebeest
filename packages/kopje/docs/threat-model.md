@@ -87,7 +87,7 @@ against their own instance. TLS is assumed between all parties.
 | Outbound web page fetches (link verification, link cards, oEmbed endpoints) | R1 answers | sink policy (NET-3)                                                    | main: `src/federation/web-page.ts`, `src/platform/html-scan.ts`, `src/federation/field-links.ts`, `src/domain/remote-field-links.ts`, `src/federation/link-cards.ts`                                                                                                                                         |
 | Mastodon API `/api/*`                                                       | R2–R4, R7  | bearer token and route access                                          | main: `src/mastodon/*`, `src/domain/auth.ts`                                                                                                                                                                                                                                                                 |
 | Mastodon admin API `/api/v1/admin/*`, `/api/v2/admin/*`                     | R2–R4      | bearer token with an admin scope, of the OAuth admin (VIS-29)          | main: `src/mastodon/admin.ts`, `src/domain/auth.ts`, `src/domain/admin-authority.ts`, `src/domain/reports.ts`, `src/domain/admin-*.ts`, `src/domain/suspension.ts`                                                                                                                                           |
-| `/oauth/authorize`                                                          | R2, R6, R7 | Access JWT, Origin, consent                                            | main: `src/app/authorize.tsx`                                                                                                                                                                                                                                                                                |
+| `/oauth/authorize`                                                          | R2, R6, R7 | instance host, Access JWT, Origin, consent                             | main: `src/app/authorize.tsx`                                                                                                                                                                                                                                                                                |
 | `/oauth/token`, `/oauth/revoke`                                             | R2, R3     | client credentials                                                     | main: `src/mastodon/oauth.ts`                                                                                                                                                                                                                                                                                |
 | `/oauth/userinfo`                                                           | R2, R3     | bearer token with `profile`                                            | main: `src/mastodon/oauth.ts`                                                                                                                                                                                                                                                                                |
 | `/.well-known/oauth-authorization-server`                                   | R2         | none (public)                                                          | main: `src/mastodon/oauth.ts`                                                                                                                                                                                                                                                                                |
@@ -1357,12 +1357,18 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
 
 ### Web (WEB)
 
-- **WEB-1: the consent decision cannot be forged cross-site.** `GET /oauth/authorize` issues nothing. The `POST`
+- **WEB-1: the consent decision cannot be forged cross-site.** Both methods of `/oauth/authorize` answer only on the
+  instance domain that setup fixed, read from the Store with the Access settings and compared with the request URL's
+  host (no header is read): on any other host the Worker answers on (its workers.dev address, another route, a port)
+  they show a 403 page, with no redirect to the client, before the Access assertion is verified, so the consent page
+  names the instance domain and the instance origin is the request's. `GET /oauth/authorize` issues nothing. The `POST`
   requires a valid Access identity, an `Origin` equal to the instance origin (missing, `null` or foreign answers 403),
   and `decision=approve`; the Store revalidates client, redirect URI, scopes and account when it writes the code.
-  _Enforced (main):_ `src/app/authorize.tsx`, `issueCode` in `src/domain/oauth.ts`; `test/oauth.test.ts` ("refuses a
-  decision posted from another origin, a null origin or none", "refuses an account suspended between the consent page
-  and approval").
+  _Enforced (main):_ `src/app/authorize.tsx`, `authorizeContext` and `issueCode` in `src/domain/oauth.ts`;
+  `test/oauth.test.ts` ("shows the consent page on the instance domain only, before verifying Access", "refuses a
+  decision posted on another host, issuing nothing", "judges the host by the request URL, never by a Host header",
+  "refuses a decision posted from another origin, a null origin or none", "refuses an account suspended between the
+  consent page and approval").
 - **WEB-2: Kopje's HTML pages cannot be framed, scripted or cached.** The consent and code pages and the messages of
   `/oauth/authorize` send the private pages' headers (`PRIVATE_HEADERS`, the web UI pages' policy below), and render
   every value escaped. The consent page alone has no `form-action` (`CONSENT_HEADERS`), as Mastodon's authorization
