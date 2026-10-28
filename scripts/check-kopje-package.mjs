@@ -379,7 +379,8 @@ function checkInstall(tarball, dir) {
       files: ["index.ts"],
     }),
   );
-  run(join(bin, "tsc"), ["-p", dir], dir);
+  // Kopje's own TypeScript: the workspace root has none.
+  run(join(pkg, "node_modules", ".bin", "tsc"), ["-p", dir], dir);
 }
 
 // The cutover tools ship as CLI modules that run Kopje's code from dist/ (the package has no sources). A synthetic
