@@ -8,6 +8,10 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
 
 ## [Unreleased]
 
+## [0.1.0-rc.25] - 2026-10-28
+
+A twenty-fifth release candidate of the first release, published under the npm dist-tag `next`.
+
 ### Added
 
 - Pages link a favicon and an Apple touch icon (`/assets/favicon.ico`, `favicon-48.png`, `favicon-192.png`,
@@ -48,6 +52,11 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
 - On narrow screens, the tabs (a profile's, a status page's, Followers and Following) share the row's spare width
   equally, each label centred in its tab: the first and last sat at the row's edges with all the spare width between
   them. No migration; `wrangler.jsonc`: unchanged.
+
+### Instance changes
+
+- Store schema: unchanged.
+- `wrangler.jsonc`: unchanged.
 
 ## [0.1.0-rc.24] - 2026-10-28
 
