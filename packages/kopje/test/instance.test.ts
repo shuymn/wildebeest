@@ -85,7 +85,7 @@ describe('instance contract', () => {
 			domain: 'kopje.test',
 			title: 'Kopje Test',
 			version: '4.5.0',
-			source_url: 'https://github.com/shuymn/wildebeest',
+			source_url: 'https://github.com/shuymn/kopje',
 			description: 'A test instance',
 			usage: { users: { active_month: 0 } },
 			thumbnail: { url: 'https://kopje.test/assets/thumbnail.jpg' },

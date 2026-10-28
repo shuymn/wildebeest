@@ -1,6 +1,6 @@
 # Kopje instance
 
-A [Kopje](https://github.com/shuymn/wildebeest/tree/main/packages/kopje) instance: a Mastodon-compatible ActivityPub
+A [Kopje](https://github.com/shuymn/kopje/tree/main/packages/kopje) instance: a Mastodon-compatible ActivityPub
 server for one person or a small group, running as one Cloudflare Worker with one Durable Object on your own Cloudflare
 account.
 
@@ -9,11 +9,11 @@ npm package, pinned in `package.json`; `src/index.ts` re-exports it. `wrangler.j
 your domain, your Access applications and your admin account are kept in the instance's Store and set in the browser,
 through the `/setup` wizard.
 
-[![Deploy to Cloudflare](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/shuymn/wildebeest/tree/main/deploy)
+[![Deploy to Cloudflare](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/shuymn/kopje/tree/main/deploy)
 
 ## Before you deploy
 
-Read [setup.md](https://github.com/shuymn/wildebeest/blob/main/packages/kopje/docs/setup.md), "Before you start". You
+Read [setup.md](https://github.com/shuymn/kopje/blob/main/packages/kopje/docs/setup.md), "Before you start". You
 need the Workers Paid plan, a zone on the account for the instance's domain, and a Zero Trust organization. Kopje
 cannot run on a `workers.dev` address.
 
@@ -38,7 +38,7 @@ Builds, and deploys it. On its form:
   (`wrangler deploy`). `wrangler deploy` copies the static assets from the installed package first (`scripts/assets.mjs`).
 
 Then attach your domain to the Worker (Settings, Domains & Routes, as a custom domain or a route on your zone), open
-`https://example.com/setup` (your domain), and follow [setup.md](https://github.com/shuymn/wildebeest/blob/main/packages/kopje/docs/setup.md).
+`https://example.com/setup` (your domain), and follow [setup.md](https://github.com/shuymn/kopje/blob/main/packages/kopje/docs/setup.md).
 
 ## Settings after setup
 
@@ -46,18 +46,18 @@ Set these on the Worker in the dashboard (Settings, Variables and Secrets) or wi
 `wrangler.jsonc` keeps variables set in the dashboard across deploys (`keep_vars`).
 
 Kopje's log events are kept in Workers Logs for 7 days; invocation logs and traces are off:
-[observability.md](https://github.com/shuymn/wildebeest/blob/main/packages/kopje/docs/observability.md) says where to
+[observability.md](https://github.com/shuymn/kopje/blob/main/packages/kopje/docs/observability.md) says where to
 read them, what they cost, what they record and how to change the `observability` block.
 
 | Name                                                             | Kind     | What for                                                                                                                                                                        |
 | ---------------------------------------------------------------- | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `SETUP_TOKEN`                                                    | secret   | Remove it after setup                                                                                                                                                           |
-| `USER_KEK`                                                       | secret   | Set before the admin is created; change it only as [setup.md](https://github.com/shuymn/wildebeest/blob/main/packages/kopje/docs/setup.md), "Rotating the KEK", says            |
+| `USER_KEK`                                                       | secret   | Set before the admin is created; change it only as [setup.md](https://github.com/shuymn/kopje/blob/main/packages/kopje/docs/setup.md), "Rotating the KEK", says            |
 | `VAPID_JWK`                                                      | secret   | Optional, turns on Web Push: an EC P-256 private key as a JWK (below). Never replace it once clients have subscribed                                                            |
-| `BACKUP_AGE_RECIPIENT`, `BACKUP_S3_ENDPOINT`, `BACKUP_S3_BUCKET` | variable | The daily encrypted backup. See [backup.md](https://github.com/shuymn/wildebeest/blob/main/packages/kopje/docs/backup.md) for these and the optional `BACKUP_*` settings        |
+| `BACKUP_AGE_RECIPIENT`, `BACKUP_S3_ENDPOINT`, `BACKUP_S3_BUCKET` | variable | The daily encrypted backup. See [backup.md](https://github.com/shuymn/kopje/blob/main/packages/kopje/docs/backup.md) for these and the optional `BACKUP_*` settings        |
 | `BACKUP_S3_ACCESS_KEY_ID`, `BACKUP_S3_SECRET_ACCESS_KEY`         | secret   | The backup storage's credentials                                                                                                                                                |
-| `IMAGES_MONTHLY_TRANSFORMS`                                      | variable | Optional: raise it if you buy more Images transformations ([setup.md](https://github.com/shuymn/wildebeest/blob/main/packages/kopje/docs/setup.md), "Before you start", step 6) |
-| `MAINTENANCE`                                                    | variable | `off` (the default), `readonly` or `full`. Used for a rollback ([upgrade.md](https://github.com/shuymn/wildebeest/blob/main/packages/kopje/docs/upgrade.md))                    |
+| `IMAGES_MONTHLY_TRANSFORMS`                                      | variable | Optional: raise it if you buy more Images transformations ([setup.md](https://github.com/shuymn/kopje/blob/main/packages/kopje/docs/setup.md), "Before you start", step 6) |
+| `MAINTENANCE`                                                    | variable | `off` (the default), `readonly` or `full`. Used for a rollback ([upgrade.md](https://github.com/shuymn/kopje/blob/main/packages/kopje/docs/upgrade.md))                    |
 
 A key for `VAPID_JWK` can be made with Node.js:
 
@@ -69,17 +69,17 @@ node -e "crypto.subtle.generateKey({name:'ECDSA',namedCurve:'P-256'},true,['sign
 
 After `npm ci`, `npm run admin -- <command>` runs the `kopje-admin` CLI of the installed `kopje` version, for example
 `npm run admin -- health`. See
-[setup.md](https://github.com/shuymn/wildebeest/blob/main/packages/kopje/docs/setup.md#running-the-admin-cli) for the
+[setup.md](https://github.com/shuymn/kopje/blob/main/packages/kopje/docs/setup.md#running-the-admin-cli) for the
 service token and the variables it needs. Accounts besides the admin's are made by invitation
 (`npm run admin -- invitation add <email> <username>`) together with an Access policy for the person:
-[setup.md](https://github.com/shuymn/wildebeest/blob/main/packages/kopje/docs/setup.md#adding-accounts).
+[setup.md](https://github.com/shuymn/kopje/blob/main/packages/kopje/docs/setup.md#adding-accounts).
 
 ## Updates
 
 The `kopje` version in `package.json` is the instance's version. To keep it updated, install the
 [Renovate](https://github.com/apps/renovate) app on this repository: `renovate.json` makes it open a pull request for each
 new Kopje version, never merged automatically. Merging the pull request deploys the new version, and the Store upgrades its
-schema by itself. Read [upgrade.md](https://github.com/shuymn/wildebeest/blob/main/packages/kopje/docs/upgrade.md)
+schema by itself. Read [upgrade.md](https://github.com/shuymn/kopje/blob/main/packages/kopje/docs/upgrade.md)
 before your first update: it explains what happens and how to roll back.
 
 To use Dependabot instead, add `.github/dependabot.yml`:
@@ -101,7 +101,7 @@ Use only one of the two.
 ## Without the button
 
 Make a repository from this directory yourself (copy it, or download it from the `deploy/` directory of
-[shuymn/wildebeest](https://github.com/shuymn/wildebeest)), then create the resources the button would create:
+[shuymn/kopje](https://github.com/shuymn/kopje)), then create the resources the button would create:
 
 ```sh
 npm install
@@ -128,5 +128,5 @@ Use one of the two, not both.
 
 ## License
 
-Apache-2.0, as Kopje. See [LICENSE](https://github.com/shuymn/wildebeest/blob/main/LICENSE) and
-[NOTICE](https://github.com/shuymn/wildebeest/blob/main/NOTICE).
+Apache-2.0, as Kopje. See [LICENSE](https://github.com/shuymn/kopje/blob/main/LICENSE) and
+[NOTICE](https://github.com/shuymn/kopje/blob/main/NOTICE).

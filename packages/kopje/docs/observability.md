@@ -20,7 +20,7 @@ The template's `wrangler.jsonc` (the same as the package's own) sets:
 
 - **Kopje's events.** Every `console` entry the Worker and the Store write is kept: one structured object per event,
   named in its `event` field (`kopje.<area>.<what>`). What an event may contain is set by the logging policy DATA-5
-  of the [threat model](https://github.com/shuymn/wildebeest/blob/main/packages/kopje/docs/threat-model.md), which
+  of the [threat model](https://github.com/shuymn/kopje/blob/main/packages/kopje/docs/threat-model.md), which
   tests check on the paths they cover; it is a policy, not a guarantee that no event carries request text.
 - **No invocation logs.** The platform's per-invocation entries record request headers verbatim, except a few it
   masks (`Authorization` is masked), and a streaming client's `Sec-WebSocket-Protocol` header can carry its access
@@ -180,7 +180,7 @@ are most of the log bytes (see [Cost](#cost)).
   streaming client that sends its access token as the WebSocket subprotocol (`Sec-WebSocket-Protocol`) has that token
   stored (VIS-26), and so does any other credential a client sends in a header that is not masked.
 - **URL paths**, including `/media/<token>/<file>` paths, which are the capability that opens non-public media
-  ([threat model](https://github.com/shuymn/wildebeest/blob/main/packages/kopje/docs/threat-model.md),
+  ([threat model](https://github.com/shuymn/kopje/blob/main/packages/kopje/docs/threat-model.md),
   "Accepted risks").
 - **Copies outlive retention.** A token or capability copied during the 7 days stays valid after the entry is gone.
 

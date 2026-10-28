@@ -17,6 +17,10 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
 
 ### Changed
 
+- The repository is now `shuymn/kopje`: the instance's `source_url`, NodeInfo's software `repository` and `homepage`,
+  the about page's Software line, the package's `repository`, `bugs` and `homepage`, and the Deploy button point there.
+  Links to the old name redirect. No migration; `wrangler.jsonc`: unchanged.
+
 - Breaking: every comparison of emails uses the sign-in's rule, equal after SQLite's `lower()` (ASCII case only) with
   no trim: the OAuth admin's match, `kopje-admin account set-email`, the Access admin's identity against `admin_email`
   and setup's admin email checks (AUTH-5, AUTH-9 and VIS-29 in [docs/threat-model.md](docs/threat-model.md)). An email

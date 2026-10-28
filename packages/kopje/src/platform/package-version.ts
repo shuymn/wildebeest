@@ -5,4 +5,4 @@ import { version } from '../../package.json'
 export const PACKAGE_VERSION: string = version
 
 // Where the software is published: NodeInfo's repository and homepage, and the about page's version line.
-export const SOFTWARE_REPOSITORY = 'https://github.com/shuymn/wildebeest'
+export const SOFTWARE_REPOSITORY = 'https://github.com/shuymn/kopje'

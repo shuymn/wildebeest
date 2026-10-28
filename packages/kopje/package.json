@@ -11,13 +11,13 @@
 		"cloudflare-workers",
 		"durable-objects"
 	],
-	"homepage": "https://github.com/shuymn/wildebeest#readme",
+	"homepage": "https://github.com/shuymn/kopje#readme",
 	"bugs": {
-		"url": "https://github.com/shuymn/wildebeest/issues"
+		"url": "https://github.com/shuymn/kopje/issues"
 	},
 	"repository": {
 		"type": "git",
-		"url": "git+https://github.com/shuymn/wildebeest.git",
+		"url": "git+https://github.com/shuymn/kopje.git",
 		"directory": "packages/kopje"
 	},
 	"license": "Apache-2.0",

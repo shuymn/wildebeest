@@ -365,7 +365,7 @@ const ELEMENTS: Record<PageName, Child> = {
 			description="A small server for testing."
 			contactEmail="admin@kopje.test"
 			contact={alice}
-			software={{ version: '1.0.0', repository: 'https://github.com/shuymn/wildebeest' }}
+			software={{ version: '1.0.0', repository: 'https://github.com/shuymn/kopje' }}
 			rules={[
 				{ id: '1', text: 'Be kind.', hint: '', translations: {} },
 				{ id: '2', text: 'No spam.', hint: 'Advertising included.', translations: {} },
