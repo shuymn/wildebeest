@@ -127,7 +127,6 @@
     "typescript/no-explicit-any": "off",
     "eslint/no-unsafe-optional-chaining": "off",
     "unicorn/no-new-array": "off",
-    "eslint/preserve-caught-error": "off",
     "eslint/no-extend-native": "off",
     "typescript/no-dynamic-delete": "off",
     "unicorn/no-invalid-fetch-options": "off",
