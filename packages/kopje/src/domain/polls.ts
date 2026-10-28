@@ -2,7 +2,7 @@ import { writeEach } from "../db/by-ids";
 import { type ColumnMap, fixedColumns, selectSql } from "../db/columns";
 import { ACCOUNTS_ID_INDEX, POLL_VOTES_KEY_INDEX, POLLS_STATUS_INDEX, STATUSES_ID_INDEX } from "../db/indexes";
 import type { Db } from "../db/sql";
-import { emojiCacheSql, STATUS_EMOJIS_BYTES } from "../platform/stored-bounds";
+import { emojiCacheSql, STATUS_EMOJIS_BYTES, yieldsMoreThan } from "../platform/stored-bounds";
 import { type Present, resolveApiId } from "./accounts";
 import { pollUpdateActivity, recordOutbound, statusFacts, voteActivity } from "./activities";
 import { mayVoteSql, viewableStatusId } from "./audience";
@@ -76,13 +76,7 @@ function longerThan(value: string, max: number): boolean {
   if (value.length <= max) {
     return false;
   }
-  let count = 0;
-  for (const _ of graphemes.segment(value)) {
-    if (++count > max) {
-      return true;
-    }
-  }
-  return false;
+  return yieldsMoreThan(graphemes.segment(value), max);
 }
 
 // Ruby's String#to_i: optional leading whitespace and sign, then digits (underscores between them); anything else

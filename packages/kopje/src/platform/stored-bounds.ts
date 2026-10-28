@@ -708,17 +708,26 @@ export const MAX_ENABLED_EMOJIS = 1000;
 // oxlint-disable-next-line no-control-regex
 const CATEGORY_CONTROL = /[\u0000-\u001f\u007f]/;
 
+// Whether `items` (a string's code points, a segmenter's graphemes) yields more than `max`, reading no further than the
+// one past it.
+export function yieldsMoreThan(items: Iterable<unknown>, max: number): boolean {
+  const iterator = items[Symbol.iterator]();
+  for (let count = 0; !iterator.next().done;) {
+    if (++count > max) {
+      return true;
+    }
+  }
+  return false;
+}
+
 // Whether `text`, as decoded, is a category that may be stored and presented: well-formed, 1 to EMOJI_CATEGORY_LENGTH
 // code points within EMOJI_CATEGORY_BYTES UTF-8 bytes, and no C0 control or DEL.
 export function isEmojiCategory(text: string): boolean {
   if (text === "" || text.length > EMOJI_CATEGORY_BYTES || !text.isWellFormed() || CATEGORY_CONTROL.test(text)) {
     return false;
   }
-  let points = 0;
-  for (const _ of text) {
-    if (++points > EMOJI_CATEGORY_LENGTH) {
-      return false;
-    }
+  if (yieldsMoreThan(text, EMOJI_CATEGORY_LENGTH)) {
+    return false;
   }
   return ENCODER.encode(text).length <= EMOJI_CATEGORY_BYTES;
 }
@@ -1268,11 +1277,8 @@ export function presentedAppName(name: string | null): string | null {
   if (name === null || name === "" || name.length > APP_NAME_BYTES || name.includes("\u0000")) {
     return null;
   }
-  let points = 0;
-  for (const _ of name) {
-    if (++points > APP_NAME_LIMIT) {
-      return null;
-    }
+  if (yieldsMoreThan(name, APP_NAME_LIMIT)) {
+    return null;
   }
   return ENCODER.encode(name).length <= APP_NAME_BYTES &&
     ENCODER.encode(JSON.stringify(name)).length <= APP_NAME_JSON_BYTES

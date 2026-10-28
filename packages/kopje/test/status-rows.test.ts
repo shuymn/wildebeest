@@ -105,7 +105,8 @@ describe("the cursor (RES-3)", () => {
       let stepped = 1;
       let failure = "";
       try {
-        for (const _row of cursor) {
+        const rows = cursor[Symbol.iterator]();
+        while (!rows.next().done) {
           stepped++;
         }
       } catch (error) {
@@ -115,7 +116,8 @@ describe("the cursor (RES-3)", () => {
       const db = new Db(sql).metered(new RowMeter(10 * rowHeapBytes({ i: 1 })));
       let metered = 0;
       try {
-        for (const _row of db.iterate("SELECT i FROM t ORDER BY i")) {
+        const rows = db.iterate("SELECT i FROM t ORDER BY i")[Symbol.iterator]();
+        while (!rows.next().done) {
           metered++;
         }
       } catch {

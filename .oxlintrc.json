@@ -24,15 +24,15 @@
     "eslint/no-regex-spaces": "error",
     "eslint/no-self-compare": "error",
     "eslint/no-unreachable-loop": "error",
-    // A property destructured beside a rest element is left out of the rest on purpose.
+    // A property destructured beside a rest element is left out of the rest on purpose. No varsIgnorePattern: it would
+    // also exempt an `_`-named import (test-node/lint-config.test.ts).
     "eslint/no-unused-vars": [
       "error",
       {
         "argsIgnorePattern": "^_",
         "caughtErrorsIgnorePattern": "^_",
         "destructuredArrayIgnorePattern": "^_",
-        "ignoreRestSiblings": true,
-        "varsIgnorePattern": "^_"
+        "ignoreRestSiblings": true
       }
     ],
     "eslint/no-useless-call": "error",
@@ -124,14 +124,12 @@
     "unicorn/prefer-string-starts-ends-with": "off"
   },
   "overrides": [
+    // lint/signing-keys.js; test-node/signing-keys.test.ts pins this wiring.
+    { "files": ["packages/kopje/src/**/*.ts"], "rules": { "kopje/signing-keys": "error" } },
+    // A nullish value must not reach SQL or HTML text through `${}` (test-node/lint-config.test.ts).
     {
       "files": ["packages/kopje/src/**/*.ts"],
-      "rules": {
-        // lint/signing-keys.js; test-node/signing-keys.test.ts pins this wiring.
-        "kopje/signing-keys": "error",
-        // A nullish value must not reach SQL or HTML text through `${}`.
-        "typescript/restrict-template-expressions": ["error", { "allowNullish": false }]
-      }
+      "rules": { "typescript/restrict-template-expressions": ["error", { "allowNullish": false }] }
     },
     // Tests, test-node and the CLI may still assign, read and pass `any`; calling or returning one stays an error.
     {

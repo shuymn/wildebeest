@@ -203,8 +203,9 @@ const URL_PLACEHOLDER_LENGTH = 23;
 const graphemes = new Intl.Segmenter(undefined, { granularity: "grapheme" });
 
 function graphemeLength(text: string): number {
+  const segments = graphemes.segment(text)[Symbol.iterator]();
   let count = 0;
-  for (const _ of graphemes.segment(text)) {
+  while (!segments.next().done) {
     count++;
   }
   return count;

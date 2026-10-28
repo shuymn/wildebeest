@@ -1,13 +1,8 @@
-import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { fileURLToPath } from "node:url";
-
 import { RuleTester } from "oxlint/plugins-dev";
-import { afterAll, describe, expect, it } from "vitest";
+import { describe, expect, it } from "vitest";
 
 import { signingKeys } from "../lint/signing-keys.js";
+import { lintProbe } from "./lint-probe.js";
 
 // The kopje/signing-keys rule (lint/signing-keys.js): a fetch signs as a local account only with a key loaded while the
 // account is available; the unchecked localKey is read only by federation.ts publishedKeyPair, which returns a bare key
@@ -43,35 +38,15 @@ new RuleTester().run("signing-keys", signingKeys, {
   ],
 });
 
-// The root .oxlintrc.json registers the plugin and turns the rule on for packages/kopje/src alone. The probe runs the
-// real config, plugin and binary in a scratch copy of the layout, so it writes nothing into the source tree.
+// The root .oxlintrc.json registers the plugin and turns the rule on for packages/kopje/src alone.
 describe("signing keys in the lint config", () => {
-  const root = fileURLToPath(new URL("../../..", import.meta.url));
-  const scratch = mkdtempSync(join(tmpdir(), "kopje-signing-keys-"));
-  afterAll(() => rmSync(scratch, { recursive: true, force: true }));
-
   it("flags the unchecked key in packages/kopje/src and nowhere else", () => {
-    symlinkSync(join(root, ".oxlintrc.json"), join(scratch, ".oxlintrc.json"));
-    symlinkSync(join(root, "node_modules"), join(scratch, "node_modules"));
-    mkdirSync(join(scratch, "packages/kopje/src"), { recursive: true });
-    symlinkSync(join(root, "packages/kopje/lint"), join(scratch, "packages/kopje/lint"));
-    writeFileSync(join(scratch, "packages/kopje/src/probe.ts"), FORBIDDEN);
-    writeFileSync(join(scratch, "packages/kopje/probe-outside.ts"), FORBIDDEN);
-
-    let output: string;
-    try {
-      // The probe files are named: a scratch directory under a Git-ignored path would otherwise be skipped.
-      output = execFileSync(
-        join(root, "node_modules/.bin/oxlint"),
-        ["--type-aware", "-f", "json", "packages/kopje/src/probe.ts", "packages/kopje/probe-outside.ts"],
-        { cwd: scratch, encoding: "utf8" },
-      );
-    } catch (error) {
-      // oxlint exits 1 when it reports an error; its report is still on stdout.
-      output = (error as { stdout: string }).stdout;
-    }
-    const report = JSON.parse(output) as { diagnostics: { code: string; filename: string }[] };
-    const flagged = report.diagnostics.filter((d) => d.code === "kopje(signing-keys)").map((d) => d.filename);
+    const flagged = lintProbe({
+      "packages/kopje/src/probe.ts": FORBIDDEN,
+      "packages/kopje/probe-outside.ts": FORBIDDEN,
+    })
+      .filter((d) => d.code === "kopje(signing-keys)")
+      .map((d) => d.filename);
     expect(flagged).toEqual(["packages/kopje/src/probe.ts"]);
   });
 });

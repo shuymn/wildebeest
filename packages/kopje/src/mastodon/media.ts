@@ -10,6 +10,7 @@ import { IMAGE_MATRIX_LIMIT, IMAGE_SIZE_LIMIT, processImage, type ProcessedImage
 import { fileKey, mediaKeys, originalKey } from "../platform/media-files";
 import { callStore, type StoreResolver } from "../platform/store-client";
 import { StoreUnavailableError } from "../platform/store-errors";
+import { yieldsMoreThan } from "../platform/stored-bounds";
 import {
   afterResponse,
   type AfterResponse,
@@ -98,13 +99,7 @@ function exceedsCharacters(text: string, max: number): boolean {
   if (text.length <= max) {
     return false;
   }
-  let count = 0;
-  for (const _ of text) {
-    if (++count > max) {
-      return true;
-    }
-  }
-  return false;
+  return yieldsMoreThan(text, max);
 }
 
 export function descriptionProblem(description: string | undefined): string | undefined {
