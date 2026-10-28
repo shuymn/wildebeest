@@ -443,7 +443,7 @@ describe("media an edit drops", () => {
       bearer(alice.token, json({ status: "one", media_ids: [kept.id] }, { method: "PUT" })),
     );
     expect(edit.status).toBe(200);
-    expect(((await edit.json()) as Status).media_attachments).toMatchObject([{ id: kept.id }]);
+    expect((await edit.json<Status>()).media_attachments).toMatchObject([{ id: kept.id }]);
     return { status, kept, drop, keys: await keysOf(h, drop.id) };
   }
 
@@ -509,7 +509,7 @@ describe("media an edit drops", () => {
       bearer(alice.token, json({ status: "both", media_ids: [drop.id, kept.id] }, { method: "PUT" })),
     );
     expect(again.status).toBe(200);
-    expect(((await again.json()) as Status).media_attachments).toMatchObject([{ id: drop.id }, { id: kept.id }]);
+    expect((await again.json<Status>()).media_attachments).toMatchObject([{ id: drop.id }, { id: kept.id }]);
   });
 
   it("goes with its status, after the grace period or at once with delete_media", async () => {
@@ -522,7 +522,7 @@ describe("media an edit drops", () => {
         bearer(alice.token, { method: "DELETE" }),
       );
       expect(deleted.status).toBe(200);
-      expect(((await deleted.json()) as Status).media_attachments).toMatchObject([{ id: kept.id }]);
+      expect((await deleted.json<Status>()).media_attachments).toMatchObject([{ id: kept.id }]);
       // The answer's media is detached at once, the media the edit dropped by the status's job, with the same
       // deadline (MEDIA-1).
       expect(await sql(h.store, "SELECT id FROM media_attachments WHERE status_id IS NOT NULL")).toEqual([
@@ -794,7 +794,7 @@ describe("the blurhash of a local upload", () => {
     const warn = vi.spyOn(console, "warn");
     const response = await upload(h, h.users.alice, mediaForm(bytes(WIDE_PNG), {}, "w.png", "image/png"));
     expect(response.status).toBe(200);
-    const media = (await response.json()) as Attachment;
+    const media = await response.json<Attachment>();
     expect(formats(h.codec)).toEqual(["image/png", "image/png", "rgba"]);
     expect(media.blurhash).toBeNull();
     expect(await storedBlurhash(h, media.id)).toBeNull();
@@ -821,7 +821,7 @@ describe("the blurhash of a local upload", () => {
       };
       const response = await upload(h, h.users.alice, mediaForm(bytes(WIDE_PNG), {}, "w.png", "image/png"));
       expect(response.status).toBe(200);
-      const media = (await response.json()) as Attachment;
+      const media = await response.json<Attachment>();
       expect(formats(h.codec)).toEqual(["image/png", "image/png", "rgba"]);
       expect(media.blurhash).toBeNull();
       expect(h.codec.rgbaCancelled).toBe(stall === "read" ? 1 : 0);
@@ -850,7 +850,7 @@ describe("the blurhash of a local upload", () => {
       const response = await upload(h, h.users.alice, mediaForm(bytes(WIDE_PNG), {}, "w.png", "image/png"));
       expect(Date.now() - started).toBeLessThan(25_000);
       expect(response.status).toBe(200);
-      const media = (await response.json()) as Attachment;
+      const media = await response.json<Attachment>();
       expect(formats(h.codec)).toEqual(["image/png", "image/png", "rgba"]);
       expect(media.blurhash).toBeNull();
       expect(h.codec.rgbaCancelled).toBe(stall === "read" ? 1 : 0);
@@ -916,21 +916,25 @@ describe("the blurhash of a local upload", () => {
       expect.objectContaining({ url: hashed.url, blurhash: hashed.blurhash }),
       expect.not.objectContaining({ blurhash: expect.anything() }),
     ];
-    const served = (await (await h.request(new URL(both.uri as string).pathname, AP)).json()) as Served;
+    const served = await (await h.request(new URL(both.uri as string).pathname, AP)).json<Served>();
     expect(served.attachment).toEqual(expected);
     expect(served["@context"][1]).toMatchObject(TERM);
-    const outbox = (await (await h.request("/ap/users/alice/outbox", AP)).json()) as { first: string };
+    const outbox = await (await h.request("/ap/users/alice/outbox", AP)).json<{ first: string }>();
     const first = new URL(outbox.first);
-    const page = (await (await h.request(first.pathname + first.search, AP)).json()) as {
+    const page = await (
+      await h.request(first.pathname + first.search, AP)
+    ).json<{
       orderedItems: { "@context": [string, Record<string, unknown>]; object: Served }[];
-    };
+    }>();
     const listed = page.orderedItems.find((item) => item.object.id === both.uri);
     expect(listed?.object.attachment).toEqual(expected);
     expect(listed?.["@context"][1]).toMatchObject(TERM);
     await h.request(`/api/v1/statuses/${both.id}/pin`, bearer(alice.token, { method: "POST" }));
-    const featured = (await (await h.request("/ap/users/alice/collections/featured", AP)).json()) as {
+    const featured = await (
+      await h.request("/ap/users/alice/collections/featured", AP)
+    ).json<{
       orderedItems: Served[];
-    };
+    }>();
     const pinned = featured.orderedItems.find((item) => item.id === both.uri);
     expect(pinned?.attachment).toEqual(expected);
     expect(pinned?.["@context"][1]).toMatchObject(TERM);

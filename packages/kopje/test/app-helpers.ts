@@ -42,7 +42,7 @@ export function harness(
 ) {
   const queue = new QueueSim();
   const send = queue.send;
-  const testEnv = { ...env, QUEUE: queue.queue, ...overrides } as unknown as Env;
+  const testEnv = { ...env, QUEUE: queue.queue, ...overrides };
   const app = createApp({ build: () => build, now, store: () => store, federation });
   const request = async (path: string, init?: RequestInit) => {
     const ctx = createExecutionContext();
@@ -72,7 +72,7 @@ export type StoreCall = { name: string; args: unknown[]; settled: boolean; answe
 // The instance actor's key, stored as its first use leaves it (federation.ts instanceActorKey) under the test env's
 // KEK, so that a count of Store calls leaves out that one-time write.
 export async function seedInstanceKey(store: StoreStub): Promise<void> {
-  const config = readConfig(env as unknown as Env);
+  const config = readConfig(env);
   await instanceActorKey((call) => call(store), BUILD, config.ok ? userKek(config.config) : "", fixtureKeyGen);
 }
 

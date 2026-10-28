@@ -225,7 +225,7 @@ async function world() {
       body: JSON.stringify({ status: text, quoted_status_id: id }),
     });
     expect(response.status).toBe(200);
-    return (await response.json()) as { id: string; uri: string };
+    return await response.json<{ id: string; uri: string }>();
   };
   const serveStamp = (uri: string, quoting: string, target = note.id) =>
     sharedServeStamp(web, uri, bob, quoting, target);
@@ -428,7 +428,7 @@ describe("Mastodon 4.5.11 receiving our quote (a model of its handlers)", () => 
     const w = await world();
     const fetchStamp = async (stamp: string) => {
       const response = await w.web.fetch(stamp);
-      return response.status === 200 ? ((await response.json()) as Record<string, unknown>) : null;
+      return response.status === 200 ? await response.json<Record<string, unknown>>() : null;
     };
     const mine = await w.quote("quoting bob");
     const stamp = `${w.bob.uri}/quote_authorizations/${nextId()}`;
@@ -458,7 +458,7 @@ describe("Mastodon 4.5.11 receiving our quote (a model of its handlers)", () => 
       await v.deliver();
       const fetchBad = async (s: string) => {
         const response = await v.web.fetch(s);
-        return response.status === 200 ? ((await response.json()) as Record<string, unknown>) : null;
+        return response.status === 200 ? await response.json<Record<string, unknown>>() : null;
       };
       const held = await mastodonHolds(
         v.sent.filter((s) => new URL(s.inbox).origin === B).map((s) => s.json),
@@ -531,22 +531,22 @@ describe("Kopje as the quoted server (B owns the status; its real inbox, stamps 
       }),
     );
     expect(carolPost.status).toBe(200);
-    const theirs = (await carolPost.json()) as { id: string; uri: string };
+    const theirs = await carolPost.json<{ id: string; uri: string }>();
     // alice finds carol's status (A fetches it from B), and quotes it.
     const found = await w.a.request(`/api/v2/search?q=${encodeURIComponent(theirs.uri)}&resolve=true&type=statuses`, {
       headers: { authorization: `Bearer ${w.aliceToken}` },
     });
-    const quotedAtA = ((await found.json()) as { statuses: { id: string }[] }).statuses[0]!.id;
+    const quotedAtA = (await found.json<{ statuses: { id: string }[] }>()).statuses[0]!.id;
     const response = await w.a.request("/api/v1/statuses", {
       method: "POST",
       headers: { authorization: `Bearer ${w.aliceToken}`, "content-type": "application/json" },
       body: JSON.stringify({ status: "quoting carol", quoted_status_id: quotedAtA }),
     });
     expect(response.status).toBe(200);
-    const mine = (await response.json()) as { id: string; uri: string };
+    const mine = await response.json<{ id: string; uri: string }>();
     expect(await w.quoteAtA(mine.uri)).toMatchObject({ state: "pending" });
     const held = await w.captureForB();
-    const typeOf = async (request: Request) => ((await request.clone().json()) as { type: string }).type;
+    const typeOf = async (request: Request) => (await request.clone().json<{ type: string }>()).type;
     const creates: Request[] = [];
     const requests: Request[] = [];
     for (const request of held) {

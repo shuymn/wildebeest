@@ -125,7 +125,7 @@ async function world() {
         alice,
       )
     )[0]!;
-  const round = (extra: Partial<FieldLinksDeps> = {}) => fieldLinksRound(h.env as unknown as Env, deps(extra));
+  const round = (extra: Partial<FieldLinksDeps> = {}) => fieldLinksRound(h.env, deps(extra));
   const op = <I, O>(operation: { run: (sql: SqlStorage, input: I) => O }, input: I) =>
     runInDurableObject(h.store, (_instance, s) => operation.run(s.storage.sql, input));
   return {
@@ -1038,7 +1038,7 @@ describe("field verification bounds", () => {
     await w.save(values.map((value, i) => ({ name: `f${i}`, value })));
     const started = Date.now();
     const result = await fieldLinksRound(
-      w.h.env as unknown as Env,
+      w.h.env,
       w.deps(
         {
           loader: {
@@ -1074,7 +1074,7 @@ describe("field verification bounds", () => {
     // A round whose deadline has passed after the first GET.
     const slow = w.deps();
     let calls = 0;
-    const result = await fieldLinksRound(w.h.env as unknown as Env, {
+    const result = await fieldLinksRound(w.h.env, {
       ...slow,
       now: () => (calls++ < 4 ? w.clock.t : w.clock.t + FIELD_LINK_CHECKS_MS),
     });
@@ -1090,7 +1090,7 @@ describe("field verification bounds", () => {
     w.setRoutes({ [SITE]: page(`<a rel=me href="${LINK_BACK}">${"x".repeat(200_000)}`) });
     await w.save([{ name: "Site", value: SITE }]);
     let late = false;
-    const running = fieldLinksRound(w.h.env as unknown as Env, {
+    const running = fieldLinksRound(w.h.env, {
       ...w.deps({ sink }),
       now: () => (late ? w.clock.t + FIELD_LINK_CHECKS_MS : w.clock.t),
     });
@@ -1118,7 +1118,7 @@ describe("field verification bounds", () => {
             }
           : (Reflect.get(target, key) as unknown),
     });
-    const round = fieldLinksRound(w.h.env as unknown as Env, {
+    const round = fieldLinksRound(w.h.env, {
       ...w.deps({}, () => store),
       now: () => (late ? w.clock.t + FIELD_LINK_ROUND_MS : w.clock.t),
     });
@@ -1142,7 +1142,7 @@ describe("field verification bounds", () => {
     });
     const requested = w.requests.length;
     await expect(
-      fieldLinksRound(w.h.env as unknown as Env, {
+      fieldLinksRound(w.h.env, {
         ...w.deps({ store: () => slowClaim }),
         now: () => (slow === undefined ? w.clock.t : w.clock.t + FIELD_LINK_CHECKS_MS),
       }),

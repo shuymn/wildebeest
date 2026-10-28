@@ -115,7 +115,6 @@
     "typescript/no-unnecessary-boolean-literal-compare": "off",
     "typescript/no-unnecessary-template-expression": "off",
     "typescript/no-unnecessary-type-arguments": "off",
-    "typescript/no-unnecessary-type-assertion": "off",
     "typescript/no-unnecessary-type-conversion": "off",
     "unicorn/no-array-reverse": "off",
     "unicorn/no-array-sort": "off",
@@ -146,7 +145,8 @@
       "env": { "node": true },
       "rules": { "eslint/no-redeclare": "error", "eslint/no-undef": "error" }
     },
-    // Scripts no tsconfig covers: without types, every value is `any`.
+    // Scripts no tsconfig covers: without types, every value is `any`, and an index read is judged without
+    // noUncheckedIndexedAccess, so a cast the package's settings need looks unnecessary.
     {
       "files": [
         "packages/kopje/scripts/**",
@@ -156,6 +156,7 @@
         "deploy/scripts/**"
       ],
       "rules": {
+        "typescript/no-unnecessary-type-assertion": "off",
         "typescript/no-unsafe-argument": "off",
         "typescript/no-unsafe-assignment": "off",
         "typescript/no-unsafe-call": "off",

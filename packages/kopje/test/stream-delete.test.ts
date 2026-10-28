@@ -404,7 +404,7 @@ describe("R32: the tombstone of a public status", () => {
       body: JSON.stringify({ status: names.map((name) => `#${name}`).join(" ") }),
     });
     expect(response.status).toBe(200);
-    const { id } = (await response.json()) as { id: string };
+    const { id } = await response.json<{ id: string }>();
     expect(await sql(t.store, "SELECT count(*) AS n FROM status_tags WHERE status_id = ?", id)).toEqual([{ n: 101 }]);
     // The update's units: every listener of one of its hashtags.
     const { events } = await runInDurableObject(t.store, (_instance, state) =>

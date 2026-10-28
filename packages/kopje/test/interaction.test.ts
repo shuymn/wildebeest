@@ -419,7 +419,7 @@ describe("POST /authorize_interaction (look-up)", () => {
       t.request("/api/v1/accounts/verify_credentials", { headers: { authorization: `Bearer ${token}` } });
     const me = await whoami(bob.session);
     expect(me.status).toBe(200);
-    expect(((await me.json()) as { username: string }).username).toBe("bob");
+    expect((await me.json<{ username: string }>()).username).toBe("bob");
     // Alice's session is retired, as a cookie and as a bearer token.
     expect((await t.request("/settings", { headers: { cookie: alice.cookie } })).status).toBe(302);
     expect((await whoami(alice.session)).status).toBe(401);

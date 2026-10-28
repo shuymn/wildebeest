@@ -183,7 +183,7 @@ export class S3Mock {
           joined.set(p!.body, offset);
           offset += p!.body.byteLength;
         }
-        this.objects.set(key!, joined);
+        this.objects.set(key, joined);
         this.uploads.delete(uploadId);
         return xml("<CompleteMultipartUploadResult></CompleteMultipartUploadResult>");
       }

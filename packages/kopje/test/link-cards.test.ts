@@ -47,11 +47,7 @@ const LINK_ROW = {
   blurhash: null,
 };
 const presentFor = (card: Partial<Omit<CardRow, "status_id">> & Pick<CardRow, "url" | "title">, origin = ORIGIN) =>
-  presentCard(
-    { visibility: "public" },
-    { status_id: "1", ...boundCard("ascii"), ...LINK_ROW, ...card } as CardRow,
-    origin,
-  );
+  presentCard({ visibility: "public" }, { status_id: "1", ...boundCard("ascii"), ...LINK_ROW, ...card }, origin);
 
 // Status cards (domain/link-cards.ts, federation/link-cards.ts): Mastodon's FetchLinkCardService (v4.5.11) as one
 // copy per status, fetched by the cron's round through the web-page sink (NET-3).

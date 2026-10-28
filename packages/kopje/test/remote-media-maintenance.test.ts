@@ -99,7 +99,7 @@ function slowStore(w: MediaWorld, delays: Record<string, number>) {
         return (target as unknown as Record<string, (...a: unknown[]) => Promise<unknown>>)[key]!(...args);
       };
     },
-  }) as StoreStub;
+  });
 }
 
 // The Store stub with `method` held until `gate` opens, `held` resolving once it is reached.
@@ -115,7 +115,7 @@ function heldStore(store: StoreStub, method: string, gate: Promise<void>, held: 
         return (target as unknown as Record<string, (...a: unknown[]) => Promise<unknown>>)[method]!(...args);
       };
     },
-  }) as StoreStub;
+  });
 }
 
 describe("deletion through the round", () => {
@@ -204,7 +204,7 @@ describe("deletion through the round", () => {
     const { accounts, tokens } = await cached(w, 1);
     await w.change(accounts[0]!.id, { avatar: null, header: null });
     const error = vi.spyOn(console, "error").mockImplementation(() => {});
-    await w.round({ store: () => failingOn(w.t.store, "confirmRemoteMediaDeleted", 0) as StoreStub });
+    await w.round({ store: () => failingOn(w.t.store, "confirmRemoteMediaDeleted", 0) });
     error.mockRestore();
     expect(await inBucket(tokens[0]!)).toBe(0);
     expect(await w.objects()).toMatchObject([{ state: "doomed", delete_attempts: 0 }]);
@@ -524,11 +524,11 @@ describe("PITR validation through the round", () => {
       for (const table of tables) {
         await sql(w.t.store, `DELETE FROM ${table}`);
         for (const row of bookmark.rows[table]!) {
-          const columns = Object.keys(row as object);
+          const columns = Object.keys(row);
           await sql(
             w.t.store,
             `INSERT INTO ${table} (${columns.join(", ")}) VALUES (${columns.map(() => "?").join(", ")})`,
-            ...columns.map((c) => (row as Record<string, SqlStorageValue>)[c]!),
+            ...columns.map((c) => row[c]!),
           );
         }
       }

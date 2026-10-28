@@ -216,7 +216,7 @@ export async function getJson<T = unknown>(
   token?: string,
 ): Promise<{ status: number; body: T }> {
   const response = await h.request(path, token === undefined ? {} : bearer(token));
-  return { status: response.status, body: (await response.json()) as T };
+  return { status: response.status, body: await response.json<T>() };
 }
 
 export async function ids(h: ApiHarness, path: string, token?: string): Promise<string[]> {

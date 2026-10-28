@@ -36,7 +36,7 @@ type Relationship = Record<string, unknown> & { id: string; endorsed: boolean; n
 
 async function relationship(h: ApiHarness, user: User, path: string, body: Record<string, unknown> = {}) {
   const response = await act(h, user, path, body);
-  return { status: response.status, body: (await response.json()) as Relationship & { error?: string } };
+  return { status: response.status, body: await response.json<Relationship & { error?: string }>() };
 }
 
 async function relationshipsOf(h: ApiHarness, user: User, id: string): Promise<Relationship> {
@@ -183,7 +183,7 @@ describe("endorsements", () => {
 
     // Pages of 2, by the endorsed account's id; the Link header continues them.
     const first = await h.request(`/api/v1/accounts/${alice.id}/endorsements?limit=2`);
-    expect(((await first.json()) as { id: string }[]).map((a) => a.id)).toEqual(newestFirst.slice(0, 2));
+    expect((await first.json<{ id: string }[]>()).map((a) => a.id)).toEqual(newestFirst.slice(0, 2));
     const link = first.headers.get("link") ?? "";
     expect(link).toContain(`max_id=${newestFirst[1]}`);
     expect(link).toContain(`min_id=${newestFirst[0]}`);
@@ -236,7 +236,7 @@ describe("endorsements", () => {
     }
     const all = await h.request("/api/v1/endorsements?limit=0", bearer(alice.token));
     expect(all.headers.get("link")).toBeNull();
-    expect(((await all.json()) as { id: string }[]).map((a) => a.id)).toEqual(others.toReversed());
+    expect((await all.json<{ id: string }[]>()).map((a) => a.id)).toEqual(others.toReversed());
     const page = await h.request("/api/v1/endorsements?limit=1", bearer(alice.token));
     expect(page.headers.get("link")).toContain(`max_id=${others[2]}`);
     // read:accounts, with a user.

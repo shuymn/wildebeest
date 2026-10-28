@@ -148,9 +148,11 @@ describe("the maintenance snapshot (OPS-7)", () => {
       await expectParity(h, request, path, init);
     }
     for (const { username, pubkey } of keys) {
-      const actor = (await (await request(`/ap/users/${username}`, { headers: { accept: AP } })).json()) as {
+      const actor = await (
+        await request(`/ap/users/${username}`, { headers: { accept: AP } })
+      ).json<{
         publicKey: { id: string; publicKeyPem: string };
-      };
+      }>();
       expect(actor.publicKey.id).toBe(`${ORIGIN}/ap/users/${username}#main-key`);
       expect(actor.publicKey.publicKeyPem.replace(/\s+/g, "")).toBe(pubkey.replace(/\s+/g, ""));
     }
@@ -270,11 +272,7 @@ describe("the maintenance worker accepts no write but the spool (OPS-6)", () => 
     const { worker } = maintenance();
     const init = { method: "POST", headers: SIGNED, body: "{}" };
     const call = (env: Record<string, unknown>) =>
-      worker.fetch!(
-        new Request(`${ORIGIN}/inbox`, init) as Request<unknown, IncomingRequestCfProperties>,
-        env,
-        {} as ExecutionContext,
-      );
+      worker.fetch!(new Request(`${ORIGIN}/inbox`, init), env, {} as ExecutionContext);
     expect((await call(legacyBindings())).status).toBe(503);
     const failing = { send: () => Promise.reject(new Error("queue unavailable")) };
     expect((await call({ ...legacyBindings(), [SPOOL_QUEUE_BINDING]: failing })).status).toBe(503);
@@ -283,14 +281,7 @@ describe("the maintenance worker accepts no write but the spool (OPS-6)", () => 
 
 describe("the spool admits only signed requests, within its budget (OPS-6)", () => {
   const post = (worker: ExportedHandler<MaintenanceEnv>, env: MaintenanceEnv, headers: Record<string, string>) =>
-    worker.fetch!(
-      new Request(`${ORIGIN}/inbox`, { method: "POST", headers, body: "{}" }) as Request<
-        unknown,
-        IncomingRequestCfProperties
-      >,
-      env,
-      {} as ExecutionContext,
-    );
+    worker.fetch!(new Request(`${ORIGIN}/inbox`, { method: "POST", headers, body: "{}" }), env, {} as ExecutionContext);
 
   it("refuses a request without a signature of the right shape, before anything is spooled", async () => {
     const { worker, queue } = maintenance();
@@ -360,10 +351,7 @@ describe("the spool admits only signed requests, within its budget (OPS-6)", () 
 describe("admission fails closed when the backlog cannot be read (OPS-6)", () => {
   const post = (worker: ExportedHandler<MaintenanceEnv>, env: MaintenanceEnv) =>
     worker.fetch!(
-      new Request(`${ORIGIN}/inbox`, { method: "POST", headers: SIGNED, body: "{}" }) as Request<
-        unknown,
-        IncomingRequestCfProperties
-      >,
+      new Request(`${ORIGIN}/inbox`, { method: "POST", headers: SIGNED, body: "{}" }),
       env,
       {} as ExecutionContext,
     );

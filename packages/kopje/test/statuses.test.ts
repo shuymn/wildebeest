@@ -1408,7 +1408,7 @@ describe("media_ids (PostStatusService#validate_media!, MEDIA-1)", () => {
       bearer(alice.token, form({ status: "same", "media_ids[]": "" }, { method: "PUT" })),
     );
     expect(formEdit.status).toBe(200);
-    expect(((await formEdit.json()) as Status).media_attachments).toEqual([]);
+    expect((await formEdit.json<Status>()).media_attachments).toEqual([]);
   });
 });
 

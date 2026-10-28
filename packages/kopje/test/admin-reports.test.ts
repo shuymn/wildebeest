@@ -99,7 +99,7 @@ async function fileReport(h: ApiHarness, user: User, body: Record<string, unknow
 
 async function call(h: ApiHarness, path: string, token: string | null, init: RequestInit = {}) {
   const response = await h.request(path, token === null ? init : bearer(token, init));
-  return { status: response.status, link: response.headers.get("Link"), body: (await response.json()) as unknown };
+  return { status: response.status, link: response.headers.get("Link"), body: await response.json<unknown>() };
 }
 
 const reportOf = async (h: ApiHarness, id: string, token: string) =>

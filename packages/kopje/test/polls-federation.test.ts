@@ -65,7 +65,7 @@ async function api<T>(t: Setup, path: string, init: RequestInit = {}) {
     ...init,
     headers: { authorization: `Bearer ${t.tokens.alice}`, "content-type": "application/json" },
   });
-  return { status: response.status, body: (await response.json()) as T };
+  return { status: response.status, body: await response.json<T>() };
 }
 
 async function remotePoll(t: Setup, bob: TestActor, object: Note) {
@@ -485,7 +485,7 @@ describe("a local poll over ActivityPub", () => {
     });
     const response = await t.request(new URL(status.uri).pathname, { headers: { accept: AP } });
     expect(response.status).toBe(200);
-    const served = (await response.json()) as Record<string, unknown>;
+    const served = await response.json<Record<string, unknown>>();
     expect(served).toMatchObject({
       type: "Question",
       anyOf: [

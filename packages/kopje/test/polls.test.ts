@@ -112,7 +112,7 @@ describe("posting a poll", () => {
         body: body.toString(),
       }),
     );
-    expect(((await response.json()) as PolledStatus).poll).toMatchObject({
+    expect((await response.json<PolledStatus>()).poll).toMatchObject({
       multiple: false,
       options: [
         { title: "a", votes_count: null },
@@ -196,7 +196,7 @@ describe("the Poll entity", () => {
     await follow(h, bob, alice.id);
     const status = await polled(h, alice, { options: ["a", "b"], expires_in: 600 });
     await voteOn(h, bob, status.id, [0]);
-    const boost = (await (await send(h, bob, `/api/v1/statuses/${status.id}/reblog`, {})).json()) as PolledStatus;
+    const boost = await (await send(h, bob, `/api/v1/statuses/${status.id}/reblog`, {})).json<PolledStatus>();
     expect(boost.poll).toBeNull();
     expect((boost.reblog as PolledStatus).poll).toMatchObject({ own_votes: [0], votes_count: 1 });
     const home = (await getJson<PolledStatus[]>(h, "/api/v1/timelines/home", bob.token)).body;
@@ -469,7 +469,7 @@ describe("editing a status with a poll", () => {
     const edit = async (body: Record<string, unknown>) => {
       const response = await send(h, alice, `/api/v1/statuses/${status.id}`, { status: "which?", ...body }, "PUT");
       expect(response.status, await response.clone().text()).toBe(200);
-      return (await response.json()) as PolledStatus;
+      return await response.json<PolledStatus>();
     };
     h.now.mockReturnValue(NOW + MINUTE);
     // The same choices: the votes stay, and the end moves to expires_in from the edit.
@@ -514,7 +514,7 @@ describe("a scheduled status with a poll", () => {
       poll: { options: ["a", "b"], expires_in: 600, multiple: true },
     });
     expect(response.status).toBe(200);
-    expect(((await response.json()) as { params: unknown }).params).toMatchObject({
+    expect((await response.json<{ params: unknown }>()).params).toMatchObject({
       poll: { options: ["a", "b"], expires_in: "600", multiple: true, hide_totals: false },
     });
     const { publishScheduled } = await import("../src/jobs/scheduled");
@@ -535,7 +535,7 @@ describe("deleting a status with a poll", () => {
     const status = await polled(h, h.users.alice, { options: ["a", "b"], expires_in: 600 });
     await voteOn(h, h.users.bob, status.id, [0]);
     const response = await send(h, h.users.alice, `/api/v1/statuses/${status.id}`, {}, "DELETE");
-    expect(((await response.json()) as PolledStatus).poll).toMatchObject({ votes_count: 1 });
+    expect((await response.json<PolledStatus>()).poll).toMatchObject({ votes_count: 1 });
     // Ended at once, so no round notifies or updates it; its job deletes it and its votes.
     expect(await sql(h.store, "SELECT ended, update_due_at FROM polls")).toEqual([{ ended: 1, update_due_at: null }]);
     await settle(h.store);
