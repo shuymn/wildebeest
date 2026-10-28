@@ -330,7 +330,7 @@ describe("polls (POLL-2)", () => {
       h.store,
       "UPDATE polls SET tallies = ?, votes_count = 1000, voters_count = 1000 WHERE status_id = ?",
       JSON.stringify([777, 223]),
-      String(polled.id),
+      polled.id,
     );
     const path = pathOf(String(polled.url));
     const pages = async () => ({
@@ -343,7 +343,7 @@ describe("polls (POLL-2)", () => {
     // fingerprinted assets, which may hold any digits.
     const leaks = (html: string) => {
       let markup = html;
-      for (const known of [String(polled.id), String(polled.uri), STYLESHEET, L1_SCRIPT]) {
+      for (const known of [polled.id, String(polled.uri), STYLESHEET, L1_SCRIPT]) {
         markup = markup.replaceAll(known, "");
       }
       return ["777", "223", "78%", "22%", "<rect"].filter((token) => markup.includes(token));
@@ -438,15 +438,15 @@ describe("quotes (R35)", () => {
     });
     const quoting = async (target: string, state: string) => {
       const quote = await post(h, alice, { status: `quoting ${state}` });
-      await acceptQuote(h, String(quote.id), target);
-      await sql(h.store, "UPDATE quotes SET state = ? WHERE status_id = ?", state, String(quote.id));
+      await acceptQuote(h, quote.id, target);
+      await sql(h.store, "UPDATE quotes SET state = ? WHERE status_id = ?", state, quote.id);
       return pathOf(String(quote.url));
     };
     const pages: [string, string][] = [
-      [await quoting(String(shown.id), "accepted"), "nested"],
-      [await quoting(String(hidden.id), "accepted"), "The quoted post is not available."],
-      [await quoting(String(later.id), "pending"), "The quoted post is waiting for its author's approval."],
-      [await quoting(String(shown.id), "revoked"), "The author of the quoted post removed it from this quote."],
+      [await quoting(shown.id, "accepted"), "nested"],
+      [await quoting(hidden.id, "accepted"), "The quoted post is not available."],
+      [await quoting(later.id, "pending"), "The quoted post is waiting for its author's approval."],
+      [await quoting(shown.id, "revoked"), "The author of the quoted post removed it from this quote."],
     ];
     await sql(h.store, "UPDATE statuses SET withdrawn = 1 WHERE id = ?", gone);
     pages.push([await quoting(gone, "accepted"), "The quoted post is not available."]);
@@ -459,13 +459,7 @@ describe("quotes (R35)", () => {
         } else {
           expect(text(one(doc, "p", "gone")), shownAt).toBe(expected);
         }
-        for (const absent of [
-          "a private word",
-          "a word awaiting approval",
-          "a deleted word",
-          String(hidden.id),
-          gone,
-        ]) {
+        for (const absent of ["a private word", "a word awaiting approval", "a deleted word", hidden.id, gone]) {
           expect(html, `${shownAt} ${absent}`).not.toContain(absent);
         }
       }

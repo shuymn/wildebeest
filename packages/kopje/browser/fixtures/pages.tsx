@@ -616,6 +616,9 @@ export async function renderPages(): Promise<Record<PageName, string>> {
     const l1 =
       pageNamed(name).kind === "l1" ? <L1Context.Provider value={true}>{element}</L1Context.Provider> : element;
     const page = <HostContext.Provider value={DOMAIN}>{l1}</HostContext.Provider>;
+    // hono's async render returns a String object (raw()) typed as string; String() makes it the primitive the tests
+    // compare and search.
+    // oxlint-disable-next-line typescript/no-unnecessary-type-conversion
     html[name] = String(await (page as Child as JSXNode).toString());
   }
   return html;

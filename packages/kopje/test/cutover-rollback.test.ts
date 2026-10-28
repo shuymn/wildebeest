@@ -1088,7 +1088,7 @@ async function cliDrain(r: Awaited<ReturnType<typeof rollback>>, extra: string[]
     stdout: { write: (text: string) => void out.push(text), isTTY: false },
     stderr: { write: (text: string) => void err.push(text), isTTY: false },
     fetch: async (input, init) => {
-      const url = new URL(String(input));
+      const url = new URL(input);
       return r.h.as(adminClaims(), `${url.pathname}${url.search}`, init);
     },
     now: () => (clock += 10 * 60 * 1000),

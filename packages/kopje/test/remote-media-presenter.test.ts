@@ -201,9 +201,7 @@ describe("the status row bound (status-rows.ts statusRowBoundSql)", () => {
     const both = await bound();
     await sql(w.t.store, "UPDATE accounts SET moved_to_account_id = ? WHERE id = ?", target.id, author.id);
     expect((await bound()) - both).toBe(
-      2 * String(target.id).length +
-        MOVED_ACCOUNT_COLUMNS.rowHeap +
-        CACHED_IMAGE_KINDS.length * CACHED_IMAGE_COLUMNS.rowHeap,
+      2 * target.id.length + MOVED_ACCOUNT_COLUMNS.rowHeap + CACHED_IMAGE_KINDS.length * CACHED_IMAGE_COLUMNS.rowHeap,
     );
   });
 });

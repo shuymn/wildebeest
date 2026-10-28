@@ -25,6 +25,7 @@ import { expectFullPages, shownAccounts, viaRoute, walkPages } from "./profile-p
 import { type PlannedStatement, plannedSql, scansOf, staleStatistics } from "./read-helpers";
 import { community } from "./status-helpers";
 import { accessibleName, attr, elements, one, parseHtml, query, text } from "./web-dom";
+import { render } from "./web-fixtures";
 import { type Browser, countedHarness, csrfOf, postForm, signIn } from "./web-helpers";
 
 // The follow lists: /@user/followers and /@user/following (VIS-4, VIS-8, R13), the profile's links to them and the
@@ -93,8 +94,8 @@ function within(h: Harness, answerBytes: number) {
     const url = new URL(path, "https://kopje.test");
     const page = await readWithin(h, path, answerBytes);
     expect(jsonBytes({ ...page, site: SITE })).toBeLessThanOrEqual(answerBytes);
-    return String(
-      await jsx(FollowsPage, {
+    return await render(
+      jsx(FollowsPage, {
         account: page.account,
         direction: url.pathname.endsWith("/followers") ? "followers" : "following",
         hidden: page.hidden,
@@ -102,7 +103,7 @@ function within(h: Harness, answerBytes: number) {
         cursor: pageCursor(url.searchParams.get("max_id"), url.searchParams.get("min_id")),
         paging: page.paging,
         site: SITE,
-      }).toString(),
+      }),
     );
   };
 }

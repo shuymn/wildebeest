@@ -295,7 +295,7 @@ function prepared(db: Db, follow: Severed, room: () => number): boolean {
   const local = db.first<{ uri: string }>("SELECT uri FROM accounts WHERE id = ? AND domain IS NULL", follow.follower);
   const [signer, object] =
     local !== undefined
-      ? [follow.follower, follow.uri ?? followUri(local.uri, String(follow.id))]
+      ? [follow.follower, follow.uri ?? followUri(local.uri, follow.id)]
       : [follow.target, follow.state === "accepted" ? follow.uri : null];
   if (object === null) {
     return true;

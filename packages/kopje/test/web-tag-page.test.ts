@@ -16,6 +16,7 @@ import { expectFullPages, shownFeed, tagFrameBytes, viaRoute, walkFeed as walk }
 import { type PlannedStatement, plannedSql, scansOf, staleStatistics } from "./read-helpers";
 import { community, post, remoteAccount, seedStatus, type SeedStatus } from "./status-helpers";
 import { attr, one, parseHtml, query, text } from "./web-dom";
+import { render } from "./web-fixtures";
 
 // The hashtag page: /tags/:name lists the hashtag's local public posts to an anonymous viewer (VIS-4), newest first,
 // paged both ways by status id.
@@ -37,7 +38,7 @@ function within(h: Harness, answerBytes: number) {
       throw new Error(page.status);
     }
     expect(jsonBytes({ ...page, site: SITE })).toBeLessThanOrEqual(answerBytes);
-    return String(await jsx(TagPage, { ...page, cursor, site: SITE }).toString());
+    return await render(jsx(TagPage, { ...page, cursor, site: SITE }));
   };
 }
 
@@ -300,9 +301,7 @@ describe("the hashtag page", () => {
     const name = "\u1100\u0301\u1161";
     const key = "\u1100\u1161";
     const status = await post(h, h.users.alice, { status: `#${name} hi` });
-    expect(await sql(h.store, "SELECT name FROM status_tags WHERE status_id = ?", String(status.id))).toEqual([
-      { name: key },
-    ]);
+    expect(await sql(h.store, "SELECT name FROM status_tags WHERE status_id = ?", status.id)).toEqual([{ name: key }]);
     const response = await h.request(`/tags/${encodeURIComponent(name)}`);
     expect(response.status).toBe(200);
     const doc = parseHtml(await response.text());

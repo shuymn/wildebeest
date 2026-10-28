@@ -78,7 +78,7 @@ describe("isolated (Db.savepoint)", () => {
           put(db, "refused");
         });
         put(db, "c");
-        return step.ok ? null : String((step.error as Error).message);
+        return step.ok ? null : (step.error as Error).message;
       });
       expect(await kernel.execute(BUILD, run, undefined)).toContain("test: refused");
       expect(await kernel.execute(BUILD, names, undefined)).toEqual(["a", "c"]);

@@ -36,9 +36,9 @@ function specifierName(specifier: Node): string {
     case "ImportDefaultSpecifier":
       return "default";
     case "ImportSpecifier":
-      return specifier.imported.type === "Identifier" ? specifier.imported.name : String(specifier.imported.value);
+      return specifier.imported.type === "Identifier" ? specifier.imported.name : specifier.imported.value;
     case "ExportSpecifier":
-      return specifier.local.type === "Identifier" ? specifier.local.name : String(specifier.local.value);
+      return specifier.local.type === "Identifier" ? specifier.local.name : specifier.local.value;
     default:
       return "?";
   }
@@ -107,7 +107,7 @@ function violations(files: readonly Source[]): string[] {
         if (node.source === null || node.source === undefined) {
           return;
         }
-        const target = targetOf(String(node.source.value));
+        const target = targetOf(node.source.value);
         const specifiers = "specifiers" in node ? node.specifiers : [];
         const whole = node.type === "ExportAllDeclaration" || specifiers.length === 0;
         checkTarget(found, at, from, target, whole ? null : specifiers.map(specifierName));
@@ -131,7 +131,7 @@ function violations(files: readonly Source[]): string[] {
         const specifier = node.source.value;
         const qualifier = node.qualifier;
         const name = qualifier?.type === "Identifier" ? qualifier.name : null;
-        checkTarget(found, at, from, targetOf(String(specifier)), name === null ? null : [name]);
+        checkTarget(found, at, from, targetOf(specifier), name === null ? null : [name]);
         return;
       }
       if (

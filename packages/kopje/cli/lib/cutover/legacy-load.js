@@ -192,7 +192,7 @@ function rowCounts(db) {
   const counts = new Map();
   for (const name of schemaFingerprint(db).keys()) {
     const row = /** @type {{ n: number }} */ (db.prepare(`SELECT count(*) AS n FROM ${quoteIdentifier(name)}`).get());
-    counts.set(name, Number(row.n));
+    counts.set(name, row.n);
   }
   return counts;
 }
@@ -544,8 +544,8 @@ function load(sources, acceptDeletions, baseTime, path) {
   for (const row of /** @type {{ id: string, properties: unknown, original_actor_id: unknown }[]} */ (
     db.prepare("SELECT id, properties, original_actor_id FROM objects").all()
   )) {
-    source.objects.set(String(row.id), addressingOf(row.properties));
-    source.authors.set(String(row.id), typeof row.original_actor_id === "string" ? row.original_actor_id : null);
+    source.objects.set(row.id, addressingOf(row.properties));
+    source.authors.set(row.id, typeof row.original_actor_id === "string" ? row.original_actor_id : null);
   }
   for (const row of /** @type {{ id: string, properties: unknown }[]} */ (
     db.prepare("SELECT id, properties FROM actors").all()
@@ -559,7 +559,7 @@ function load(sources, acceptDeletions, baseTime, path) {
     // As legacy's actorFromRow reads it: unparsable properties fail the actor (null); a missing followers property is
     // replaced from the actor id, any other value is kept as stored.
     source.followers.set(
-      String(row.id),
+      row.id,
       followers === null ? null : { present: followers.followers !== undefined, value: followers.followers },
     );
   }
