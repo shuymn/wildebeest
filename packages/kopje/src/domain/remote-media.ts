@@ -953,6 +953,7 @@ export const recordRemoteMedia = writeOperation<
   if (outcome.kind === "unattempted") {
     db.run("UPDATE remote_media SET attempts = max(attempts - 1, 0), due_at = ?2 WHERE id = ?1", slot, now);
   } else {
+    // oxlint-disable-next-line typescript/no-unnecessary-boolean-literal-compare -- unchecked RPC input
     failSlot(db, slot, row.attempts, outcome.kind === "failed" && outcome.permanent === true, now);
   }
   return { held: true };
@@ -1531,6 +1532,7 @@ export const confirmRemoteMediaDeleted = writeOperation<
   let confirmed = 0;
   for (const result of listOf(results).slice(0, 2 * DELETE_BATCH)) {
     const token = result?.token;
+    // oxlint-disable-next-line typescript/no-unnecessary-boolean-literal-compare -- unchecked RPC input
     const deleted = result?.deleted === true;
     if (typeof token !== "string") {
       continue;
@@ -1601,6 +1603,7 @@ export const recordRemoteMediaValidation = writeOperation<
         break;
       }
       missing(token);
+      // oxlint-disable-next-line typescript/no-unnecessary-boolean-literal-compare -- unchecked RPC input
     } else if (result.missing === true) {
       missing(token);
     }

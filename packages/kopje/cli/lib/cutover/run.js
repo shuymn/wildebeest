@@ -375,8 +375,8 @@ export async function verifyConversion(options) {
     }
     // Rows the conversion leaves out, counted here on their own: a dump made with --accept-deletions passes only
     // with it.
-    report.dropped = { ...dropped, accepted: options.acceptDeletions === true };
-    if (Object.keys(dropped).length > 0 && options.acceptDeletions !== true) {
+    report.dropped = { ...dropped, accepted: options.acceptDeletions };
+    if (Object.keys(dropped).length > 0 && !options.acceptDeletions) {
       report.result = "FAIL";
     }
     if (options.imagesDir !== undefined) {

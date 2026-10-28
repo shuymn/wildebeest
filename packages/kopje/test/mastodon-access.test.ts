@@ -233,7 +233,7 @@ function mastodonAccess(route: MastodonRoute): Access {
   return {
     token: route.token as Access["token"],
     scopes: route.scopes === null ? null : route.scopes.toSorted(),
-    user: route.user === true,
+    user: route.user,
   };
 }
 

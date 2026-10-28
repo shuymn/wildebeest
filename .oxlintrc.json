@@ -115,7 +115,6 @@
     "vitest/require-mock-type-parameters": "off",
 
     // Off until their findings are fixed; each is a mechanical rewrite.
-    "typescript/no-unnecessary-boolean-literal-compare": "off",
     "typescript/no-unnecessary-type-arguments": "off",
     "unicorn/no-useless-fallback-in-spread": "off",
     "unicorn/no-useless-spread": "off",

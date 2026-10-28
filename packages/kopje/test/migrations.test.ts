@@ -2594,7 +2594,7 @@ describe("Store migration runner", () => {
 
       const result = await k.upgrade();
       expect(result).toMatchObject({ ok: false, reason: "upgrade-failed" });
-      expect(result.ok === false && result.detail).toContain("9999_extra (recorded: true)");
+      expect(!result.ok && result.detail).toContain("9999_extra (recorded: true)");
       expect(bookkeeping(state.storage.sql).map((m) => m.name)).toEqual([...NAMES, "9999_extra"]);
       expect(tableNames(state.storage.sql)).toContain("extra");
 
@@ -5335,9 +5335,7 @@ describe("0048_stored_bounds", () => {
       const before = TABLES.map((table) => sql.exec(columnsSql(table)).toArray());
       const result = await kernel(state, MIGRATIONS.slice(0, at + 1)).upgrade();
       expect(result).toMatchObject({ ok: false, reason: "upgrade-failed" });
-      expect(result.ok === false && result.detail).toContain(
-        "CHECK constraint failed: tokened_media_url_within_2048_bytes",
-      );
+      expect(!result.ok && result.detail).toContain("CHECK constraint failed: tokened_media_url_within_2048_bytes");
       expect(bookkeeping(sql).map((m) => m.name)).toEqual(NAMES.slice(0, at));
       expect(TABLES.map((table) => sql.exec(columnsSql(table)).toArray())).toEqual(before);
       expect(
