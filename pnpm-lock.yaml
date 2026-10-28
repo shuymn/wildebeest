@@ -6,124 +6,223 @@ settings:
 
 catalogs:
   default:
+    '@axe-core/playwright':
+      specifier: 4.14.0
+      version: 4.14.0
+    '@cloudflare/vitest-plugin':
+      specifier: 1.4.0
+      version: 1.4.0
+    '@cloudflare/workers-types':
+      specifier: 5.20261025.1
+      version: 5.20261025.1
+    '@fedify/fedify':
+      specifier: 2.4.4
+      version: 2.4.4
+    '@fedify/testing':
+      specifier: 2.4.4
+      version: 2.4.4
+    '@fedify/vocab':
+      specifier: 2.4.4
+      version: 2.4.4
+    '@jsquash/webp':
+      specifier: 1.5.0
+      version: 1.5.0
+    '@playwright/test':
+      specifier: 1.64.0
+      version: 1.64.0
+    '@types/node':
+      specifier: 24.19.2
+      version: 24.19.2
+    '@types/sanitize-html':
+      specifier: 2.16.2
+      version: 2.16.2
+    age-encryption:
+      specifier: 0.3.1
+      version: 0.3.1
+    aws4fetch:
+      specifier: 1.0.20
+      version: 1.0.20
+    blurhash:
+      specifier: 2.0.5
+      version: 2.0.5
+    entities:
+      specifier: 8.1.0
+      version: 8.1.0
+    es-toolkit:
+      specifier: 1.53.0
+      version: 1.53.0
     esbuild:
       specifier: 0.28.2
       version: 0.28.2
+    fast-check:
+      specifier: 4.10.2
+      version: 4.10.2
+    hono:
+      specifier: 4.13.13
+      version: 4.13.13
+    htmlparser2:
+      specifier: 12.0.0
+      version: 12.0.0
+    jose:
+      specifier: 6.2.12
+      version: 6.2.12
+    lefthook:
+      specifier: 2.2.1
+      version: 2.2.1
+    linkify-it:
+      specifier: 6.1.0
+      version: 6.1.0
+    oxc-parser:
+      specifier: 0.154.0
+      version: 0.154.0
+    oxfmt:
+      specifier: 0.74.0
+      version: 0.74.0
+    oxlint:
+      specifier: 1.89.0
+      version: 1.89.0
+    oxlint-tsgolint:
+      specifier: 7.0.2005
+      version: 7.0.2005
+    parse5:
+      specifier: 8.0.1
+      version: 8.0.1
+    sanitize-html:
+      specifier: 2.18.1
+      version: 2.18.1
+    temporal-polyfill:
+      specifier: 1.0.5
+      version: 1.0.5
+    typescript:
+      specifier: 7.0.2
+      version: 7.0.2
+    vite:
+      specifier: 6.4.4
+      version: 6.4.4
+    vitest:
+      specifier: 5.0.5
+      version: 5.0.5
+    wrangler:
+      specifier: 4.149.0
+      version: 4.149.0
+    zod:
+      specifier: 4.6.7
+      version: 4.6.7
 
 importers:
 
   .:
     devDependencies:
       lefthook:
-        specifier: 2.2.1
+        specifier: 'catalog:'
         version: 2.2.1
       oxfmt:
-        specifier: 0.74.0
+        specifier: 'catalog:'
         version: 0.74.0
       oxlint:
-        specifier: 1.89.0
+        specifier: 'catalog:'
         version: 1.89.0(oxlint-tsgolint@7.0.2005)
       oxlint-tsgolint:
-        specifier: 7.0.2005
+        specifier: 'catalog:'
         version: 7.0.2005
       vitest:
-        specifier: 5.0.5
+        specifier: 'catalog:'
         version: 5.0.5(@opentelemetry/api@1.9.1)(@types/node@24.19.2)(vite@6.4.4(@types/node@24.19.2)(jiti@1.21.7)(yaml@2.9.1))
       wrangler:
-        specifier: 4.149.0
+        specifier: 'catalog:'
         version: 4.149.0(@cloudflare/workers-types@5.20261025.1)(@types/node@24.19.2)
 
   packages/kopje:
     devDependencies:
       '@axe-core/playwright':
-        specifier: 4.14.0
+        specifier: 'catalog:'
         version: 4.14.0(playwright-core@1.64.0)
       '@cloudflare/vitest-plugin':
-        specifier: 1.4.0
+        specifier: 'catalog:'
         version: 1.4.0(@cloudflare/workers-types@5.20261025.1)(@types/node@24.19.2)(vitest@5.0.5(@opentelemetry/api@1.9.1)(@types/node@24.19.2)(vite@6.4.4(@types/node@24.19.2)(jiti@1.21.7)(yaml@2.9.1)))
       '@cloudflare/workers-types':
-        specifier: 5.20261025.1
+        specifier: 'catalog:'
         version: 5.20261025.1
       '@fedify/fedify':
-        specifier: 2.4.4
+        specifier: 'catalog:'
         version: 2.4.4
       '@fedify/testing':
-        specifier: 2.4.4
+        specifier: 'catalog:'
         version: 2.4.4(@fedify/fedify@2.4.4)
       '@fedify/vocab':
-        specifier: 2.4.4
+        specifier: 'catalog:'
         version: 2.4.4
       '@jsquash/webp':
-        specifier: 1.5.0
+        specifier: 'catalog:'
         version: 1.5.0
       '@playwright/test':
-        specifier: 1.64.0
+        specifier: 'catalog:'
         version: 1.64.0
       '@types/node':
-        specifier: 24.19.2
+        specifier: 'catalog:'
         version: 24.19.2
       '@types/sanitize-html':
-        specifier: 2.16.2
+        specifier: 'catalog:'
         version: 2.16.2
       age-encryption:
-        specifier: 0.3.1
+        specifier: 'catalog:'
         version: 0.3.1
       aws4fetch:
-        specifier: 1.0.20
+        specifier: 'catalog:'
         version: 1.0.20
       blurhash:
-        specifier: 2.0.5
+        specifier: 'catalog:'
         version: 2.0.5
       entities:
-        specifier: 8.1.0
+        specifier: 'catalog:'
         version: 8.1.0
       es-toolkit:
-        specifier: 1.53.0
+        specifier: 'catalog:'
         version: 1.53.0
       esbuild:
         specifier: 'catalog:'
         version: 0.28.2
       fast-check:
-        specifier: 4.10.2
+        specifier: 'catalog:'
         version: 4.10.2
       hono:
-        specifier: 4.13.13
+        specifier: 'catalog:'
         version: 4.13.13
       htmlparser2:
-        specifier: 12.0.0
+        specifier: 'catalog:'
         version: 12.0.0
       jose:
-        specifier: 6.2.12
+        specifier: 'catalog:'
         version: 6.2.12
       linkify-it:
-        specifier: 6.1.0
+        specifier: 'catalog:'
         version: 6.1.0
       oxc-parser:
-        specifier: 0.154.0
+        specifier: 'catalog:'
         version: 0.154.0
       parse5:
-        specifier: 8.0.1
+        specifier: 'catalog:'
         version: 8.0.1
       sanitize-html:
-        specifier: 2.18.1
+        specifier: 'catalog:'
         version: 2.18.1
       temporal-polyfill:
-        specifier: 1.0.5
+        specifier: 'catalog:'
         version: 1.0.5
       typescript:
-        specifier: 7.0.2
+        specifier: 'catalog:'
         version: 7.0.2
       vite:
-        specifier: 6.4.4
+        specifier: 'catalog:'
         version: 6.4.4(@types/node@24.19.2)(jiti@1.21.7)(yaml@2.9.1)
       vitest:
-        specifier: 5.0.5
+        specifier: 'catalog:'
         version: 5.0.5(@opentelemetry/api@1.9.1)(@types/node@24.19.2)(vite@6.4.4(@types/node@24.19.2)(jiti@1.21.7)(yaml@2.9.1))
       wrangler:
-        specifier: 4.149.0
+        specifier: 'catalog:'
         version: 4.149.0(@cloudflare/workers-types@5.20261025.1)(@types/node@24.19.2)
       zod:
-        specifier: 4.6.7
+        specifier: 'catalog:'
         version: 4.6.7
 
 packages:
