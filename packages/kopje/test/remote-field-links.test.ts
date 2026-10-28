@@ -3,13 +3,8 @@ import { describe, expect, it } from "vitest";
 
 import { Db } from "../src/db/sql";
 import { MAX_REMOTE_FIELDS } from "../src/domain/account-columns";
-import {
-  actorRevision,
-  purgeBatch,
-  receiveActivity,
-  type RemoteActorInput,
-  upsertRemoteActor,
-} from "../src/domain/inbox";
+import { purgeBatch, receiveActivity } from "../src/domain/inbox";
+import { actorRevision, type RemoteActorInput, upsertRemoteActor } from "../src/domain/remote-actors";
 import { REMOTE_LINK_RECHECK_MS } from "../src/domain/remote-field-links";
 import { suspendRemote } from "../src/domain/remote-suspension";
 import { REMOTE_FIELD_INDEXES, REMOTE_VERIFIED_SHOWN, SAFE_INTEGER_MAX } from "../src/platform/stored-bounds";

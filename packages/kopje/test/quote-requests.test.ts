@@ -2,8 +2,8 @@ import { type DocumentLoader, verifyJsonLd } from "@fedify/fedify";
 import { describe, expect, it } from "vitest";
 
 import { MAX_LANE_BACKLOG } from "../src/domain/deliveries";
-import { RETRACTION_TTL_MS } from "../src/domain/inbox";
 import { MAX_QUOTE_REQUESTS_PER_ACTOR } from "../src/domain/quotes";
+import { RETRACTION_TTL_MS } from "../src/domain/remote-actors";
 import { signAsAuthor } from "../src/federation/ld-sign";
 import { deliveryRound } from "../src/jobs/deliver";
 import { sha256Hex } from "../src/security/tokens";

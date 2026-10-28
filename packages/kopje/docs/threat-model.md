@@ -181,7 +181,7 @@ against their own instance. TLS is assumed between all parties.
   `src/domain/inbox.ts`; `test/inbox.test.ts` ("ignores a Move whose target does not list the actor"). The stored
   move (`accounts.moved_to_account_id`, shown as `Account#moved`) is display-only, the source's own claim as in
   Mastodon: an actor document's `movedTo` may name any stored account, and a verified `Move` sets it when first
-  processed; followers move only on a verified `Move` (`upsertRemoteActor` and `move` in `src/domain/inbox.ts`;
+  processed; followers move only on a verified `Move` (`upsertRemoteActor` in `src/domain/remote-actors.ts` and `move` in `src/domain/inbox.ts`;
   `test/inbox.test.ts` ("account moves")). Setting it issues a new revision of the source (ID-1), so a document of the
   source fetched before the `Move` committed never clears it, a stale-author refresh included; a target stored after
   its revision was read answers 503, having written nothing (`test/inbox-actor-revision.test.ts`).
@@ -212,7 +212,7 @@ against their own instance. TLS is assumed between all parties.
   (ID-7). A received quote is accepted only as a self-quote or by a stamp fetched from its own id that passes every check
   (the quoted author's, on that author's origin, naming exactly this quote of exactly that status); a local quoted status
   is never accepted from outside. A quoted Note embedded in a status is taken only when it is that status's author's
-  own (its `attributedTo` the author, its id on the author's origin), with one hop less of work. `revokeStamp` and `completeQuote` in `src/domain/quotes.ts`; `test/quotes.test.ts`
+  own (its `attributedTo` the author, its id on the author's origin), with one hop less of work. `revokeStamp` and `verifyQuote` in `src/domain/quotes.ts`; `test/quotes.test.ts`
   ("is not taken from anyone but the quoted author", "leaves a quote pending when its stamp is …", "wins over a quote
   that arrives after it"). For locally authored quotes of remote statuses, `Accept`/`Reject` must come from the quoted
   author and name our request by id or inline it with our quoting status as instrument and their status as object.
@@ -931,7 +931,7 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
   `me`); each write that changes what a listener may be shown journals its own row (nothing is coalesced, so a socket
   opened while an event is pending is sent every later change), and the unit presents the announcement as it is when
   sent: published, its entity; otherwise its delete. An expiry by the cron sends nothing,
-  as Mastodon's. `streamAnnouncement` in `src/domain/streaming.ts`, `streamedAnnouncement` and
+  as Mastodon's. `streamAnnouncement` in `src/domain/stream-journal.ts`, `streamedAnnouncement` and
   `streamedAnnouncementReaction` in `src/domain/announcements.ts`; `test/streaming/announcements.test.ts`.
 
 - **VIS-27: a quote reveals nothing its quoted status hides.** R35 applies VIS-1/R2 to the quoted status for the
@@ -1118,7 +1118,7 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
   emojis, the default images), and an unavailable account shows `moved: null` with its target not read, as
   REST::AccountSerializer does (`test/account-moved.test.ts`). _Enforced (main)._ Implementation, for accounts:
   `src/domain/remote-suspension.ts`, `actOnAccount` and `unsuspendAdminAccount` in `src/domain/admin-accounts.ts`,
-  `availableSql` in `src/domain/audience.ts`, the gate in `receive` and `upsertRemoteActor` in `src/domain/inbox.ts`,
+  `availableSql` in `src/domain/audience.ts`, the gate in `receive` in `src/domain/inbox.ts`, `upsertRemoteActor` in `src/domain/remote-actors.ts`,
   `storeRemoteStatus` in `src/domain/remote-statuses.ts`, migration `0045_remote_suspension`;
   `test/remote-suspension.test.ts`, `test/remote-suspension-deliveries.test.ts`,
   `test/remote-suspension-inbound.test.ts`, `test/policy-oracle.test.ts` and `test/policy-writes.test.ts` (against
@@ -1818,7 +1818,7 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
   `accounts.confirmed_username` holds the username it was made for, and an actor whose `preferredUsername` changes
   falls back to its host until it is confirmed again. A search by an alias (any address whose WebFinger names an
   existing actor) finds the account by its actor id and never sets or replaces its address. One helper
-  (`accountDomain` in `src/domain/inbox.ts`) decides the stored domain for every path. _Gap:_ inbound activities do
+  (`accountDomain` in `src/domain/remote-actors.ts`) decides the stored domain for every path. _Gap:_ inbound activities do
   not look up WebFinger, so an account first seen inbound shows its actor's host until it is resolved, and a renamed
   actor keeps its host until it is resolved again. `test/inbox-canonical-address.test.ts` ("the canonical address of a
   remote account", "the domains of WebFinger subjects and addresses, parsed one way"). `createRemoteLoaders` in

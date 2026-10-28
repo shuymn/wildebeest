@@ -6,7 +6,7 @@ import { describe, expect, it } from "vitest";
 import { MIGRATIONS } from "../src/db/migrations";
 import { Db } from "../src/db/sql";
 import { jsonBytes } from "../src/domain/answer-budget";
-import { upsertRemoteActor } from "../src/domain/inbox";
+import { upsertRemoteActor } from "../src/domain/remote-actors";
 import { MAX_SPOILER_LENGTH } from "../src/domain/remote-statuses";
 import { MAX_RAW_LENGTH, parseStatusText, renderFieldValue, renderStatusHtml } from "../src/domain/status-text";
 import { remoteActorInput } from "../src/federation/remote-actor";

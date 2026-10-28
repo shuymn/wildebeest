@@ -17,8 +17,12 @@ import {
   type Visibility,
 } from "./audience";
 import { userWriteOperation } from "./auth";
-import { type EmojiCandidate, emojiSnapshot } from "./custom-emojis";
+import { emojiSnapshot } from "./custom-emojis";
 import { insertWithFreshId, remoteId } from "./ids";
+import { enqueueCard, remoteCardLink } from "./link-cards";
+import { notify } from "./notifications";
+import { isLocalPoll, receiveVote, remotePollChanges, storeRemotePoll } from "./polls";
+import { linkQuotes, promoteQuote, QUOTE_HOPS, quoteArrival, quoteDue, recordQuote, refreshQuote } from "./quotes";
 import {
   type DocumentRevision,
   isDeleted,
@@ -26,12 +30,16 @@ import {
   type RemoteActorInput,
   type RemoteRow,
   upsertRemoteActor,
-} from "./inbox";
-import { type CardCandidate, enqueueCard, remoteCardLink } from "./link-cards";
-import { notify } from "./notifications";
-import { isLocalPoll, receiveVote, type RemotePollInput, remotePollChanges, storeRemotePoll } from "./polls";
-import { linkQuotes, promoteQuote, QUOTE_HOPS, quoteArrival, quoteDue, recordQuote, refreshQuote } from "./quotes";
+} from "./remote-actors";
 import { dropAttachmentFiles, noteStatusEmoji, syncAttachmentFiles } from "./remote-media";
+import {
+  type RemoteQuotePolicyInput,
+  type RemoteMediaInput,
+  type RemoteStatusInput,
+  statusByUri,
+  followersUri,
+  type StoredStatus,
+} from "./remote-status-reads";
 import { normalizeSearchText } from "./search-text";
 import {
   MAX_MEDIA_DESCRIPTION_LENGTH,
@@ -75,70 +83,6 @@ export const MAX_LINKED_REPLIES = 100;
 // An Update of an unknown status creates it only if the status is this recent (Mastodon's OBJECT_AGE_THRESHOLD).
 export const UPDATE_CREATES_WITHIN_MS = 24 * 60 * 60 * 1000;
 
-export type RemoteMediaInput = {
-  type: "image" | "video" | "audio" | "unknown";
-  url: string;
-  previewUrl: string | null;
-  description: string;
-  focus: { x: number; y: number } | null;
-  width: number | null;
-  height: number | null;
-  // media_attachments.blurhash as stored (stored-bounds.ts storedBlurhash).
-  blurhash: string | null;
-};
-
-// A remote Note (or a converted Article, Page, Image, Audio, Video or Event) as the Worker read it.
-export type RemoteStatusInput = {
-  uri: string;
-  url: string | null;
-  attributedTo: string | null;
-  // Sanitized HTML (HTML-1), and its text for search.
-  content: string;
-  text: string;
-  spoilerText: string;
-  sensitive: boolean;
-  language: string | null;
-  published: string | null;
-  updated: string | null;
-  inReplyTo: string | null;
-  // The thread the sender names (Mastodon's `conversation`), when it names one.
-  conversation?: string | null;
-  to: string[];
-  cc: string[];
-  // hrefs of Mention tags, and normalized names of Hashtag tags.
-  mentions: string[];
-  tags: string[];
-  // Emoji tags as read (federation/remote-emoji.ts); the snapshot is chosen when the status is written.
-  emojiTags: EmojiCandidate[];
-  media: RemoteMediaInput[];
-  // The Note's name (a vote names its choice), and the poll of a Question.
-  name?: string | null;
-  poll?: RemotePollInput | null;
-  // The quote the Note names (quote, _misskey_quote, quoteUrl or quoteUri), or null.
-  quote?: RemoteQuoteInput | null;
-  // Who the Note's author lets quote it (interactionPolicy.canQuote), or null when it states nothing.
-  quotePolicy?: RemoteQuotePolicyInput | null;
-  // The content's anchors a link card may take, at most CARD_CANDIDATES, in document order (link-cards.ts).
-  cardCandidates?: CardCandidate[];
-  // The object as received.
-  raw: string;
-};
-
-// A quote as StatusParser reads it: the quoted status's uri (null only for a Tombstone without an id), whether the Note
-// had no `quote` property (a legacy quote: Misskey's _misskey_quote or quoteUrl, Fedibird's quoteUri), whether the
-// quote is a Tombstone (the quoted status is gone), and the stamp (quoteAuthorization) it names.
-export type RemoteQuoteInput = {
-  uri: string | null;
-  legacy: boolean;
-  tombstone: boolean;
-  approvalUri: string | null;
-  // The quoted Note as the quoting Note embeds it (one level, never trusted beyond what recordQuote checks), or null.
-  embedded?: RemoteStatusInput | null;
-};
-
-// interactionPolicy.canQuote as the Worker read it: the URIs each half lists ('' for an entry that is not one).
-export type RemoteQuotePolicyInput = { automatic: string[]; manual: string[] };
-
 export type StoreContext = {
   now: number;
   origin: string;
@@ -155,20 +99,6 @@ export type StoreContext = {
 export type StatusOutcome = { applied: boolean; reason: string; statusId?: string };
 
 type Author = { id: string; uri: string };
-
-type StoredStatus = {
-  id: string;
-  account_id: string;
-  reblog_of_id: string | null;
-  visibility: Visibility;
-  content: string;
-  spoiler_text: string;
-  sensitive: number;
-  language: string | null;
-  published_at: string;
-  edited_at: string | null;
-  remote_version: string | null;
-};
 
 function originOf(uri: string | null): string | null {
   if (uri === null) {
@@ -201,26 +131,6 @@ export const VERSION_SKEW_MS = 5 * 60 * 1000;
 function versionOf(value: string | null, now: number): number {
   const parsed = value === null ? NaN : Date.parse(value);
   return parsed > now + VERSION_SKEW_MS ? Infinity : parsed;
-}
-
-export function statusByUri(db: Db, uri: string): StoredStatus | undefined {
-  return db.first<StoredStatus>(
-    `SELECT id, account_id, reblog_of_id, visibility, content, spoiler_text, sensitive, language, published_at, edited_at,
-			remote_version
-		FROM statuses WHERE uri = ?`,
-    uri,
-  );
-}
-
-// The author's followers collection, as its stored document names it.
-export function followersUri(db: Db, accountId: string): string | null {
-  return (
-    db.first<{ followers: string | null }>(
-      `SELECT CASE WHEN json_type(raw, '$.followers') = 'text' THEN json_extract(raw, '$.followers') END AS followers
-			FROM accounts WHERE id = ?`,
-      accountId,
-    )?.followers ?? null
-  );
 }
 
 // StatusParser#quote_policy (Status::InteractionPolicyConcern's flags, audience.ts QUOTE_POLICY_FLAGS) of a remote
@@ -549,7 +459,7 @@ export function storeRemoteStatus(db: Db, author: Author, input: RemoteStatusInp
   linkReplies(db, { id, uri: input.uri, accountId: author.id, replyTarget, isReply });
   // A new status has no quote to remove: only one it names is recorded.
   if (input.quote !== undefined && input.quote !== null) {
-    recordQuote(db, { id, uri: input.uri, author }, input.quote, arrivalOf(db, author, ctx), ctx);
+    recordQuote(db, { id, uri: input.uri, author }, input.quote, arrivalOf(db, author, ctx), ctx, storeRemoteStatus);
   }
   linkQuotes(db, { id, uri: input.uri }, ctx.now);
   // Create#process_status's LinkCrawlWorker, for every status stored (a fetched one included).
@@ -717,7 +627,7 @@ export function updateRemoteStatus(db: Db, author: Author, input: RemoteStatusIn
     // a poll's counts, which names none, or the same one) still refreshes the counts, the end and the voters of its
     // poll, and verifies a changed stamp of the same quote again; the quoted status itself changes only with a newer
     // version.
-    refreshQuote(db, { id: existing.id, uri: input.uri, author }, input.quote, arrival, ctx);
+    refreshQuote(db, { id: existing.id, uri: input.uri, author }, input.quote, arrival, ctx, storeRemoteStatus);
     const policyChanged =
       db.run(
         "UPDATE statuses SET quote_policy = ?1 WHERE id = ?2 AND quote_policy <> ?1",
@@ -784,7 +694,7 @@ export function updateRemoteStatus(db: Db, author: Author, input: RemoteStatusIn
   writeMedia(db, existing.id, author, media, ctx);
   measureFilterText(db, existing.id, iso(ctx.now));
   noteStatusEmoji(db, existing.id, ctx.now);
-  recordQuote(db, { id: existing.id, uri: input.uri, author }, input.quote, arrival, ctx);
+  recordQuote(db, { id: existing.id, uri: input.uri, author }, input.quote, arrival, ctx, storeRemoteStatus);
   if (significant) {
     // ProcessStatusUpdateService#reset_preview_card!: the card is fetched again (a quote's change alone is not
     // significant here, so it resets nothing).
@@ -864,18 +774,6 @@ function updateMentions(
   return allowed.filter((id) => !mentionedBefore.has(id));
 }
 
-// The visibility a fetched original would be stored with (before silent mentions), for VIS-6's check before anything
-// is stored: StatusParser#visibility.
-export function visibilityOf(input: RemoteStatusInput, followersUri: string | null): Visibility {
-  if (input.to.some(isPublicCollection)) {
-    return "public";
-  }
-  if (input.cc.some(isPublicCollection)) {
-    return "unlisted";
-  }
-  return followersUri !== null && input.to.includes(followersUri) ? "private" : "direct";
-}
-
 // ---------------------------------------------------------------------------------------------------------------
 // Search resolution (GET /api/v2/search?resolve=true)
 // ---------------------------------------------------------------------------------------------------------------
@@ -883,7 +781,7 @@ export function visibilityOf(input: RemoteStatusInput, followersUri: string | nu
 // What the Worker fetched for a resolve query (federation/resolve.ts): an account, or a status with its author, each
 // fetched through the safe loader signed by the instance actor and parsed as inbound documents are. none: nothing was
 // fetched (a local URL, an unusable answer, a failed fetch); the query is then looked up by uri in stored data only.
-// revision: the actor's (the author's) as read before its document was fetched (inbox.ts DocumentRevision).
+// revision: the actor's (the author's) as read before its document was fetched (remote-actors.ts DocumentRevision).
 export type Resolved =
   | { kind: "account"; actor: RemoteActorInput; revision: DocumentRevision }
   | { kind: "status"; status: RemoteStatusInput; author: RemoteActorInput; revision: DocumentRevision }

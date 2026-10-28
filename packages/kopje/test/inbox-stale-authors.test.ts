@@ -2,7 +2,7 @@ import { runInDurableObject } from "cloudflare:test";
 import { describe, expect, it } from "vitest";
 
 import { Db } from "../src/db/sql";
-import { ACCOUNT_STALE_MS } from "../src/domain/inbox";
+import { ACCOUNT_STALE_MS } from "../src/domain/remote-actors";
 import { suspendRemote } from "../src/domain/remote-suspension";
 import { sql } from "./api-helpers";
 import { NOW } from "./app-helpers";

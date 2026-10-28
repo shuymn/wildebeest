@@ -2,9 +2,9 @@ import { runInDurableObject } from "cloudflare:test";
 import { describe, expect, it } from "vitest";
 
 import { Db } from "../src/db/sql";
-import { upsertRemoteActor } from "../src/domain/inbox";
 import { MODERATION_ROUND_ROWS } from "../src/domain/moderation-bounds";
 import { writeOperation } from "../src/domain/operation";
+import { upsertRemoteActor } from "../src/domain/remote-actors";
 import {
   CLEAR_ROUND,
   MARK_ACCOUNTS,
@@ -45,7 +45,7 @@ import { follow, remoteAccount, remoteFollows } from "./status-helpers";
 
 const D = "d.example";
 
-// A remote actor's document as the inbox's refresh reads it (inbox.ts RemoteActorInput).
+// A remote actor's document as the inbox's refresh reads it (remote-actors.ts RemoteActorInput).
 const ACTOR = {
   domain: "",
   actorType: "Person",

@@ -9,7 +9,7 @@ import {
   unpublishAnnouncement,
   updateAnnouncement,
 } from "../../src/domain/announcements";
-import { streamAnnouncement } from "../../src/domain/streaming";
+import { streamAnnouncement } from "../../src/domain/stream-journal";
 import { sha256Hex } from "../../src/security/tokens";
 import { STREAM_LIMITS } from "../../src/stream-hub";
 import {

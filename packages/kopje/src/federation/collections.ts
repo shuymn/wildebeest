@@ -10,7 +10,7 @@ import {
   PART_NETWORK,
   PART_TAGS,
 } from "../domain/remote-collections";
-import type { RemoteStatusInput } from "../domain/remote-statuses";
+import type { RemoteStatusInput } from "../domain/remote-status-reads";
 import { readConfig, userKek } from "../platform/config";
 import { callStore } from "../platform/store-client";
 import { storedCount } from "../platform/stored-bounds";

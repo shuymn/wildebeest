@@ -73,7 +73,9 @@ import * as notifications from "./domain/notifications";
 import * as oauth from "./domain/oauth";
 import * as polls from "./domain/polls";
 import * as push from "./domain/push";
+import * as quoteVerification from "./domain/quote-verification";
 import * as quotes from "./domain/quotes";
+import * as remoteActors from "./domain/remote-actors";
 import * as remoteCollections from "./domain/remote-collections";
 import * as remoteMedia from "./domain/remote-media";
 import { resolveSearch } from "./domain/remote-statuses";
@@ -546,8 +548,8 @@ export class Store extends DurableObject<Env> {
     try {
       return await this.#kernel.execute(callerBuild, inbox.receiveActivity, { ...input, storeNow: Date.now() });
     } catch (error) {
-      // Rolled back: a retryable refusal changes nothing (domain/inbox.ts, RetryLater).
-      if (error instanceof inbox.RetryLater) {
+      // Rolled back: a retryable refusal changes nothing (domain/remote-actors.ts, RetryLater).
+      if (error instanceof remoteActors.RetryLater) {
         return inbox.retryResult(error);
       }
       throw error;
@@ -617,8 +619,8 @@ export class Store extends DurableObject<Env> {
     return this.#kernel.execute(callerBuild, quotes.quoteWork, input);
   }
 
-  completeQuote(callerBuild: string, input: OperationInput<typeof quotes.completeQuote>) {
-    return this.#kernel.execute(callerBuild, quotes.completeQuote, input);
+  completeQuote(callerBuild: string, input: OperationInput<typeof quoteVerification.completeQuote>) {
+    return this.#kernel.execute(callerBuild, quoteVerification.completeQuote, input);
   }
 
   chargeQuote(callerBuild: string, input: OperationInput<typeof quotes.chargeQuote>) {

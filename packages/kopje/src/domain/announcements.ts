@@ -48,7 +48,7 @@ import {
   renderStatusHtml,
   type Segment,
 } from "./status-text";
-import { streamAnnouncement } from "./streaming";
+import { streamAnnouncement } from "./stream-journal";
 
 // Announcements (migration 0056_announcements), as Mastodon 4.5 serves them. The only module that reads or writes
 // announcements, announcement_reactions and announcement_dismissals (test-node/policy-boundary.test.ts).

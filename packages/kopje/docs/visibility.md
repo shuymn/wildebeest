@@ -902,8 +902,8 @@ outside the policy module:
 - inserts into `status_mentions` outside its listed writers: `statuses.ts`, `remote-statuses.ts` and `inbox.ts`;
 - selects inboxes from `follows` (follower expansion) outside the policy module, except the ActivityPub followers and
   following collections in `actors.ts`, whose items name an inbox and are not sent anything;
-- reads `shared_inbox_url` outside the policy module, except where `inbox.ts` stores a remote actor's inboxes and where
-  `deliveries.ts` moves a row its recipient's shared inbox refused to that recipient's personal inbox.
+- reads `shared_inbox_url` outside the policy module, except where `remote-actors.ts` stores a remote actor's inboxes
+  and where `deliveries.ts` moves a row its recipient's shared inbox refused to that recipient's personal inbox.
 - reads or writes `scheduled_statuses` outside `scheduled-statuses.ts`, whose every read is the owner's
   (`scheduledOwnSql`, R26).
 - reads or writes `poll_votes` outside `polls.ts` and `poll-presenter.ts`, which show only counts and a viewer's own

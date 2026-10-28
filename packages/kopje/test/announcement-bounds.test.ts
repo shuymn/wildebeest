@@ -17,7 +17,7 @@ import {
 } from "../src/domain/announcements";
 import { ANSWER_BYTES, jsonBytes } from "../src/domain/answer-budget";
 import { parseStatusText, renderSegmentHtml, renderStatusHtml } from "../src/domain/status-text";
-import { streamAnnouncement } from "../src/domain/streaming";
+import { streamAnnouncement } from "../src/domain/stream-journal";
 import { MAX_LIVE_ANNOUNCEMENTS, STATUS_EMOJIS_BYTES } from "../src/platform/stored-bounds";
 import { sha256Hex } from "../src/security/tokens";
 import {

@@ -3,14 +3,14 @@ import { runInDurableObject } from "cloudflare:test";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { Db } from "../src/db/sql";
+import { KEY_REFRESH_MS } from "../src/domain/inbox";
 import {
   ACCOUNT_STALE_MS,
   actorRevision,
   type DocumentRevision,
-  KEY_REFRESH_MS,
   type RemoteActorInput,
   upsertRemoteActor,
-} from "../src/domain/inbox";
+} from "../src/domain/remote-actors";
 import { suspendRemote } from "../src/domain/remote-suspension";
 import { processInbox } from "../src/federation/inbox";
 import { DOCUMENT_REVISION_MAX } from "../src/platform/stored-bounds";
@@ -36,9 +36,9 @@ import { contexts } from "./quote-helpers";
 import { type PlannedStatement, plannedSql, remoteAccounts, scansOf, staleStatistics } from "./read-helpers";
 import { staleAuthorWorld } from "./stale-author-helpers";
 
-// ID-1's revision fence (domain/inbox.ts DocumentRevision): a remote actor's document is stored only while the revision
-// read before it was fetched still holds, so a snapshot fetched before another store committed never replaces it,
-// whether it is replayed in a later Store round or delayed before the first. Each race holds one request at a fetch
+// ID-1's revision fence (domain/remote-actors.ts DocumentRevision): a remote actor's document is stored only while the
+// revision read before it was fetched still holds, so a snapshot fetched before another store committed never replaces
+// it, whether it is replayed in a later Store round or delayed before the first. Each race holds one request at a fetch
 // (RemoteWeb.hold) while the other commits through the real inbox and Store.
 
 const iso = (at: number) => new Date(at).toISOString();

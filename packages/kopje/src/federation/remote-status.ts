@@ -5,6 +5,12 @@ import { isConversationId } from "../domain/conversation-rows";
 import { languageOf } from "../domain/language";
 import { CARD_CANDIDATES, CARD_RAW_HREF_LIMIT, type CardCandidate } from "../domain/link-cards";
 import { MAX_REMOTE_OPTION_LENGTH, MAX_REMOTE_OPTIONS, type RemotePollInput } from "../domain/polls";
+import type {
+  RemoteMediaInput,
+  RemoteQuoteInput,
+  RemoteQuotePolicyInput,
+  RemoteStatusInput,
+} from "../domain/remote-status-reads";
 import {
   MAX_SPOILER_LENGTH,
   MAX_STATUS_AUDIENCE,
@@ -12,10 +18,6 @@ import {
   MAX_STATUS_MENTION_TAGS,
   MAX_STATUS_TAGS,
   MAX_TAG_LENGTH,
-  type RemoteMediaInput,
-  type RemoteQuoteInput,
-  type RemoteQuotePolicyInput,
-  type RemoteStatusInput,
 } from "../domain/remote-statuses";
 import { MAX_URL_LENGTH } from "../domain/status-text";
 import { hashtagObjectName } from "../domain/tag-name";

@@ -614,7 +614,8 @@ const ALLOWED: Record<string, { count: number; reason: string }> = {
   // The fourth: a staged retraction compares a uri past TARGET_CHUNK_BYTES with the activity's named ones in SQL.
   "src/domain/deliveries.ts accounts.uri": { count: 4, reason: IDENTITY },
   "src/domain/featured-tags.ts accounts.uri": { count: 1, reason: IDENTITY },
-  "src/domain/inbox.ts accounts.uri": { count: 7, reason: IDENTITY },
+  "src/domain/inbox.ts accounts.uri": { count: 5, reason: IDENTITY },
+  "src/domain/remote-actors.ts accounts.uri": { count: 2, reason: IDENTITY },
   "src/domain/inbox.ts statuses.uri": { count: 2, reason: IDENTITY },
   "src/domain/local-emojis.ts accounts.uri": { count: 1, reason: IDENTITY },
   "src/domain/media.ts accounts.uri": { count: 1, reason: IDENTITY },

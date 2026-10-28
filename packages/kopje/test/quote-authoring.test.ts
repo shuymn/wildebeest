@@ -3,9 +3,9 @@ import { runInDurableObject } from "cloudflare:test";
 import { describe, expect, it } from "vitest";
 
 import { Db } from "../src/db/sql";
-import { RETRACTION_TTL_MS } from "../src/domain/inbox";
 import { readOperation } from "../src/domain/operation";
 import { holdsLocalStamp, MAX_QUOTED_UPDATES, quotedUpdates } from "../src/domain/quotes";
+import { RETRACTION_TTL_MS } from "../src/domain/remote-actors";
 import { suspendLocal } from "../src/domain/suspension";
 import { deliveryRound } from "../src/jobs/deliver";
 import { publishScheduled } from "../src/jobs/scheduled";
