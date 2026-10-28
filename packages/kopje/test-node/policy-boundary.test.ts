@@ -167,6 +167,7 @@ const RULES: readonly Rule[] = [
     allowed: {
       ...POLICY_ONLY,
       "src/domain/polls.ts": "votes cast through mayVoteSql (R27), the viewer’s own, and their purges",
+      "src/domain/status-rows.ts": "R's count of the viewer’s own votes (ownVoteCountSql), never who voted",
     },
   },
   {

@@ -627,7 +627,7 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
   risks). Parent references follow Mastodon: `in_reply_to_id` and `in_reply_to_account_id` are shown even when the
   parent is hidden, because they belong to the reply (its ActivityPub object carries `inReplyTo` to every recipient);
   the parent itself stays behind VIS-1. _Enforced (main):_ `src/domain/status-presenter.ts`,
-  `src/domain/statuses.ts`, `ACCOUNT_COLUMN_MAP` in `src/domain/accounts.ts`; `test/statuses.test.ts` ("review
+  `src/domain/statuses.ts`, `ACCOUNT_COLUMN_MAP` in `src/domain/account-columns.ts`; `test/statuses.test.ts` ("review
   regressions"). A tag's `history` is an anonymous public aggregate: it counts only public originals (as Mastodon's
   `Trends::Tags`) of available accounts, the same for every viewer whatever they block or mute (an author the caller
   blocks still counts), so it counts no status the caller may not see. `GET /api/v1/tags/:id` and the writes on one
@@ -2242,9 +2242,10 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
   whoever may see its status by itself (R3), and a vote needs R27 (`mayVoteSql`: the voter blocks neither the
   author nor its domain); otherwise 404 (403 for a voter who blocks the author, as Mastodon). Only counts and the viewer's own votes
   are shown; `hide_totals` hides each choice's count from everyone until the poll ends, in the API and in the
-  Question (no `totalItems`). `poll_votes` is read in `polls.ts` alone (`test-node/policy-boundary.test.ts`, R27). A
-  remote vote passes the same rule (Mastodon checks none). _Enforced (main):_ `test/polls.test.ts` ("shows a poll only
-  to whoever may see its status", "refuses a voter who blocks the author (R27)", "hides the counts … from everyone"),
+  Question (no `totalItems`). `poll_votes` is read in `polls.ts`, and in `status-rows.ts` only to count the viewer's
+  own votes of the current generation (`test-node/policy-boundary.test.ts`, R27). A remote vote passes the same rule
+  (Mastodon checks none). _Enforced (main):_ `test/polls.test.ts` ("shows a poll only to whoever may see its status",
+  "refuses a voter who blocks the author (R27)", "hides the counts … from everyone"),
   `test/polls-federation.test.ts` ("is refused from an account the author blocks (R27)").
   Public pages: _Enforced (main):_ the status page, the feeds (profile tabs, hashtag page) and the embed show a post's
   poll as the presenter shows it to an anonymous viewer: each choice's share only when every choice's count is shown,
@@ -2517,7 +2518,7 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
   their text in SQL. The actor URI is bounded as stored (`ACTOR_URI_LIMIT`), read through `actorUriSql`, and refused at
   the cutover; the account's `uri` shows it only while its JSON is within `ACTOR_URI_LIMIT` bytes too
   (`withinIdentityBound`), and '' otherwise. An account that moved shows the account it moved to one level deep, read
-  through `MOVED_ACCOUNT_COLUMNS` (`src/domain/accounts.ts`): every text cut in SQL by its raw bytes and in the
+  through `MOVED_ACCOUNT_COLUMNS` (`src/domain/account-columns.ts`): every text cut in SQL by its raw bytes and in the
   presenter by its decoded limit (the display name at 100 code points), URLs and actor id within 512 bytes, no note or
   fields, and the emojis its display name references within 2,048 bytes of JSON; one such row reads at most 12,432 bytes
   from SQLite (25,536 of heap, its cached emoji included) and presents at most 11,021 bytes of JSON, a target past

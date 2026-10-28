@@ -6,7 +6,6 @@ import type { ImportAuthority } from "../platform/store-admin";
 import {
   type Account,
   accountUrl,
-  edgeRangeSql,
   type Page,
   type PageQuery,
   type Present,
@@ -34,6 +33,7 @@ import { readOperation } from "./operation";
 import { actorUriSql, usernameSql } from "./profile-bounds";
 import { LARGE_ITEM_CHUNKS, presentation, type Status, statusStream } from "./status-presenter";
 import { accountStatusIds } from "./timelines";
+import { edgeRangeSql } from "./windows";
 
 // Reports (Mastodon 4.5's POST /api/v1/reports: Api::V1::ReportsController, ReportService, Report; migrations
 // 0022_reports and 0054_remote_reports). A local account reports an account, optionally naming statuses of it and

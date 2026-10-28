@@ -4,7 +4,6 @@ import { describe, expect, it } from "vitest";
 import { selectSql } from "../src/db/columns";
 import { Db } from "../src/db/sql";
 import {
-  type Account,
   MOVED_ACCOUNT_CAPS,
   MOVED_ACCOUNT_COLUMNS,
   MOVED_CREATED_AT_LIMIT,
@@ -12,9 +11,8 @@ import {
   MOVED_EMOJIS_BYTES,
   MOVED_LAST_STATUS_AT_LIMIT,
   MOVED_URL_LIMIT,
-  presentAccountsWithin,
-  USERNAME_LIMIT,
-} from "../src/domain/accounts";
+} from "../src/domain/account-columns";
+import { type Account, presentAccountsWithin, USERNAME_LIMIT } from "../src/domain/accounts";
 import { ADMIN_EMAIL_COLUMNS, LOCAL_EMAIL_COLUMNS } from "../src/domain/admin-authority";
 import { jsonBytes } from "../src/domain/answer-budget";
 import { actorRevision, purgeBatch, receiveActivity, type RemoteActorInput } from "../src/domain/inbox";
@@ -35,11 +33,11 @@ import { community, getJson } from "./status-helpers";
 import { recordingSql } from "./status-row-fixtures";
 
 // Account#moved as REST::AccountSerializer shows it (Mastodon v4.5.11, account_serializer.rb:13, 119-121, 157-159):
-// present only when the account has a stored move, null while the account is unavailable, else the moved-to account
-// one level deep, which never shows a `moved` of its own. The nested account is Kopje's bounded projection
-// (accounts.ts MOVED_ACCOUNT_COLUMNS, docs/mastodon-deviations.md): its texts cut by raw bytes in SQL and by decoded
-// limits in the presenter, its URLs within MOVED_URL_LIMIT, no note or fields, and only the emojis its display name
-// references within MOVED_EMOJIS_BYTES.
+// present only when the account has a stored move, null while the account is unavailable, else the moved-to account one
+// level deep, which never shows a `moved` of its own. The nested account is Kopje's bounded projection
+// (account-columns.ts MOVED_ACCOUNT_COLUMNS, docs/mastodon-deviations.md): its texts cut by raw bytes in SQL and by
+// decoded limits in the presenter, its URLs within MOVED_URL_LIMIT, no note or fields, and only the emojis its display
+// name references within MOVED_EMOJIS_BYTES.
 
 const ORIGIN = "https://kopje.test";
 const OWNER = [{ id: "3", name: "Owner", color: "" }];
