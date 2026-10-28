@@ -54,7 +54,8 @@ tables are not in a dump (`remote_media`, `remote_media_objects`, `remote_media_
 shows them by their remote URLs and caches them again. The cron's orphan sweep deletes the files under `remote/` that
 the Store does not know, a day after their upload, at most 1,000 an hour. After a point-in-time restore, the cache
 writes and deletes nothing for 20 minutes; it then deletes the files the restored Store had only reserved, checks every
-file it shows (at most 100 a round) and fetches a missing one again. Until the check reaches it, a cached URL may answer 404.
+file it shows (at most 100 a round) and fetches a missing one again. Until the check reaches it, a cached URL may
+answer 404.
 
 Custom emoji are never deleted, disabled ones included (`kopje-admin emoji`), so every version's original (below
 256 KiB) is in every backup's index for good: it is copied once per destination and reused afterwards, and a new
@@ -328,7 +329,8 @@ paths are built only from validated ids. Work in a new, empty directory so nothi
    ```
 
    It runs in bash also when pasted into zsh, stops at the first `wrangler` that fails, and fails when the number put
-   differs from the number the index marks `copied` (no originals passes only when none are expected); run it again until it prints `put <n> originals` (a put replaces the same key).
+   differs from the number the index marks `copied` (no originals passes only when none are expected); run it again
+   until it prints `put <n> originals` (a put replaces the same key).
 
 6. **Rebuild the served files** from the originals, through Access (the Store must have admin access; set it with
    `kopje-admin config` first if the restore began with the import token). It runs only while the Store refuses other
