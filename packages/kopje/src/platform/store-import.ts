@@ -172,7 +172,7 @@ export function applyStatements(sql: SqlStorage, statements: readonly ParsedStat
     if (statement.table.name === SEQUENCE_TABLE) {
       // AUTOINCREMENT inserts above created their own counter rows; the dumped value replaces them.
       const nameBound = bindAll([name]);
-      sql.exec(`DELETE FROM ${table} WHERE name = ${nameBound.exprs[0]}`, ...nameBound.params);
+      sql.exec(`DELETE FROM ${table} WHERE name = ${nameBound.exprs[0]!}`, ...nameBound.params);
     }
     let columns = columnLists.get(statement.table.name);
     if (columns === undefined) {
@@ -199,7 +199,7 @@ export class BoostChainCheck {
     }
     const bound = bind([literal]);
     const chained = this.sql
-      .exec(`SELECT 1 AS x FROM statuses WHERE id = ${bound.exprs[0]} AND reblog_of_id IS NOT NULL`, ...bound.params)
+      .exec(`SELECT 1 AS x FROM statuses WHERE id = ${bound.exprs[0]!} AND reblog_of_id IS NOT NULL`, ...bound.params)
       .toArray();
     return chained.length === 0
       ? null
@@ -243,7 +243,7 @@ export function applyStagedLinks(
     const { deferred } = statement.table;
     const bound = bind(statement.literals);
     const table = quoteIdentifier(statement.table.name);
-    const set = deferred.map((c, i) => `${quoteIdentifier(c)} = ${bound.exprs[i]}`).join(", ");
+    const set = deferred.map((c, i) => `${quoteIdentifier(c)} = ${bound.exprs[i]!}`).join(", ");
     const match = keyMatch(statement.table, bound.exprs.slice(deferred.length));
     let rows;
     try {
@@ -292,7 +292,7 @@ export function rowBytes(spec: TableSpec): string {
 }
 
 function keyMatch(spec: TableSpec, exprs: readonly string[]): string {
-  return spec.key.map((c, i) => `${quoteIdentifier(c)} = ${exprs[i]}`).join(" AND ");
+  return spec.key.map((c, i) => `${quoteIdentifier(c)} = ${exprs[i]!}`).join(" AND ");
 }
 
 export type VerifyReport = {

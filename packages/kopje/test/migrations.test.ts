@@ -110,6 +110,7 @@ import { ACCOUNT_EMOJIS_FULL, accountAtCap, padded, STATUS_EMOJIS_FULL, statusAt
 import { BUILD, freshStore, migratedStore, rejectionOf, tableNames, testKernel as kernel } from "./helpers";
 import { BREAK_WITNESSES } from "./migration-fixtures";
 import { TEMPLATE_FIXTURES } from "./oembed-template-fixtures";
+import { byText } from "./sort";
 import {
   blurhashOf,
   BOUNDED,
@@ -8224,7 +8225,7 @@ describe("0067_status_cards", () => {
           .exec("SELECT name FROM sqlite_schema WHERE type = 'index' AND tbl_name = 'status_cards' AND sql IS NOT NULL")
           .toArray()
           .map((row) => row.name)
-          .sort(),
+          .sort(byText),
       ).toEqual(["status_cards_claimed", "status_cards_due", "status_cards_expiry", "status_cards_fresh"]);
       const pending = () =>
         sql.exec(
@@ -8373,7 +8374,7 @@ describe("0068_remote_field_verification", () => {
           )
           .toArray()
           .map((row) => row.name)
-          .sort(),
+          .sort(byText),
       ).toEqual(["remote_field_links_due", "remote_field_links_expiry"]);
       const insert = (links: SqlStorageValue, accountId: SqlStorageValue = ACCOUNT, linkBack: SqlStorageValue = HREF) =>
         sql.exec(

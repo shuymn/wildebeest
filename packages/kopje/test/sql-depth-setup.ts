@@ -19,7 +19,7 @@ export type DeepStatement = { depth: number; sql: string };
 const recorder = Symbol.for("kopje.sql-depth.statements");
 const prototype = Db.prototype as Db & { [recorder]?: Set<string> };
 if (prototype[recorder] === undefined) {
-  // eslint-disable-next-line @typescript-eslint/unbound-method -- each is called back on the Db it was called on
+  // oxlint-disable-next-line typescript/unbound-method -- each is called back on the Db it was called on
   const { all, run } = prototype;
   prototype.all = function (this: Db, query: string, ...params: SqlStorageValue[]) {
     prototype[recorder]!.add(query);

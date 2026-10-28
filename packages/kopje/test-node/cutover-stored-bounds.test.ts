@@ -23,6 +23,7 @@ import {
   spoilerSql,
   statusUrlSql,
 } from "../src/platform/stored-bounds.js";
+import { byText } from "../test/sort.js";
 import { convert, exportOf, failing, opened, rewriteExport, tampered, verify, workspace } from "./cutover-helpers.js";
 
 // RES-2: a converted row holds what the Worker would store (src/platform/stored-bounds.ts). Values at each stored
@@ -163,7 +164,7 @@ describe("converted rows at the stored bounds", () => {
         .prepare("SELECT url FROM statuses WHERE raw LIKE ? OR raw LIKE ?")
         .all(`%${statusUrls[0]}%`, `%${statusUrls[1]}%`)
         .map((row) => (row as { url: string | null }).url);
-      expect(urls.sort()).toEqual([null, statusUrls[0]].sort());
+      expect(urls.sort(byText)).toEqual([null, statusUrls[0]].sort(byText));
       const media = db
         .prepare("SELECT url, description FROM media_attachments WHERE url = ? OR description LIKE ? ORDER BY position")
         .all(mediaAt, "d%") as { url: string; description: string }[];

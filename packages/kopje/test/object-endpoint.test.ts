@@ -106,9 +106,9 @@ describe("object endpoint (VIS-4)", () => {
       orderedItems: { type: string; object: unknown }[];
     };
     expect(page.orderedItems.map((item) => item.type)).toEqual(["Create", "Announce", "Create"]);
-    expect((page.orderedItems[0]?.object as { id: string }).id).toBe(quiet.uri);
+    expect((page.orderedItems[0]!.object as { id: string }).id).toBe(quiet.uri);
     expect(page.orderedItems[1]?.object).toBe(original.uri);
-    expect((page.orderedItems[2]?.object as { id: string }).id).toBe(first.uri);
+    expect((page.orderedItems[2]!.object as { id: string }).id).toBe(first.uri);
     expect(JSON.stringify(page)).not.toContain("private");
 
     expect((await h.request("/ap/users/Alice/outbox", AP)).status).toBe(404);

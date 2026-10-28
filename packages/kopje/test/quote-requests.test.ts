@@ -614,7 +614,7 @@ describe("receipts and signers: a given-up Create, operator retries, suspended a
 describe("concurrency: the test table", () => {
   it("1a: a revoke while the Accept is being POSTed: the lane gets Accept, Delete, Reject in order; the stamp is gone", async () => {
     const { t, bob, mine } = await world();
-    const { note, stamp: result, authorization, request } = await accepted(t, bob, mine.uri);
+    const { note, stamp: result, authorization } = await accepted(t, bob, mine.uri);
     const quoting = await statusId(t, note.id);
     const acceptHeld = deferred();
     const gate = deferred();

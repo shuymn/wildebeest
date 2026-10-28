@@ -666,9 +666,7 @@ function hydrate(
   // The authors of the chunk's statuses, their originals and quoted statuses.
   const authors = [...new Set([...byId.values()].map((row) => row.account_id))];
   const presented = accountsOf(db, authors, options, Math.max(authors.length, 1));
-  const accounts = new Map(
-    authors.flatMap((id) => presented.next().value ?? []).map((account) => [account.id, account]),
-  );
+  const accounts = new Map(authors.flatMap(() => presented.next().value ?? []).map((account) => [account.id, account]));
   // At most MAX_STATUS_MEDIA attachments, MAX_STATUS_MENTION_ROWS mentions and MAX_PRESENTED_TAGS hashtags of each
   // status (each status once), cut in SQL: a converted row may hold more. Each cap reads at most that many rows of
   // the status through an index that holds only the rows it shows: media_attachments_status (shown attachments by
@@ -1097,7 +1095,7 @@ export function presentMedia(row: MediaRow, origin: string | null = null): Media
 const ENCODER = new TextEncoder();
 // What no presented media URL holds as decoded: C0 controls (NUL included), DEL, and U+FFFD, which a stored value that
 // is not well-formed UTF-8 decodes to.
-// eslint-disable-next-line no-control-regex
+// oxlint-disable-next-line no-control-regex
 const MEDIA_URL_REFUSED = /[\u0000-\u001f\u007f\ufffd]/;
 
 // A media URL as presented, live or from an edit's snapshot (HTML-3, RES-2), judged in order: as decoded, within

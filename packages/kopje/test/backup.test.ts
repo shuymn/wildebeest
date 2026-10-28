@@ -704,7 +704,7 @@ describe("backup deadline", () => {
       await addMedia(h.store, snowflake(NOW - DAY, n), new TextEncoder().encode(`original ${n}`));
     }
     // Each media PUT takes 5 minutes of the 13-minute invocation.
-    h.s3.before = async (op, key) => {
+    h.s3.before = (op, key) => {
       if (op === "put" && key?.includes("/media/") === true) {
         h.clock.now += 5 * MINUTE;
       }
@@ -723,7 +723,7 @@ describe("backup deadline", () => {
       await addMedia(h.store, snowflake(NOW - DAY, n), new Uint8Array(1000));
     }
     // The first invocation runs out of time at its first media copy, after the dump.
-    h.s3.before = async (op, key) => {
+    h.s3.before = (op, key) => {
       if (op === "put" && key?.includes("/media/") === true) {
         h.s3.before = undefined;
         h.clock.now += 13 * MINUTE;
@@ -820,7 +820,7 @@ describe("backup deadline", () => {
   it("bounds a request by the time left: a dump that runs out of time fails and releases the freeze", async () => {
     const h = await harness();
     await addLargeRows(h.store, 8, 1536 * 1024);
-    h.s3.before = async (op) => {
+    h.s3.before = (op) => {
       if (op === "upload-part") {
         h.clock.now += 7 * MINUTE;
       }
@@ -1213,7 +1213,7 @@ describe("backup retention (OPS-5)", () => {
   it("never deletes the newest complete backup, even when the new manifest is not listed yet", async () => {
     const h = await harness({ env: backupEnv({ BACKUP_RETENTION: "1" }) });
     preload(h.s3, ["2026-10-11-aaaaaaaa", "2026-10-12-aaaaaaaa"]);
-    h.s3.before = async (op, key) => {
+    h.s3.before = (op, key) => {
       if (op === "put" && key?.endsWith("manifest.json.age") === true) {
         h.s3.hidden.add(key);
       }

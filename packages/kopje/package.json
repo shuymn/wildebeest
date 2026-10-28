@@ -64,7 +64,6 @@
     "provenance": true
   },
   "scripts": {
-    "lint": "eslint src test cli test-node browser --quiet",
     "test": "vitest run && vitest run -c vitest.streaming.config.ts --max-workers=1 --no-isolate && vitest run -c vitest.node.config.ts",
     "typecheck": "tsc --noEmit && tsc -p src/client && tsc -p cli && tsc -p test-node && tsc -p browser && tsc -p browser/fixtures",
     "test:browser": "playwright test -c browser/playwright.config.ts",

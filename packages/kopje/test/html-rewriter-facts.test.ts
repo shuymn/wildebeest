@@ -177,7 +177,7 @@ describe("HTMLRewriter facts", () => {
         new HTMLRewriter()
           .on("a", { element() {} })
           .transform(new Response("<a>", { headers: { "content-type": `text/html; charset=${label}` } })),
-      ).toThrow();
+      ).toThrow("Parser error: ");
     },
   );
 

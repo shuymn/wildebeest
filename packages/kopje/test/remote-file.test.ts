@@ -374,7 +374,7 @@ describe("fetchRemoteFile: video and audio streamed", () => {
       const streamed = ok(await fetchRemoteFile(FILE, deps, policy("attachment", "video")));
       const missing = `test/remote-file/${crypto.randomUUID()}`;
       if (streamed.mode === "streamed") {
-        await expect(env.MEDIA.put(missing, streamed.body), name).rejects.toThrow();
+        await expect(env.MEDIA.put(missing, streamed.body), name).rejects.toThrow("network");
       }
       expect(await env.MEDIA.head(missing), name).toBeNull();
     }
@@ -450,7 +450,7 @@ describe("fetchRemoteFile: video and audio streamed", () => {
             read += value.length;
           }
         })(),
-      ).rejects.toThrow();
+      ).rejects.toThrow("timeout");
       expect(read).toBe(sent.length);
     }
     expect(Date.now() - started).toBeLessThan(2000);
@@ -472,8 +472,8 @@ describe("fetchRemoteFile: video and audio streamed", () => {
     await new Promise((resolve) => setTimeout(resolve, 400));
     expect(state.cancelled).toBe(true);
     // The deadline errored the body: the first read fails without a byte.
-    await expect(reader.read()).rejects.toThrow();
-    await expect(reader.closed).rejects.toThrow();
+    await expect(reader.read()).rejects.toThrow("timeout");
+    await expect(reader.closed).rejects.toThrow("timeout");
     expect(Date.now() - started).toBeLessThan(2000);
   });
 
@@ -490,8 +490,8 @@ describe("fetchRemoteFile: video and audio streamed", () => {
     const reader = got.body.getReader();
     await new Promise((resolve) => setTimeout(resolve, 400));
     expect(requests[0]?.signal.aborted).toBe(true);
-    await expect(reader.read()).rejects.toThrow();
-    await expect(reader.closed).rejects.toThrow();
+    await expect(reader.read()).rejects.toThrow("timeout");
+    await expect(reader.closed).rejects.toThrow("timeout");
   });
 
   it("NET-3: a consumer that pauses before the final chunk past the file deadline gets an error, not the rest", async () => {
@@ -524,7 +524,7 @@ describe("fetchRemoteFile: video and audio streamed", () => {
           read += value.length;
         }
       })(),
-    ).rejects.toThrow();
+    ).rejects.toThrow("timeout");
     expect(read).toBeLessThan(file.length);
   });
 

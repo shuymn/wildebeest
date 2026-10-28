@@ -34,7 +34,7 @@ export function deepStatements(statements: string[]): DeepStatement[] {
       if (error instanceof Error && error.message.startsWith("Expression tree is too large")) {
         return false;
       }
-      throw new Error(`cannot compile a Store statement on Node: ${String(error)}\n${sql}`);
+      throw new Error(`cannot compile a Store statement on Node: ${String(error)}\n${sql}`, { cause: error });
     }
   };
   const deep: DeepStatement[] = [];

@@ -182,7 +182,7 @@ export function linkTemplate(spec: TableSpec): Template {
   const set = spec.deferred.map((column, i) => `${i === 0 ? "SET " : ","}${quoteIdentifier(column)}=`);
   const where = spec.key.map((column, i) => `${i === 0 ? " WHERE " : " AND "}${quoteIdentifier(column)}=`);
   const segments = [...set, ...where, ";"];
-  segments[0] = `UPDATE ${quoteIdentifier(spec.name)} ${segments[0]}`;
+  segments[0] = `UPDATE ${quoteIdentifier(spec.name)} ${segments[0]!}`;
   return { segments };
 }
 

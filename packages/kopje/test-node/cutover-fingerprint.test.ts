@@ -333,7 +333,7 @@ describe("kopje-admin fingerprint", () => {
     expect(refused.stderr).toContain("not-a-conversion-manifest");
   });
 
-  it("writes sqlite_sequence from its query answer, accepting names and integers only", async () => {
+  it("writes sqlite_sequence from its query answer, accepting names and integers only", () => {
     const answer = [{ results: [{ name: "actor_notifications", seq: 42 }], success: true, meta: {} }];
     expect(sequenceFile(answer)).toBe(
       `INSERT INTO "sqlite_sequence" ("name","seq") VALUES('actor_notifications',42);\n`,

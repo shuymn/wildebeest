@@ -36,6 +36,7 @@ import {
   world,
   type World,
 } from "./remote-suspension-helpers";
+import { byText } from "./sort";
 import { follow, remoteAccount, remoteFollows } from "./status-helpers";
 
 // The domain job of R38 (instance domain blocks, severity suspend): its reset by each transition, the marks it
@@ -532,8 +533,8 @@ describe("the account job reset, with the conversion mode", () => {
     expect((await jobs(store))[0]).toMatchObject({ kind: "account", mode: "account", phase: "reports" });
     await drain(store);
     const uri = await uriOf(store, r);
-    expect((await rejects(store)).map((row) => [row.signer, row.follower, row.retracts]).sort()).toEqual(
-      [w.alice.id, w.bob.id, w.carol.id].map((id) => [id, uri, 1]).sort(),
+    expect((await rejects(store)).map((row) => [row.signer, row.follower, row.retracts]).sort(byText)).toEqual(
+      [w.alice.id, w.bob.id, w.carol.id].map((id) => [id, uri, 1]).sort(byText),
     );
     // The suspension again keeps dan's follow of r (account wins), and the domain job skipped r.
     expect(await sql(store, "SELECT account_id FROM follows WHERE target_account_id = ?", r)).toEqual([

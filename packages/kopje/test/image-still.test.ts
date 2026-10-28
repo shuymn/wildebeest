@@ -174,9 +174,10 @@ describe("imageStill", () => {
       const cap = 2 * 1024 * 1024 - 1;
       // A scoped passthrough counter of chunk-length reads (walkPng reads each length with DataView.getUint32):
       // the capped walk stops near the cap instead of visiting all 1.3M chunks.
-      // eslint-disable-next-line @typescript-eslint/unbound-method -- called back on the DataView it was called on
+      // oxlint-disable-next-line typescript/unbound-method -- called back on the DataView it was called on
       const getUint32 = DataView.prototype.getUint32;
       let reads = 0;
+      // oxlint-disable-next-line eslint/no-extend-native -- wrapped to count the reads, then restored
       DataView.prototype.getUint32 = function (this: DataView, ...args: [number, boolean?]) {
         reads++;
         return getUint32.apply(this, args);
@@ -185,6 +186,7 @@ describe("imageStill", () => {
       try {
         capped = imageStill(many, "image/png", cap);
       } finally {
+        // oxlint-disable-next-line eslint/no-extend-native -- the original method, restored
         DataView.prototype.getUint32 = getUint32;
       }
       expect(capped).toBeNull();

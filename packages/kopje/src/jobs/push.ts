@@ -156,6 +156,7 @@ async function sendPush(
       return (request) =>
         Promise.resolve(
           new Request(request, {
+            method: request.method,
             headers: {
               "user-agent": request.headers.get("user-agent") ?? "",
               "content-type": "application/octet-stream",

@@ -233,7 +233,7 @@ describe("instance actor", () => {
       "https://social.example/actor?x=1",
     ]) {
       const query = new URLSearchParams({ resource });
-      expect((await request(`/.well-known/webfinger?${query}`)).status, resource).toBe(404);
+      expect((await request(`/.well-known/webfinger?${query.toString()}`)).status, resource).toBe(404);
     }
   });
 });

@@ -36,6 +36,7 @@ import { NOW } from "./app-helpers";
 import { BUILD, claimSent, migratedStore } from "./helpers";
 import { newClient, VAPID } from "./push-helpers";
 import { deferred } from "./quote-helpers";
+import { byText } from "./sort";
 import { community, post, remoteAccount, remoteFollows, seedStatus } from "./status-helpers";
 import { signIn } from "./web-helpers";
 
@@ -1110,7 +1111,7 @@ describe("the sender rule (R1)", () => {
     expect(await act(h, admin, alice.id, { type: "suspend" })).toEqual({ status: 200, body: {} });
     await settle(h.store);
     const sent = await drain(h.store);
-    expect(sent.map((s) => [s.type, s.inbox, s.suspended]).sort()).toEqual([
+    expect(sent.map((s) => [s.type, s.inbox, s.suspended]).sort(byText)).toEqual([
       ["Undo", "https://fans.example/inbox", false],
       ["Undo", "https://remote.example/inbox", false],
       ["Update", "https://fans.example/inbox", true],

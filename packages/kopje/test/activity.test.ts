@@ -178,7 +178,7 @@ function gate() {
 }
 
 describe("ActivityMemo", () => {
-  it("sends once per token and day, and clears at the day change and at ACTIVITY_MEMO_LIMIT tokens", async () => {
+  it("sends once per token and day, and clears at the day change and at ACTIVITY_MEMO_LIMIT tokens", () => {
     const memo = new ActivityMemo();
     const send = vi.fn(() => Promise.resolve());
     expect(memo.note("a", NOW, send)).not.toBeNull();

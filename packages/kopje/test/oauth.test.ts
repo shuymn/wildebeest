@@ -596,7 +596,7 @@ describe("Access assertion", () => {
   });
 
   // jose's remote key set keeps time with Date.now(); the clock is moved with it.
-  async function clocked(h: Awaited<ReturnType<typeof withAlice>>, app: App) {
+  function clocked(h: Awaited<ReturnType<typeof withAlice>>, app: App) {
     vi.useFakeTimers({ toFake: ["Date"] });
     vi.setSystemTime(NOW);
     return async (ms: number, key?: JsonWebKey) => {
@@ -623,7 +623,7 @@ describe("Access assertion", () => {
   it("uses the fetched JWKS while the endpoint fails, for at most 7 days", async () => {
     const h = await withAlice();
     const app = await registerApp(h);
-    const at = await clocked(h, app);
+    const at = clocked(h, app);
     expect((await at(NOW)).status).toBe(200);
     h.team.fetch.mockImplementation(() => Promise.reject(new Error("unreachable")));
     const day = 24 * 60 * 60 * 1000;
@@ -635,7 +635,7 @@ describe("Access assertion", () => {
   it("picks up a rotated key by its new kid", async () => {
     const h = await withAlice();
     const app = await registerApp(h);
-    const at = await clocked(h, app);
+    const at = clocked(h, app);
     expect((await at(NOW)).status).toBe(200);
     const next = await h.team.rotate();
     expect((await at(NOW + 60 * 1000, next)).status).toBe(200);

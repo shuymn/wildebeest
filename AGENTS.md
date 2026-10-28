@@ -27,15 +27,15 @@ The code is in `packages/kopje`, and `deploy/` is the instance template operator
 - `pnpm --filter kopje test` runs all three suites. For one file, run
   `pnpm --filter kopje exec vitest run test/<name>.test.ts`, adding `-c vitest.node.config.ts` for a file in
   `test-node/` or `-c vitest.streaming.config.ts` for a file in `test/streaming/`.
-- `pnpm --filter kopje typecheck` and `pnpm --filter kopje lint` check types and ESLint, `pnpm run pretty` checks
-  formatting with oxfmt, and `pnpm exec oxfmt` fixes it.
+- `pnpm --filter kopje typecheck` checks types. `pnpm run lint` lints the repository with oxlint (`.oxlintrc.json`),
+  `pnpm run pretty` checks formatting with oxfmt, and `pnpm exec oxfmt` fixes it.
 - `pnpm --filter kopje build` builds the assets and the package.
 - `pnpm --filter kopje bench:migration` measures migration cost locally (see `packages/kopje/RELEASING.md`).
 
-lefthook runs lint, the formatter (which restages the files it fixes) and a secret scan on commit, and the affected test suites on push
-(`scripts/test-affected.sh`; a change that is all Markdown runs only the suites that read it). Running
-`bash scripts/test-affected.sh` on a clean tree records the pass, and the push then skips that tree; its whole output
-is in `test-affected.log` in the Git directory.
+lefthook runs oxlint on the staged files, the formatter (which restages the files it fixes) and a secret scan on
+commit, and the affected test suites on push (`scripts/test-affected.sh`; a change that is all Markdown runs only the
+suites that read it). Running `bash scripts/test-affected.sh` on a clean tree records the pass, and the push then skips
+that tree; its whole output is in `test-affected.log` in the Git directory.
 
 ## Rules
 
@@ -50,7 +50,7 @@ Paths in this section are under `packages/kopje/`.
   concurrency tests.
 - **Public pages.** `docs/web-pages.md`.
 - **Changelog and releases.** `RELEASING.md`.
-- **Style.** oxfmt (`.oxfmtrc.json`: its defaults with 120 columns, and sorted imports) and ESLint.
+- **Style.** oxfmt (`.oxfmtrc.json`: its defaults with 120 columns, and sorted imports) and oxlint (`.oxlintrc.json`).
 
 ## Commits and pull requests
 

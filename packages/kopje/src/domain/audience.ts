@@ -654,6 +654,7 @@ type Row = Record<string, SqlStorageValue>;
 // only rows other than x.
 export type StatusReads = {
   // One SELECT, after an optional WITH clause its parts may read, with further columns (name: expression) after the id.
+  // oxlint-disable-next-line typescript/no-generated-empty-object-type -- no further columns unless named
   select<Extra extends Row = Record<never, never>>(
     db: Db,
     rule: StatusRule,
@@ -821,6 +822,7 @@ export function statusReads(
     return db.all<T>(query, ...params);
   };
   return {
+    // oxlint-disable-next-line typescript/no-generated-empty-object-type -- no further columns unless named
     select<Extra extends Row = Record<never, never>>(
       db: Db,
       rule: StatusRule,

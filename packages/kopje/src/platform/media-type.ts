@@ -32,7 +32,7 @@ export function parseMediaType(header: string): MediaType | null {
     }
     parameters.set(name, quoted?.replace(/\\(.)/g, "$1") ?? unquoted ?? "");
   }
-  return { essence: `${type[1]}/${type[2]}`.toLowerCase(), parameters };
+  return { essence: `${type[1]!}/${type[2]!}`.toLowerCase(), parameters };
 }
 
 const ACTIVITYSTREAMS = "https://www.w3.org/ns/activitystreams";

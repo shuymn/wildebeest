@@ -219,7 +219,7 @@ export function boundedReads(sql: string): string[] {
     while (end < list.length) {
       const token = list[end]!;
       const upper = token.toUpperCase();
-      if ((token === ")" && depths[end]! === d) || token === ";") {
+      if ((token === ")" && depths[end] === d) || token === ";") {
         break;
       }
       if (depths[end] === d && token !== "(") {

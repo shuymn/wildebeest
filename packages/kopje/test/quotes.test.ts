@@ -2169,7 +2169,7 @@ describe("verifying quotes in stages: rounds, budgets, leases, generations and r
     const { erin } = await staleQuoted(t, bob);
     const profile = await erinRow(t, erin.uri);
     const pair = quotedPair(t, bob, erin);
-    const { work, complete, fetching } = await atAuthorStage(t, pair, erin);
+    const { complete, fetching } = await atAuthorStage(t, pair, erin);
     // A boost's refetch of erin fails meanwhile and stamps her.
     t.web.fail(erin.uri, 500);
     const other = mastodonNote(erin);

@@ -98,7 +98,7 @@ describe("authorization inside the status and notification operations", () => {
   async function fixture() {
     const h = await apiHarness();
     const alice = await seedAccount(h.store, { username: "alice", email: "alice@example.com" });
-    const bob = await seedAccount(h.store, { username: "bob", email: "bob@example.com" });
+    await seedAccount(h.store, { username: "bob", email: "bob@example.com" });
     const remote = await seedAccount(h.store, { username: "fan", domain: "fans.example" });
     await sql(
       h.store,

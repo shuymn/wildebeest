@@ -48,7 +48,7 @@ function jpeg(width: number, height: number): Uint8Array {
   // SOI, an APP1 Exif segment (as a camera writes it), SOF0, EOI.
   const exif = [0xff, 0xe1, 0x00, 0x0a, 0x45, 0x78, 0x69, 0x66, 0, 0, 1, 2];
   const sof = [0xff, 0xc0, 0x00, 0x11, 8, height >> 8, height & 0xff, width >> 8, width & 0xff, 3];
-  return new Uint8Array([0xff, 0xd8, ...exif, ...sof, ...new Array<number>(9).fill(0), 0xff, 0xd9]);
+  return new Uint8Array([0xff, 0xd8, ...exif, ...sof, ...Array.from({ length: 9 }, () => 0), 0xff, 0xd9]);
 }
 
 function gif(width: number, height: number): Uint8Array {
@@ -269,7 +269,7 @@ describe("images-export", () => {
     });
     expect(again.ok).toBe(true);
     expect(again.report).toMatchObject({ images: 8, kept: 6, downloaded: 2 });
-    expect(calls.map((c) => c.url.split("/")[4]).sort()).toEqual(["image-2", "image-3"]);
+    expect(calls.map((c) => c.url.split("/")[4]!).sort()).toEqual(["image-2", "image-3"]);
     expect(await imagesJson(first.outDir)).toEqual(before);
     expect(await readFile(join(first.outDir, "originals", "image-2"))).toEqual(Buffer.from(FILES["image-2"] ?? []));
 

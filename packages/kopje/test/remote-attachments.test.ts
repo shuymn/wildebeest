@@ -40,6 +40,7 @@ import {
   PNG,
   settle,
 } from "./remote-media-helpers";
+import { byText } from "./sort";
 
 // Remote attachments in the cache of remote media (domain/remote-media.ts syncAttachmentFiles and the removal steps,
 // federation/remote-media.ts lane 1, status-presenter.ts presentMedia): what the status writer enqueues and resets,
@@ -175,12 +176,12 @@ describe("the status writer (remote-statuses.ts writeMedia)", () => {
       objects
         .filter((o) => o.state === "stored")
         .map((o) => o.slot_id)
-        .sort(),
+        .sort(byText),
     ).toEqual(
       [
         before.get(`attachment ${MASTODON}/system/media/1.png`)!.id,
         before.get(`attachment ${MASTODON}/system/media/3.mp4`)!.id,
-      ].sort(),
+      ].sort(byText),
     );
     expect(objects.filter((o) => o.state === "doomed" && o.kind !== "avatar" && o.kind !== "header")).toHaveLength(2);
     expect(await orphans(w)).toEqual([]);

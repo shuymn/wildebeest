@@ -1078,9 +1078,10 @@ export async function buildLegacyFixture(options: FixtureOptions): Promise<Legac
   if (loneSurrogates) {
     const LONE = "\ud83d";
     // JSON.stringify escapes the lone surrogate, so the stored JSON text itself stays well formed.
-    const edit = (table: "actors" | "objects", id: string, change: (p: Record<string, any>) => void) => {
+    type Properties = Record<string, unknown> & { attachment?: { name?: string }[] };
+    const edit = (table: "actors" | "objects", id: string, change: (p: Properties) => void) => {
       const row = db.prepare(`SELECT properties FROM ${table} WHERE id = ?`).get(id) as { properties: string };
-      const properties = JSON.parse(row.properties) as Record<string, any>;
+      const properties = JSON.parse(row.properties) as Properties;
       change(properties);
       db.prepare(`UPDATE ${table} SET properties = ? WHERE id = ?`).run(JSON.stringify(properties), id);
     };
@@ -1093,7 +1094,7 @@ export async function buildLegacyFixture(options: FixtureOptions): Promise<Legac
     edit("objects", r0Post.id, (p) => {
       p.content = `<p>cut ${LONE}</p>`;
       p.summary = `cw ${LONE}`;
-      p.attachment[1].name = `alt ${LONE}`;
+      p.attachment![1]!.name = `alt ${LONE}`;
     });
   }
   let appliedAt0016: string | null = null;

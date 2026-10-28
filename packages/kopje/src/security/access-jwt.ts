@@ -1,4 +1,4 @@
-import { createRemoteJWKSet, customFetch, errors, jwtVerify } from "jose";
+import { createRemoteJWKSet, customFetch, errors, type JWTPayload, jwtVerify } from "jose";
 
 // Verifies the Cf-Access-Jwt-Assertion header that Cloudflare Access adds in front of /oauth/authorize and /admin/*,
 // with jose.
@@ -61,7 +61,7 @@ export async function verifyAccessClaims(
     return { ok: false, reason: "missing assertion" };
   }
   const host = teamHost(settings.teamDomain);
-  let payload;
+  let payload: JWTPayload;
   try {
     ({ payload } = await jwtVerify(token, keySet(host, deps), {
       algorithms: ["RS256"],

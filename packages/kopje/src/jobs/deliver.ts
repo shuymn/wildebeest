@@ -132,7 +132,7 @@ export async function deliveryRound(env: Env, deps: DeliveryDeps): Promise<Round
             return null;
           }
           const body = confirmation.body;
-          return (request) => sign(new Request(request, { body }));
+          return (request) => sign(new Request(request, { method: request.method, body }));
         },
         deadline,
       });

@@ -812,7 +812,9 @@ describe("instance activity: bounds", () => {
     logins: String(ACTIVITY_LOGIN_ROWS),
     registrations: String(ACTIVITY_WINDOW_DAYS * ACTIVITY_VALUE_MAX),
   };
-  const MAX_ANSWER_BYTES = new TextEncoder().encode(JSON.stringify(Array(ACTIVITY_WEEKS).fill(MAX_WEEK))).length;
+  const MAX_ANSWER_BYTES = new TextEncoder().encode(
+    JSON.stringify(Array.from({ length: ACTIVITY_WEEKS }, () => MAX_WEEK)),
+  ).length;
   // Each window: the login cap, and each sum's 6 days plus the row that ends its range.
   const WINDOW_ROWS = ACTIVITY_LOGIN_ROWS + 2 * (ACTIVITY_WINDOW_DAYS + 1);
 

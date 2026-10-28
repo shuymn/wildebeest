@@ -1,4 +1,5 @@
-import { runInDurableObject, env as testEnv } from "cloudflare:test";
+import { runInDurableObject } from "cloudflare:test";
+import { env as testEnv } from "cloudflare:workers";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { Db } from "../src/db/sql";

@@ -705,8 +705,20 @@ export const EMOJI_CATEGORY_BYTES = 256;
 // Enabled local emoji at most (RES-3: the whole list is one answer); disabled ones are not counted.
 export const MAX_ENABLED_EMOJIS = 1000;
 
-// eslint-disable-next-line no-control-regex
+// oxlint-disable-next-line no-control-regex
 const CATEGORY_CONTROL = /[\u0000-\u001f\u007f]/;
+
+// Whether `items` (a string's code points, a segmenter's graphemes) yields more than `max`, reading no further than the
+// one past it.
+export function yieldsMoreThan(items: Iterable<unknown>, max: number): boolean {
+  const iterator = items[Symbol.iterator]();
+  for (let count = 0; !iterator.next().done;) {
+    if (++count > max) {
+      return true;
+    }
+  }
+  return false;
+}
 
 // Whether `text`, as decoded, is a category that may be stored and presented: well-formed, 1 to EMOJI_CATEGORY_LENGTH
 // code points within EMOJI_CATEGORY_BYTES UTF-8 bytes, and no C0 control or DEL.
@@ -714,11 +726,8 @@ export function isEmojiCategory(text: string): boolean {
   if (text === "" || text.length > EMOJI_CATEGORY_BYTES || !text.isWellFormed() || CATEGORY_CONTROL.test(text)) {
     return false;
   }
-  let points = 0;
-  for (const _ of text) {
-    if (++points > EMOJI_CATEGORY_LENGTH) {
-      return false;
-    }
+  if (yieldsMoreThan(text, EMOJI_CATEGORY_LENGTH)) {
+    return false;
   }
   return ENCODER.encode(text).length <= EMOJI_CATEGORY_BYTES;
 }
@@ -1223,7 +1232,7 @@ export const APP_WEBSITE_JSON_BYTES = 2 * APP_WEBSITE_LIMIT + 2;
 // The characters no app website may hold, those that end or split an HTML attribute or a URL in common parsers: C0
 // controls, the space, DEL, C1 controls (U+0085 NEL is not in \s), other whitespace (\s), and " ' < > \ ^ ` { | }.
 // None needs escaping in JSON.
-// eslint-disable-next-line no-control-regex
+// oxlint-disable-next-line no-control-regex
 const WEBSITE_EXCLUDED = /[\u0000-\u0020\u007f-\u009f"'<>\\^`{|}]|\s/u;
 
 // Whether `text`, as decoded, is an app website registration accepts and a status presents as stored: well-formed (so
@@ -1268,11 +1277,8 @@ export function presentedAppName(name: string | null): string | null {
   if (name === null || name === "" || name.length > APP_NAME_BYTES || name.includes("\u0000")) {
     return null;
   }
-  let points = 0;
-  for (const _ of name) {
-    if (++points > APP_NAME_LIMIT) {
-      return null;
-    }
+  if (yieldsMoreThan(name, APP_NAME_LIMIT)) {
+    return null;
   }
   return ENCODER.encode(name).length <= APP_NAME_BYTES &&
     ENCODER.encode(JSON.stringify(name)).length <= APP_NAME_JSON_BYTES
@@ -1687,7 +1693,7 @@ export function presentedCardText(value: unknown, jsonBytes: number): string {
 
 // What no presented card URL holds as decoded: C0 controls, the space, DEL, C1 controls, U+FFFD (a stored value that
 // is not well-formed UTF-8 decodes to it), other whitespace, and the characters of CARD_URL_EXCLUDED_GLOB.
-// eslint-disable-next-line no-control-regex
+// oxlint-disable-next-line no-control-regex
 const CARD_URL_REFUSED = /[\u0000-\u0020\u007f-\u009f\ufffd"<>\\^`{|}]|\s/u;
 
 // A stored card URL as presented (HTML-3): judged as decoded (a string of at most `limit` code units,

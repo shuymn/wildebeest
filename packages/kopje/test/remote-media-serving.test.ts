@@ -36,7 +36,7 @@ describe("remote media keys", () => {
     expect(Object.fromEntries(REMOTE_SERVED_TYPES)).toEqual(REMOTE_MEDIA_TYPES);
     expect(remoteFileKey(TOKEN, "still")).toBe(`remote/${TOKEN}/still`);
     expect(remoteMediaPath(TOKEN, "full", "image/png")).toBe(`/media/r/${TOKEN}/full.png`);
-    expect(() => remoteFileKey("../x", "full")).toThrow();
+    expect(() => remoteFileKey("../x", "full")).toThrow("remote file token is not a server token");
     for (const [token, file] of [
       [TOKEN, "full.html"],
       [TOKEN, "full.svg"],

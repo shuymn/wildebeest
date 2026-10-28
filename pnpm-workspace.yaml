@@ -12,7 +12,6 @@ catalog:
 allowBuilds:
   esbuild: false
   lefthook: false
-  unrs-resolver: false
   workerd: false
 
 # Fail installs when an unreviewed dependency build script appears.
@@ -26,9 +25,3 @@ blockExoticSubdeps: true
 
 # Detect package trust/provenance downgrades.
 trustPolicy: no-downgrade
-# semver@6.3.1 is the 6.x backport of the ReDoS fix, published by an npm CLI
-# maintainer in July 2023 after 7.5.x had shipped with provenance. The
-# publish-date ordering makes it look like a downgrade, and it fails every full
-# resolution (including Renovate's lockfile updates).
-trustPolicyExclude:
-  - semver@6.3.1

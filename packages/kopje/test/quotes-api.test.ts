@@ -203,7 +203,7 @@ describe("Status.quote (R35)", () => {
     const quoted = status.quote?.quoted_status;
     expect(quoted?.favourited).toBe(true);
     expect(quoted?.favourites_count).toBe(1);
-    expect((quoted?.filtered as { keyword_matches: string[] }[]).map((f) => f.keyword_matches)).toEqual([["words"]]);
+    expect((quoted!.filtered as { keyword_matches: string[] }[]).map((f) => f.keyword_matches)).toEqual([["words"]]);
     expect(quoted?.media_attachments).toEqual([expect.objectContaining({ id: "900000000000000001", type: "image" })]);
   });
 

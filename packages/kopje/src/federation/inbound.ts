@@ -259,7 +259,7 @@ function activityOf(
       return object === null ? null : { type, id, object };
     // An Accept of a QuoteRequest names the stamp it grants in result (Accept#accept_quote!: its first value, by id).
     case "Accept": {
-      const result = Array.isArray(json.result) ? json.result[0] : json.result;
+      const result: unknown = Array.isArray(json.result) ? json.result[0] : json.result;
       return { type, id, object: refOf(json.object), result: idOf(result) };
     }
     case "Reject":

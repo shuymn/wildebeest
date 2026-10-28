@@ -11,6 +11,7 @@ import { NOW } from "../app-helpers";
 import { bigStatus } from "../budget-helpers";
 import { BUILD } from "../helpers";
 import { scopedToken } from "../read-helpers";
+import { byText } from "../sort";
 import { act, community, follow, getJson, post, remoteAccount, seedStatus, type User } from "../status-helpers";
 import { connect, drained, echo, type Inbox, type StreamMessage, subscribed } from "./stream-helpers";
 
@@ -98,7 +99,7 @@ describe("conversation on direct", () => {
     const small = await post(h, bob, { status: "@alice hi", visibility: "direct" });
     await drained(h, inbox);
     const listed = await getJson<Conversation[]>(h, "/api/v1/conversations", alice.token);
-    expect(listed.body.map((c) => c.last_status?.id).toSorted()).toEqual([small.id, big].toSorted());
+    expect(listed.body.map((c) => c.last_status?.id).toSorted(byText)).toEqual([small.id, big].toSorted());
     const sent = inbox.rest().filter((m) => m.event === "conversation");
     expect(sent.map((m) => (JSON.parse(m.payload!) as Conversation).last_status?.id)).toEqual([small.id]);
     expect(JSON.parse(sent[0]!.payload!)).toEqual(listed.body.find((c) => c.last_status?.id === small.id));

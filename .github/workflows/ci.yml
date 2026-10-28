@@ -81,7 +81,7 @@ jobs:
           SHARD: ${{ matrix.shard }}/${{ strategy.job-total }}
         run: bash scripts/test-affected.sh --shard "$SHARD"
 
-  # Formatting is checked for every change; Kopje's lint, types and checks only when its suites are affected.
+  # Formatting and lint are checked for every change; Kopje's types and checks only when its suites are affected.
   check:
     timeout-minutes: 10
     runs-on: ubuntu-latest
@@ -106,9 +106,8 @@ jobs:
       - name: Check formatting
         run: pnpm run pretty
 
-      - name: Check kopje linting
-        if: needs.changes.outputs.kopje == 'true'
-        run: pnpm run lint:kopje
+      - name: Check linting
+        run: pnpm run lint
 
       - name: Check kopje types
         if: needs.changes.outputs.kopje == 'true'

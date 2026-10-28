@@ -39,7 +39,6 @@ import { outbound } from "./status-helpers";
 // modelled as Mastodon 4.5.11, Kopje and Misskey apply what they receive. Interleavings use the operation queue, held
 // delivery leases and the remote web's gates, never timers.
 
-const FEP = "https://w3id.org/fep/044f#QuoteRequest";
 const NOT_FOUND = "The post you are trying to quote does not appear to exist.";
 const NOT_MENTIONED = "Validation failed: Cannot quote a non-mentioned user in a Private Mention post.";
 
@@ -194,10 +193,6 @@ async function deliver(
 
 const idOf = (value: unknown) => (typeof value === "string" ? value : (value as { id: string }).id);
 
-function label(activity: Record<string, unknown>): string {
-  return `${String(activity.type)} ${idOf(activity.object)}`;
-}
-
 describe("posting a quote (PostStatusService, R36)", () => {
   it("accepts a quote of a local status at once: a fresh authorization, the silent mention, the notification", async () => {
     const t = await setup();
@@ -243,7 +238,7 @@ describe("posting a quote (PostStatusService, R36)", () => {
   });
 
   it("leaves a quote of a remote status pending and records its QuoteRequest after the Create", async () => {
-    const { t, bob, theirs } = await world();
+    const { t, theirs } = await world();
     const mine = await quotePost(t, theirs.id);
     expect(mine.quote).toEqual({ state: "pending", quoted_status: null });
     expect(await quoteRow(t, mine.uri)).toMatchObject({

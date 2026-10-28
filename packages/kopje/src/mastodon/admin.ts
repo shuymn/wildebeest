@@ -602,7 +602,7 @@ function measureTime(value: string | undefined): { at: MeasureTime | null } | "i
   }
   const offset = (sign === "-" ? -1 : 1) * (Number(zh) * 60 + Number(zm)) * 60_000;
   const ns = BigInt(check.getTime() - offset) * 1_000_000n + BigInt(fraction.padEnd(9, "0"));
-  const at = { date: dayNumber(`${year}-${month}-${day}`), ns };
+  const at = { date: dayNumber(`${year!}-${month!}-${day!}`), ns };
   return measurableTime(at) ? { at } : "invalid";
 }
 
@@ -687,7 +687,7 @@ export const measures: ApiHandler = async (c, deps) => {
   const missing = keys.findIndex((key) => MEASURE_KEYS.get(key) === true && !p.hasObject(key));
   if (missing === 0 || (missing > 0 && start !== "invalid" && end !== "invalid")) {
     await checkOptionalToken(c, deps);
-    return mastodonError(400, `param is missing or the value is empty or invalid: ${keys[missing]}`);
+    return mastodonError(400, `param is missing or the value is empty or invalid: ${keys[missing]!}`);
   }
   if (start === "invalid" || end === "invalid") {
     await checkOptionalToken(c, deps);

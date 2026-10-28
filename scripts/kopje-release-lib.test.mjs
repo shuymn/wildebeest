@@ -84,11 +84,14 @@ describe("publish", () => {
     assert.equal(npm.calls.filter((args) => args[0] === "publish").length, 0);
   });
 
-  for (const [what, answer] of [
-    ["another error code", { code: 1, stdout: JSON.stringify({ error: { code: "E500" } }), stderr: "boom" }],
-    ["a failure without output", { code: 1, stdout: "", stderr: "network down" }],
-    ["output that is not JSON", { code: 0, stdout: "not json", stderr: "" }],
-    ["an answer that is not an integrity", { code: 0, stdout: JSON.stringify({ a: 1 }), stderr: "" }],
+  for (const { what, answer } of [
+    {
+      what: "another error code",
+      answer: { code: 1, stdout: JSON.stringify({ error: { code: "E500" } }), stderr: "boom" },
+    },
+    { what: "a failure without output", answer: { code: 1, stdout: "", stderr: "network down" } },
+    { what: "output that is not JSON", answer: { code: 0, stdout: "not json", stderr: "" } },
+    { what: "an answer that is not an integrity", answer: { code: 0, stdout: JSON.stringify({ a: 1 }), stderr: "" } },
   ]) {
     it(`fails without publishing when npm view answers ${what}`, () => {
       const npm = stub({ view: answer });
@@ -209,8 +212,9 @@ describe("mainChecked", () => {
       repo: "o/r",
       sha,
       gh,
-      sleep: async (ms) => {
+      sleep: (ms) => {
         clock += ms;
+        return Promise.resolve();
       },
       now: () => clock,
       log: quiet,

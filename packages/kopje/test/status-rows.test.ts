@@ -105,7 +105,8 @@ describe("the cursor (RES-3)", () => {
       let stepped = 1;
       let failure = "";
       try {
-        for (const _row of cursor) {
+        const rows = cursor[Symbol.iterator]();
+        while (!rows.next().done) {
           stepped++;
         }
       } catch (error) {
@@ -115,7 +116,8 @@ describe("the cursor (RES-3)", () => {
       const db = new Db(sql).metered(new RowMeter(10 * rowHeapBytes({ i: 1 })));
       let metered = 0;
       try {
-        for (const _row of db.iterate("SELECT i FROM t ORDER BY i")) {
+        const rows = db.iterate("SELECT i FROM t ORDER BY i")[Symbol.iterator]();
+        while (!rows.next().done) {
           metered++;
         }
       } catch {
@@ -428,7 +430,7 @@ describe("the hydrate queries (RES-3)", () => {
       // The largest each column stores: 64 KiB of malformed UTF-8 (F0, then continuation bytes: one character to
       // SQLite's length and substr, so the display name's stored cut keeps it whole), an actor id and username of 64
       // KiB (read-time projections only), URLs at their stored bound and a full emoji snapshot.
-      const malformed = new Uint8Array([0xf0, ...new Array<number>(64 * 1024).fill(0x80)]).buffer;
+      const malformed = new Uint8Array([0xf0, ...Array.from({ length: 64 * 1024 }, () => 0x80)]).buffer;
       const url = `https://new.example/${"x".repeat(PROFILE_URL_LIMIT - "https://new.example/".length)}`;
       sql.exec(
         `UPDATE accounts SET uri = ?2, username = CAST(?3 AS TEXT), display_name = CAST(?3 AS TEXT), url = ?4,

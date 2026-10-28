@@ -206,7 +206,7 @@ describe("failure reports carry codes, counts and digests only (DATA-13)", () =>
         out,
         "--base-time",
         "2026-10-20T00:00:00Z",
-      ]).catch((error: { code: number; stdout: string; stderr: string }) => error);
+      ]).catch((error: unknown) => error as { code: number; stdout: string; stderr: string });
       expect("code" in run ? run.code : 0).toBe(3);
       const printed = `${run.stdout}${run.stderr}${await readFile(join(out, "manifest.json"), "utf8")}`;
       expect(printed).toContain('"result": "stopped"');

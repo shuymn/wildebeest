@@ -367,7 +367,7 @@ describe("forwarding a report (R23, DATA-7)", () => {
     // carol and dave: erin's domain is not listed, frank's inbox is carol's server's, and alice is local.
     const [flag] = await outbound(h.store);
     expect(flag?.audience).toEqual({ followers: false, accounts: [carol, dave].sort() });
-    expect((flag?.activity.object as string[]).length).toBe(1 + replies.length);
+    expect((flag!.activity.object as string[]).length).toBe(1 + replies.length);
     expect(
       (await sql<{ inbox_url: string }>(h.store, "SELECT inbox_url FROM deliveries ORDER BY inbox_url")).map(
         (r) => r.inbox_url,
@@ -416,9 +416,9 @@ describe("forwarding a report (R23, DATA-7)", () => {
     );
     await report(h, alice, { account_id: carol, status_ids: [status], forward: true });
     const sent: Request[] = [];
-    const fetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+    const fetch = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
       sent.push(new Request(input, init));
-      return new Response(null, { status: 202 });
+      return Promise.resolve(new Response(null, { status: 202 }));
     }) as unknown as typeof globalThis.fetch;
     const result = await deliveryRound({ ...env, USER_KEK: LEGACY.kek } as unknown as Env, {
       build: () => env.CF_VERSION_METADATA.id,
@@ -443,9 +443,9 @@ describe("forwarding a report (R23, DATA-7)", () => {
     expect(await sql(h.store, "SELECT 1 FROM instance_settings WHERE name = 'instance_actor_key'")).toEqual([]);
     await report(h, alice, { account_id: carol, status_ids: [status], forward: true });
     const sent: Request[] = [];
-    const fetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+    const fetch = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
       sent.push(new Request(input, init));
-      return new Response(null, { status: 202 });
+      return Promise.resolve(new Response(null, { status: 202 }));
     }) as unknown as typeof globalThis.fetch;
     const result = await deliveryRound({ ...env, USER_KEK: LEGACY.kek } as unknown as Env, {
       build: () => env.CF_VERSION_METADATA.id,

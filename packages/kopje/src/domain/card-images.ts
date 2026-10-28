@@ -229,7 +229,7 @@ export const claimCardImages = mediaDeleteOperation<
   out.paused = collected === null;
   out.collected = collected ?? 0;
   const shareLeft = Number.isSafeInteger(share) && share > 0 ? Math.max(0, share - used(db, now)) : 0;
-  const given = (Array.isArray(tokens) ? tokens : []).slice(0, CARD_IMAGE_ROUND_CLAIMS);
+  const given: unknown[] = (Array.isArray(tokens) ? tokens : []).slice(0, CARD_IMAGE_ROUND_CLAIMS);
   const claimable = Math.min(CARD_IMAGE_ROUND_CLAIMS, given.length, shareLeft);
   // C2: with no share left, nothing is walked or claimed.
   if (claimable === 0) {

@@ -312,7 +312,7 @@ export function restartJpeg(levels: number[], fill = 0): Uint8Array {
     flush();
     if (i < levels.length - 1) {
       // `fill` fill bytes before each restart marker (T.81 B.1.1.2).
-      entropy.push(...new Array<number>(fill).fill(0xff), 0xff, 0xd0 + (i % 8));
+      entropy.push(...Array.from({ length: fill }, () => 0xff), 0xff, 0xd0 + (i % 8));
     }
   });
   return concat(
@@ -327,7 +327,7 @@ export function restartJpeg(levels: number[], fill = 0): Uint8Array {
         Uint8Array.from({ length: 12 }, (_, i) => i),
       ),
     ),
-    segment(0xc4, concat(new Uint8Array([0x10, 1, ...new Array<number>(15).fill(0)]), new Uint8Array([0]))),
+    segment(0xc4, concat(new Uint8Array([0x10, 1, ...Array.from({ length: 15 }, () => 0)]), new Uint8Array([0]))),
     segment(0xdd, u16be(1)),
     segment(0xda, new Uint8Array([1, 1, 0x00, 0, 63, 0])),
     new Uint8Array(entropy),

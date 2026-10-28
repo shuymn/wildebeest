@@ -33,7 +33,7 @@ afterAll(() => {
 beforeEach(() => {
   saved = { ...process.env };
   for (const name of Object.keys(process.env).filter((n) => n.startsWith("GIT_"))) {
-    delete process.env[name];
+    Reflect.deleteProperty(process.env, name);
   }
   process.env.GIT_CONFIG_NOSYSTEM = "1";
   process.env.GIT_CONFIG_GLOBAL = join(home, "gitconfig");
@@ -46,7 +46,7 @@ afterEach(() => {
     rmSync(repo, { recursive: true, force: true });
   }
   for (const name of Object.keys(process.env).filter((n) => n.startsWith("GIT_"))) {
-    delete process.env[name];
+    Reflect.deleteProperty(process.env, name);
   }
   Object.assign(process.env, saved);
 });

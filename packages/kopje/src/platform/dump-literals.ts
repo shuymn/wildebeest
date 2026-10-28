@@ -21,11 +21,7 @@ const HEX = Array.from({ length: 256 }, (_, i) => i.toString(16).toUpperCase().p
 const utf8 = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true });
 
 export function toHex(bytes: Uint8Array): string {
-  const parts = new Array<string>(bytes.length);
-  for (let i = 0; i < bytes.length; i++) {
-    parts[i] = HEX[bytes[i] ?? 0] ?? "00";
-  }
-  return parts.join("");
+  return Array.from(bytes, (byte) => HEX[byte] ?? "00").join("");
 }
 
 export function fromHex(hex: string): ArrayBuffer {

@@ -44,7 +44,7 @@ class Button {
   }
   removeAttribute(name: string) {
     expect(name).toBe("data-state");
-    delete this.set[name];
+    Reflect.deleteProperty(this.set, name);
   }
   get state(): string | null {
     return this.set["data-state"] ?? null;
@@ -246,7 +246,7 @@ describe("the copy control", () => {
     expect([a.button.state, a.status.textContent]).toEqual([null, ""]);
   });
 
-  it("leaves the controls hidden without the Clipboard API, and a control without a status element", async () => {
+  it("leaves the controls hidden without the Clipboard API, and a control without a status element", () => {
     const a = field();
     enableCopy(page([a.button]), undefined);
     expect(a.button.hidden).toBe(true);

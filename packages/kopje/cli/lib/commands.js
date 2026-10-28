@@ -124,7 +124,9 @@ export async function dumpToFile({
         break;
       } catch (error) {
         if (error instanceof AdminError && error.code === "dump-lease-expired") {
-          throw new Error("the dump lease expired, so the Store may have changed; rerun with --restart");
+          throw new Error("the dump lease expired, so the Store may have changed; rerun with --restart", {
+            cause: error,
+          });
         }
         if (!(error instanceof AdminError) || !error.transient || attempt >= RETRIES) {
           throw error;
@@ -395,11 +397,13 @@ async function sendChunk({ client, out, id, seq, bytes, digest, sleep }) {
       // The error is no proof that nothing was written: ask the Store what it has.
       const { progress } = await readProgress(client, id, sleep);
       if (progress === null || progress.id !== id) {
-        throw new Error(`the import disappeared from the Store (${error.message})`);
+        throw new Error(`the import disappeared from the Store (${error.message})`, { cause: error });
       }
       if (progress.lastSeq >= seq) {
         if (progress.lastSeq === seq && progress.digest !== digest) {
-          throw new Error(`chunk ${seq} is recorded with a different digest; reset the Store and import again`);
+          throw new Error(`chunk ${seq} is recorded with a different digest; reset the Store and import again`, {
+            cause: error,
+          });
         }
         out.info(`chunk ${seq} was applied despite the error (${error.message})`);
         return;

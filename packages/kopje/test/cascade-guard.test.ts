@@ -16,6 +16,7 @@ import type { StoreStub } from "../src/platform/store-client";
 import { sql } from "./api-helpers";
 import { NOW } from "./app-helpers";
 import { migratedStore } from "./helpers";
+import { byText } from "./sort";
 import { community, remoteAccount, seedStatus } from "./status-helpers";
 
 // RES-6: a status's delete (deleteStatusWithin) and a remote account's purge (purgeBatch) remove the rows that name
@@ -376,7 +377,7 @@ describe("cascade guard below local_accounts (RES-6)", () => {
         keys
           .filter((key) => key.table === "local_accounts" && key.from === "reports")
           .map((key) => [key.column, key.onDelete])
-          .sort(),
+          .sort(byText),
       ).toEqual([
         ["action_taken_by_account_id", "SET NULL"],
         ["assigned_account_id", "SET NULL"],

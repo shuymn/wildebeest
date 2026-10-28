@@ -8,9 +8,10 @@ pre-commit:
     - rebase
   parallel: true
   jobs:
-    # Lints only the packages the staged change can affect; see scripts/lint-affected.sh.
+    # Lints the staged files; CI lints the whole tree (pnpm run lint). oxlint skips the files .oxlintrc.json ignores.
     - name: lint
-      run: bash scripts/lint-affected.sh
+      glob: "*.{js,mjs,cjs,jsx,ts,mts,cts,tsx}"
+      run: pnpm exec oxlint --type-aware --deny-warnings --no-error-on-unmatched-pattern {staged_files}
     # Formats the staged files and restages them; CI checks the whole tree (pnpm run pretty). oxfmt skips the files
     # it does not format and those .oxfmtrc.json ignores.
     - name: pretty

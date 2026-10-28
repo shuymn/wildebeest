@@ -54,6 +54,7 @@ import {
   update,
 } from "./inbox-status-helpers";
 import { plannedRun, remoteAccounts, rowsRead, scansOf, staleStatistics } from "./read-helpers";
+import { byText } from "./sort";
 import { block, domainBlock, mute } from "./status-helpers";
 import { blurhashOf } from "./stored-bounds-fixtures";
 
@@ -1557,7 +1558,7 @@ describe("remote media URLs and blurhash", () => {
     }
     const home = await t.api<{ media_attachments: Shown[] }[]>("/api/v1/timelines/home");
     const shown = home.body.flatMap((s) => s.media_attachments).filter((m) => m.blurhash !== null);
-    expect(shown.map((m) => m.blurhash).toSorted()).toEqual(kept.toSorted());
+    expect(shown.map((m) => m.blurhash).toSorted(byText)).toEqual(kept.toSorted());
   });
 
   // Regression witness for the blurhash; preservation for the edit rule. Mastodon reassigns the blurhash (none

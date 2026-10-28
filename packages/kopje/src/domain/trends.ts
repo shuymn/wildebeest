@@ -878,7 +878,7 @@ export type TrendStatusPage = { items: Status[]; read: number; consumed: number;
 export const trendingStatuses = optionalUserReadOperation<
   { offset: number; limit: number; language: string; now: number; present: Present },
   TrendStatusPage
->((db, { offset, limit, language, present, now }, viewer) => {
+>((db, { offset, limit, language, present }, viewer) => {
   const settings = trendSettings(db);
   if (!settings.trends || limit === 0 || offset >= TREND_ALLOWED_ROWS) {
     return { items: [], read: 0, consumed: 0, cut: false };
