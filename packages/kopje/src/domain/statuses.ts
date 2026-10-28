@@ -15,7 +15,6 @@ import {
   type AccountAdmission,
   accountPage,
   accountUrl,
-  edgeRangeSql,
   type Page,
   type PageQuery,
   type Present,
@@ -129,7 +128,7 @@ import {
 } from "./status-text";
 import { streamDelete } from "./streaming";
 import { forgetStatusTrend } from "./trends";
-import { readWindow, singleWindow, windowJson, windowPage } from "./windows";
+import { edgeRangeSql, readWindow, singleWindow, windowJson, windowPage } from "./windows";
 
 // Statuses: posting, editing and deleting local statuses, the per-status reads, and favourite, reblog and
 // bookmark. Every read goes through the audience rule (audience.ts); every write recomputes the counters it changes

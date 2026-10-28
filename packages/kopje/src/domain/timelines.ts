@@ -1,7 +1,7 @@
 import { STATUSES_ID_INDEX } from "../db/indexes";
 import type { Db } from "../db/sql";
 import { CARD_PUBLIC_LINK_INDEX } from "../platform/stored-bounds";
-import { edgeRangeSql, type Page, type PageQuery, type Present, resolveAccountId } from "./accounts";
+import { type Page, type PageQuery, type Present, resolveAccountId } from "./accounts";
 import { admit, type Admitted, admittedPage, ARRAY_ANSWER_BYTES } from "./answer-budget";
 import {
   audienceSql,
@@ -23,7 +23,16 @@ import { presentation, type Status, statusStream } from "./status-presenter";
 import { statusCursor } from "./statuses";
 import { normalizeTag } from "./tag-name";
 import { listedTrendLinkSql, publicCopiesSql, trendSettings } from "./trends";
-import { mergedWindow, readWindow, singleWindow, streamWindow, type Window, windowJson, windowPage } from "./windows";
+import {
+  edgeRangeSql,
+  mergedWindow,
+  readWindow,
+  singleWindow,
+  streamWindow,
+  type Window,
+  windowJson,
+  windowPage,
+} from "./windows";
 
 // Timelines: newest first, paged by status id (18-digit TEXT, compared as TEXT) or, for
 // bookmarks and favourites, by the edge's INTEGER id. A page reads a candidate window from its cursor (windows.ts,

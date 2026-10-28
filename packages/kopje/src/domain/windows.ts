@@ -103,3 +103,10 @@ function int(n: number): number {
   }
   return n;
 }
+
+// The cursor on an edge table's INTEGER id as a plain range, with `max` and `min` the cursor parameters (NULL for none):
+// no cursor is a REAL beyond either end of the INTEGER range, so every id is inside it (SQLite compares the two types by
+// value). A read in an index ending in the id then starts at the cursor, not at the newest.
+export function edgeRangeSql(column: string, max: string, min: string): string {
+  return `${column} < coalesce(CAST(${max} AS INTEGER), 1e19) AND ${column} > coalesce(CAST(${min} AS INTEGER), -1e19)`;
+}
