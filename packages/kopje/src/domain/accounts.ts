@@ -1303,7 +1303,7 @@ export type PageQuery = {
 
 // A page of a list. `cut`: the read stopped at its candidate window (windows.ts) before the page filled, or an answer
 // without a page stopped at ANSWER_BYTES, so the next link is offered however few items it holds.
-export type Page<T> = { items: T[]; newest: string | null; oldest: string | null; cut?: boolean };
+export type Page<T> = { items: T[]; newest: string | null; oldest: string | null; cut?: boolean | undefined };
 
 export type ListFollowsInput = {
   account: string;

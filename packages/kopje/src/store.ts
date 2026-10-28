@@ -385,7 +385,7 @@ export class Store extends DurableObject<Env> {
   journalSpool(
     callerBuild: string,
     entry: { digest: string; spooledAt: number; record: Uint8Array },
-    limits?: { entries?: number; bytes?: number },
+    limits?: { entries?: number | undefined; bytes?: number | undefined },
   ) {
     return this.#admin.journalSpool(callerBuild, entry, limits);
   }
