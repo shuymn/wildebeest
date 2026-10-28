@@ -9,7 +9,6 @@ import {
   CARD_FRESH_MS,
   CARD_HOLD_MS,
   CARD_ROUND_CLAIMS,
-  type CardClaims,
   type CardFields,
   claimCards,
   enqueueCard,
@@ -130,7 +129,7 @@ async function world() {
     },
     ...extra,
   });
-  const round = (store?: () => StoreStub) => linkCardsRound(h.env as unknown as Env, deps(store));
+  const round = (store?: () => StoreStub) => linkCardsRound(h.env, deps(store));
   const postLink = async (url: string, extra: Record<string, unknown> = {}) =>
     (await post(h, alice, { status: `see ${url}`, ...extra })).id;
   const row = async (id: string) =>
@@ -157,7 +156,7 @@ async function world() {
         const stub = target as unknown as Record<string, (...a: unknown[]) => Promise<unknown>>;
         return (...args: unknown[]) => replace(n++, () => stub[method]!(...args));
       },
-    }) as StoreStub;
+    });
   };
   return {
     h,
@@ -312,7 +311,7 @@ describe("the link card round", () => {
     await reached.promise;
     w.clock.t = NOW + CARD_EXPIRE_MS + 1000;
     const b = await w.postLink(SITE);
-    const second = (await w.op(claimCards, { now: w.clock.t })) as CardClaims;
+    const second = await w.op(claimCards, { now: w.clock.t });
     expect(second).toMatchObject({ expired: 0, claims: [], deferred: 1 });
     expect(await w.row(a)).toMatchObject({ attempts: 1 });
     expect(await w.row(b)).toMatchObject({ due_at: NOW + CARD_EXPIRE_MS - 1000 + CARD_HOLD_MS });

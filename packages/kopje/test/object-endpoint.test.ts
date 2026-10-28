@@ -19,7 +19,7 @@ async function fetchObject(h: Awaited<ReturnType<typeof community>>, uri: string
   const response = await h.request(path(uri), AP);
   return {
     status: response.status,
-    body: response.status === 200 ? ((await response.json()) as Record<string, unknown>) : null,
+    body: response.status === 200 ? await response.json<Record<string, unknown>>() : null,
   };
 }
 
@@ -33,7 +33,7 @@ describe("object endpoint (VIS-4)", () => {
     const response = await h.request(path(status.uri as string), AP);
     expect(response.status).toBe(200);
     expect(response.headers.get("content-type")).toMatch(/^application\/activity\+json/);
-    const note = (await response.json()) as Record<string, unknown>;
+    const note = await response.json<Record<string, unknown>>();
     const [create] = await outbound(h.store);
     const sent = create?.activity.object as Record<string, unknown>;
     expect(note).toMatchObject({
@@ -63,7 +63,7 @@ describe("object endpoint (VIS-4)", () => {
     await sql(h.store, "UPDATE statuses SET visibility = 'limited' WHERE id = ?", limited.id);
     hidden.push(limited.uri as string);
     const original = await post(h, bob, { status: "boost me" });
-    const boost = (await (await act(h, alice, `/api/v1/statuses/${original.id}/reblog`)).json()) as { uri: string };
+    const boost = await (await act(h, alice, `/api/v1/statuses/${original.id}/reblog`)).json<{ uri: string }>();
     hidden.push(boost.uri);
     // A remote status, even under a path that looks local.
     const remote = await remoteAccount(h.store, "dave", "remote.example");
@@ -94,7 +94,7 @@ describe("object endpoint (VIS-4)", () => {
 
     const collection = await h.request("/ap/users/alice/outbox", AP);
     expect(collection.status).toBe(200);
-    const outbox = (await collection.json()) as { type: string; totalItems: number; first: string };
+    const outbox = await collection.json<{ type: string; totalItems: number; first: string }>();
     // totalItems is the account's statuses_count, as Mastodon's OutboxesController gives it; the pages list only what
     // may be served.
     const count = (
@@ -102,9 +102,11 @@ describe("object endpoint (VIS-4)", () => {
     )[0]?.count;
     expect(outbox).toMatchObject({ type: "OrderedCollection", totalItems: count });
     expect(count).toBeGreaterThanOrEqual(4);
-    const page = (await (await h.request(path(outbox.first), AP)).json()) as {
+    const page = await (
+      await h.request(path(outbox.first), AP)
+    ).json<{
       orderedItems: { type: string; object: unknown }[];
-    };
+    }>();
     expect(page.orderedItems.map((item) => item.type)).toEqual(["Create", "Announce", "Create"]);
     expect((page.orderedItems[0]!.object as { id: string }).id).toBe(quiet.uri);
     expect(page.orderedItems[1]?.object).toBe(original.uri);
@@ -174,16 +176,18 @@ describe("object endpoint (VIS-4)", () => {
       h.now.mockReturnValue(Date.parse("2026-10-12T00:00:00.000Z") + i * 1000);
       posted.push((await post(h, alice, { status: `post ${i}` })).uri as string);
     }
-    const outbox = (await (await h.request("/ap/users/alice/outbox", AP)).json()) as {
+    const outbox = await (
+      await h.request("/ap/users/alice/outbox", AP)
+    ).json<{
       totalItems: number;
       first: string;
-    };
+    }>();
     expect(outbox.totalItems).toBe(25);
     type Page = { orderedItems: { object: { id: string } }[]; next?: string };
-    const first = (await (await h.request(path(outbox.first), AP)).json()) as Page;
+    const first = await (await h.request(path(outbox.first), AP)).json<Page>();
     expect(first.orderedItems).toHaveLength(20);
     expect(first.next).toBeDefined();
-    const second = (await (await h.request(path(first.next ?? ""), AP)).json()) as Page;
+    const second = await (await h.request(path(first.next ?? ""), AP)).json<Page>();
     expect(second.orderedItems).toHaveLength(5);
     expect(second.next).toBeUndefined();
     expect([...first.orderedItems, ...second.orderedItems].map((item) => item.object.id)).toEqual(posted.reverse());

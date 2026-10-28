@@ -57,8 +57,7 @@ export class DoKvStore implements KvStore {
   }
 
   #expiry(options?: KvStoreSetOptions): number | null {
-    // Fedify's types name the global Temporal, which this TypeScript lib lacks; the value is a polyfill Duration.
-    const ttl = options?.ttl as Temporal.Duration | undefined;
+    const ttl = options?.ttl;
     return ttl === undefined ? null : this.now() + Temporal.Duration.from(ttl).total("millisecond");
   }
 }

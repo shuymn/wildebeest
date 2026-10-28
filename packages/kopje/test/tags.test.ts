@@ -35,7 +35,7 @@ describe("tag ids", () => {
     const tag = async (path: string, method = "GET") => {
       const response = await h.request(path, auth(method));
       expect(response.status, path).toBe(200);
-      return (await response.json()) as Tag | Tag[] | { hashtags: Tag[] };
+      return await response.json<Tag | Tag[] | { hashtags: Tag[] }>();
     };
     await h.request(
       "/api/v1/statuses",
@@ -49,7 +49,7 @@ describe("tag ids", () => {
     ids.push(((await tag("/api/v1/tags/cats/feature", "POST")) as Tag).id);
     ids.push(((await tag("/api/v1/tags/cats/unfeature", "POST")) as Tag).id);
     ids.push(((await tag("/api/v1/tags/cats/unfollow", "POST")) as Tag).id);
-    ids.push(((await (await h.request("/api/v1/tags/cats")).json()) as Tag).id);
+    ids.push((await (await h.request("/api/v1/tags/cats")).json<Tag>()).id);
     expect(ids).toEqual(Array.from({ length: 9 }, () => "3848435355615332284"));
   });
 });

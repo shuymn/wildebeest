@@ -69,7 +69,7 @@ export async function setup(clock: { now: number } = { now: NOW }) {
   };
   const api = async <T = unknown>(path: string, as: "alice" | "dave" | null = "alice") => {
     const response = await h.request(path, as === null ? {} : { headers: { authorization: `Bearer ${tokens[as]}` } });
-    return { status: response.status, body: (await response.json()) as T };
+    return { status: response.status, body: await response.json<T>() };
   };
   return { store, web, ...h, post, api, tokens };
 }
@@ -109,7 +109,7 @@ export function mastodonNote(actor: TestActor, extra: Record<string, unknown> = 
     likes: { id: `${id}/likes`, type: "Collection", totalItems: 0 },
     shares: { id: `${id}/shares`, type: "Collection", totalItems: 0 },
     ...extra,
-  } as Note;
+  };
 }
 
 // A Note as Misskey's ApRendererService#renderNote renders it: MFM source in _misskey_content and source, quotes in
@@ -135,7 +135,7 @@ export function misskeyNote(actor: TestActor, extra: Record<string, unknown> = {
     sensitive: false,
     tag: [],
     ...extra,
-  } as Note;
+  };
 }
 
 export function create(actor: TestActor, object: Note, context: unknown = AS) {
@@ -267,7 +267,7 @@ export async function localStatus(t: Setup, body: Record<string, unknown>, as: "
     body: JSON.stringify(body),
   });
   expect(response.status).toBe(200);
-  return (await response.json()) as { id: string; uri: string };
+  return await response.json<{ id: string; uri: string }>();
 }
 
 // The actor's live retractions at MAX_RETRACTIONS_PER_ACTOR (fillers of its origin, expiring in a day).

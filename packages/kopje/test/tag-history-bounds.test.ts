@@ -141,7 +141,7 @@ describe("the listed Tag maximum (RES-3)", () => {
     });
     const response = await h.request("/api/v1/followed_tags?limit=200", bearer(alice.token));
     expect(response.status).toBe(200);
-    const body = (await response.json()) as { name: string; history: { uses: string }[] }[];
+    const body = await response.json<{ name: string; history: { uses: string }[] }[]>();
     // The page read the 200 follows; the four imported past the bounds are left out, the 196 maximal ones shown.
     expect(body).toHaveLength(FOLLOWED_PAGE - 4);
     expect(body[0]?.history[0]?.uses).toBe(String(LISTED_HISTORY_ROWS));

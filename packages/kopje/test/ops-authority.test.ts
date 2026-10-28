@@ -143,7 +143,7 @@ describe("import authority", () => {
       body: JSON.stringify({ header: splitDump(text).header }),
     });
     expect(begin.status).toBe(200);
-    const { progress, session } = (await begin.json()) as { progress: { id: string }; session: string };
+    const { progress, session } = await begin.json<{ progress: { id: string }; session: string }>();
     expect(session).toMatch(/^[A-Za-z0-9_-]{43}$/);
     const chunk = (await importChunks(text, 1 << 20))[0]!;
     const send = (headers: Record<string, string>) =>
@@ -326,7 +326,7 @@ describe("abandoning a stranded token import", () => {
       headers: tokenHeaders({ "content-type": "application/json" }),
       body: JSON.stringify({ header: splitDump(await dumpOf()).header }),
     });
-    const { progress } = (await begin.json()) as { progress: { id: string } };
+    const { progress } = await begin.json<{ progress: { id: string } }>();
     const reset = await request("/admin/import/reset", {
       method: "POST",
       headers: tokenHeaders({ "content-type": "application/json" }),

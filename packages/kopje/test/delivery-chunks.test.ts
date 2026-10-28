@@ -43,7 +43,7 @@ async function withFollowers(n: number, options: { servers?: number; pad?: strin
   const post = async (status: string) => {
     const response = await h.request("/api/v1/statuses", bearer(h.users.alice.token, json({ status })));
     expect(response.status).toBe(200);
-    return (await response.json()) as { id: string; uri: string };
+    return await response.json<{ id: string; uri: string }>();
   };
   return { ...h, post };
 }

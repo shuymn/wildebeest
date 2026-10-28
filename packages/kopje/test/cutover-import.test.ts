@@ -100,7 +100,7 @@ describe("cutover import of a converted legacy export", () => {
     const get = async (path: string) => {
       const response = await h.request(path, bearer(token));
       expect(response.status, path).toBe(200);
-      return (await response.json()) as Record<string, unknown> & Record<string, unknown>[];
+      return await response.json<Record<string, unknown> & Record<string, unknown>[]>();
     };
 
     const me = await get("/api/v1/accounts/verify_credentials");
@@ -291,12 +291,12 @@ describe("cutover import of a converted legacy export", () => {
     const reads = async () => ({
       status: (await request(`/api/v1/statuses/${id}`)).status,
       context: (
-        (await (await request(`/api/v1/statuses/${reply?.id ?? ""}/context`)).json()) as { ancestors: { id: string }[] }
+        await (await request(`/api/v1/statuses/${reply?.id ?? ""}/context`)).json<{ ancestors: { id: string }[] }>()
       ).ancestors.map((s) => s.id),
-      bookmarks: ((await (await request("/api/v1/bookmarks")).json()) as { id: string }[])
+      bookmarks: (await (await request("/api/v1/bookmarks")).json<{ id: string }[]>())
         .map((s) => s.id)
         .filter((x) => x === id),
-      notifications: ((await (await request("/api/v1/notifications")).json()) as { status?: { id: string } }[])
+      notifications: (await (await request("/api/v1/notifications")).json<{ status?: { id: string } }[]>())
         .map((n) => n.status?.id)
         .filter((x) => x === id),
     });
@@ -317,7 +317,7 @@ describe("cutover import of a converted legacy export", () => {
       h.store,
       "SELECT l.pubkey FROM local_accounts l JOIN accounts a ON a.id = l.account_id WHERE a.uri = 'https://kopje.test/ap/users/alice'",
     );
-    const document = (await actor.json()) as { id: string; publicKey: { id: string; publicKeyPem: string } };
+    const document = await actor.json<{ id: string; publicKey: { id: string; publicKeyPem: string } }>();
     expect(document.id).toBe("https://kopje.test/ap/users/alice");
     expect(document.publicKey.id).toBe("https://kopje.test/ap/users/alice#main-key");
     // The same key as the legacy instance served (Fedify wraps the PEM at 64 columns).
@@ -325,7 +325,7 @@ describe("cutover import of a converted legacy export", () => {
     expect(bare(document.publicKey.publicKeyPem)).toBe(bare(key?.pubkey ?? ""));
     expect((await h.request("/ap/users/Bob", AP)).status).toBe(200);
 
-    const instance = (await (await h.request("/api/v1/instance")).json()) as Record<string, unknown>;
+    const instance = await (await h.request("/api/v1/instance")).json<Record<string, unknown>>();
     expect(instance).toMatchObject({ title: "Fixture Herd", short_description: "A synthetic legacy instance" });
     expect(instance.rules).toEqual([
       { id: "1", text: "No spam", hint: "", translations: {} },

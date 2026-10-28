@@ -21,7 +21,7 @@ export type Measure = {
 export async function measure(w: World, body: Record<string, unknown>, token: string | null = w.admin) {
   const init = json(body);
   const response = await w.h.request(MEASURES, token === null ? init : bearer(token, init));
-  return { status: response.status, body: (await response.json()) as unknown };
+  return { status: response.status, body: await response.json<unknown>() };
 }
 
 // The admin's credential and a measure's input, for a Store operation run directly.

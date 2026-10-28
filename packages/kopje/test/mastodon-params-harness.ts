@@ -36,9 +36,9 @@ type Spy = MockInstance<(...args: never[]) => unknown>;
 export function observeReads() {
   const spies: [ReadMethod, Spy, number][] = [
     ...PARAMS_METHODS.map((m): [ReadMethod, Spy, number] => [m, vi.spyOn(Params.prototype, m) as unknown as Spy, 0]),
-    ["query", vi.spyOn(HonoRequest.prototype, "query") as unknown as Spy, 0],
-    ["queries", vi.spyOn(HonoRequest.prototype, "queries") as unknown as Spy, 0],
-    ["file", vi.spyOn(Params.prototype, "file") as unknown as Spy, 0],
+    ["query", vi.spyOn(HonoRequest.prototype, "query"), 0],
+    ["queries", vi.spyOn(HonoRequest.prototype, "queries"), 0],
+    ["file", vi.spyOn(Params.prototype, "file"), 0],
   ];
   return {
     clear(): void {

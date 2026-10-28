@@ -38,7 +38,7 @@ export function adminHarness(
   federation?: AppDeps["federation"],
   images?: AppDeps["images"],
 ) {
-  const testEnv = { ...env, ...overrides } as unknown as Env;
+  const testEnv = { ...env, ...overrides };
   // Doorbells are recorded, never sent: the test pool's Queue would run the real consumer.
   const doorbell = vi.fn(() => Promise.resolve());
   const jobs = vi.fn(() => Promise.resolve());

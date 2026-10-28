@@ -167,7 +167,7 @@ describe("conversations", () => {
     const id = theirs?.id ?? "";
 
     const read = await send(h, bob, "POST", `/api/v1/conversations/${id}/read`);
-    expect([read.status, ((await read.json()) as Conversation).unread]).toEqual([200, false]);
+    expect([read.status, (await read.json<Conversation>()).unread]).toEqual([200, false]);
     expect((await list(h, bob))[0]?.unread).toBe(false);
     const unread = await send(h, bob, "POST", `/api/v1/conversations/${id}/unread`);
     expect(await unread.json()).toEqual({ ...theirs, unread: true });
@@ -372,7 +372,7 @@ describe("conversations", () => {
     );
     const newestFirst = statuses.toReversed();
     const first = await h.request("/api/v1/conversations", bearer(alice.token));
-    const page = (await first.json()) as Conversation[];
+    const page = await first.json<Conversation[]>();
     expect(page.map((c) => c.last_status?.id)).toEqual(newestFirst.slice(0, 20));
     expect(first.headers.get("link")).toBe(
       `<https://kopje.test/api/v1/conversations?max_id=${newestFirst[19]}>; rel="next", ` +

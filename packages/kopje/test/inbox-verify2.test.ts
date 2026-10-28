@@ -365,11 +365,11 @@ describe("follow requests and relationships", () => {
       ids.push((await accountId(t.h.store, actor.uri))!);
     }
     const first = await t.h.request("/api/v1/follow_requests?limit=2", bearer(t.alice.token));
-    expect(((await first.json()) as { id: string }[]).map((a) => a.id)).toEqual([ids[2], ids[1]]);
+    expect((await first.json<{ id: string }[]>()).map((a) => a.id)).toEqual([ids[2], ids[1]]);
     const next = /<([^>]+)>; rel="next"/.exec(first.headers.get("link") ?? "")?.[1];
     expect(next).toBeDefined();
     const second = await t.h.request(new URL(next!).pathname + new URL(next!).search, bearer(t.alice.token));
-    expect(((await second.json()) as { id: string }[]).map((a) => a.id)).toEqual([ids[0]]);
+    expect((await second.json<{ id: string }[]>()).map((a) => a.id)).toEqual([ids[0]]);
   });
 });
 

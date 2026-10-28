@@ -77,7 +77,7 @@ describe("pins", () => {
     const { alice, bob } = h.users;
     const pin = async (id: string, user = alice) => {
       const response = await act(h, user, `/api/v1/statuses/${id}/pin`);
-      return { status: response.status, body: (await response.json()) as { error?: string } };
+      return { status: response.status, body: await response.json<{ error?: string }>() };
     };
     const refused = (...messages: string[]) => ({
       status: 422,
@@ -188,12 +188,12 @@ describe("pins", () => {
     await sql(h.store, "UPDATE status_pins SET created_at = '2026-10-12T00:00:01.000Z' WHERE status_id = ?", open.id);
     const response = await h.request("/ap/users/alice/collections/featured", AP);
     expect(response.status).toBe(200);
-    const collection = (await response.json()) as {
+    const collection = await response.json<{
       id: string;
       type: string;
       totalItems: number;
       orderedItems: unknown[];
-    };
+    }>();
     // Newest pin first: a public status as its Note, any other by its uri.
     expect(collection).toMatchObject({ id: featured, type: "OrderedCollection", totalItems: 2 });
     expect(collection.orderedItems).toHaveLength(2);

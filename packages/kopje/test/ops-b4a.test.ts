@@ -29,7 +29,7 @@ async function b4aStore(): Promise<{ store: StoreStub; counts: Record<string, nu
     bearer(alice.token, json({ status: "hello @bob" }, { headers: { "Idempotency-Key": "retry-1" } })),
   );
   expect(created.status).toBe(200);
-  const first = (await created.json()) as { id: string };
+  const first = await created.json<{ id: string }>();
   // An edit, a reply (in_reply_to_id and in_reply_to_account_id), a self-reply in the same thread, a boost, a
   // favourite and a bookmark; the reply, boost and favourite notify alice.
   expect(
