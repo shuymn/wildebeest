@@ -1,0 +1,50 @@
+// Unused files, dependencies and exports (`pnpm run knip`, CI's check job). Entries the plugins find (wrangler's
+// `main`, the vitest configs and their setup files, playwright's config and global setup, lefthook, oxlint) are not
+// listed again; the rest are below, each with what loads it.
+{
+  "$schema": "https://unpkg.com/knip@6/schema.json",
+  // `cloudflare:test` and `cloudflare:workers` are workerd's built-in modules, not packages.
+  "ignoreDependencies": ["cloudflare"],
+  "workspaces": {
+    ".": {
+      // The release and CI scripts, run by node from the workflows and package.json.
+      "entry": ["scripts/*.mjs"],
+      "project": ["scripts/**/*.mjs"],
+    },
+    "packages/kopje": {
+      "entry": [
+        // The cutover's maintenance bundles (scripts/build-maintenance.mjs) and the client bundle
+        // (scripts/build-assets.mjs).
+        "src/maintenance-worker.ts",
+        "src/maintenance-render.ts",
+        "src/client/main.ts",
+        // The `kopje-admin` bin is found from package.json; these are run by node or loaded by oxlint.
+        "scripts/*.mjs",
+        "lint/*.js",
+        // Loaded by a computed specifier from browser/render.ts.
+        "browser/fixtures/pages.tsx",
+        // The suites of each vitest config, whose `include` is an absolute path the plugin does not read.
+        "test/**/*.test.ts",
+        "test/bench/*.ts",
+        "test-node/**/*.test.ts",
+        "browser/*.spec.ts",
+        "vitest*.config.ts",
+      ],
+      "project": [
+        "src/**/*.{ts,tsx}",
+        "cli/**/*.js",
+        "scripts/**/*.mjs",
+        "lint/**/*.js",
+        "browser/**/*.{ts,tsx}",
+        "test/**/*.ts",
+        "test-node/**/*.ts",
+        "*.config.ts",
+      ],
+    },
+    // The operator template, outside the pnpm workspace: its entry is wrangler's `main`, and its build script copies
+    // the installed package's assets.
+    "deploy": {
+      "entry": ["scripts/*.mjs"],
+    },
+  },
+}
