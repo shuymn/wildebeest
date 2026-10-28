@@ -3,7 +3,6 @@ import {
   type Account,
   accountPage,
   accountsOf,
-  edgeRangeSql,
   type Page,
   type PageQuery,
   type Present,
@@ -27,6 +26,7 @@ import { leaveConversationsWith } from "./conversations";
 import { retractFollow } from "./inbox";
 import { DOMAIN_BLOCK_CLEANUPS, nextJob, runJobItem } from "./job-attempts";
 import { writeOperation } from "./operation";
+import { edgeRangeSql } from "./windows";
 
 // Blocks, mutes and domain blocks of local users (Mastodon 4.5's BlockService, UnblockService, MuteService,
 // UnmuteService, AccountDomainBlocksController and AfterBlockDomainFromAccountService). Their effect on what a user

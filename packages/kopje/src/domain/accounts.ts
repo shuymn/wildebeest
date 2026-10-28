@@ -78,7 +78,7 @@ import { type CachedImages, cachedImagesOf, cachedImageUrls } from "./remote-med
 import { accountSearchText, queryTerms } from "./search-text";
 import { linkHtml, renderFieldValue } from "./status-text";
 import { unlockChanged } from "./unlock-accepts";
-import { readWindow, singleWindow, type Window, windowJson, windowPage } from "./windows";
+import { edgeRangeSql, readWindow, singleWindow, type Window, windowJson, windowPage } from "./windows";
 
 // Accounts as the Mastodon API (4.0.2) shows them: one presenter, and the account and relationship operations.
 // Every operation takes an account by its API id or by its legacy id (accounts.legacy_id); both resolve to the same
@@ -1815,13 +1815,6 @@ export function relationshipResult(db: Db, viewerId: string, targetId: string, n
 // newest; min_id pages forwards from the given cursor and is returned newest first as well. Cursors stay strings:
 // they are read with CAST(id AS TEXT) and compared in SQL, never as JS numbers (which are exact only up to 2^53).
 export type PageQuery = { maxId?: string; sinceId?: string; minId?: string; limit: number };
-
-// The cursor on an edge table's INTEGER id as a plain range, with `max` and `min` the cursor parameters (NULL for none):
-// no cursor is a REAL beyond either end of the INTEGER range, so every id is inside it (SQLite compares the two types by
-// value). A read in an index ending in the id then starts at the cursor, not at the newest.
-export function edgeRangeSql(column: string, max: string, min: string): string {
-  return `${column} < coalesce(CAST(${max} AS INTEGER), 1e19) AND ${column} > coalesce(CAST(${min} AS INTEGER), -1e19)`;
-}
 
 // A page of a list. `cut`: the read stopped at its candidate window (windows.ts) before the page filled, or an answer
 // without a page stopped at ANSWER_BYTES, so the next link is offered however few items it holds.
