@@ -42,6 +42,9 @@
     "eslint/prefer-spread": "error",
     "eslint/symbol-description": "error",
     "import/export": "error",
+    // A module read at load before its cycle partner has initialized sees undefined (esbuild turns top-level const
+    // into var), so no value import may close a cycle; a type import is erased (test-node/lint-config.test.ts).
+    "import/no-cycle": ["error", { "ignoreTypes": true }],
     "import/no-duplicates": "error",
     "import/no-mutable-exports": "error",
     "oxc/branches-sharing-code": "error",

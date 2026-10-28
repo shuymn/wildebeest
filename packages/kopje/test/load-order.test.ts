@@ -3,9 +3,10 @@ import { expect, it, vi } from "vitest";
 // Bounds computed at module load from another module's export are numbers in the order the Worker loads its modules.
 // The module registry is reset first, since the suites share it (isolate: false) and an earlier one may have loaded
 // these modules in another order; they are then imported dynamically, after the entry, so a sorted import list in this
-// file cannot choose the order either. A module read before its cycle partner has initialized makes the bound NaN
+// file cannot choose the order either. A module read before its cycle partner has initialized would make the bound NaN
 // (remote-suspension.ts SEVER_ROWS reads delivery-bounds.ts; announcements.ts reads custom-emojis.ts
-// MAX_LOCAL_EMOJI_NAMES), so neither reads a module of an import cycle it is in.
+// MAX_LOCAL_EMOJI_NAMES); import/no-cycle (.oxlintrc.json) refuses every value import cycle, and this checks the
+// order at run time.
 it("loads the moderation and announcement bounds as numbers after the Worker entry", async () => {
   vi.resetModules();
   await import("../src/worker");

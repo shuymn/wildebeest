@@ -845,8 +845,6 @@ export function filterStatusMatches(
 // migration 0079_filter_text_units), else from an upper bound of its text (status-presenter.ts filterTextBoundSql),
 // so an unmeasured status may be cut where its whole text would fit; each cut is also bounded by what is left of
 // MAX_FILTER_REQUEST_TEXT, so the budget holds whatever the figures (docs/mastodon-deviations.md).
-// Re-exported as the leaf module's binding, so a module that builds SQL with it at load (status-presenter.ts) reads it
-// initialized whatever the import order: filters.ts is in an import cycle with it.
 export { FILTER_TEXT_UNITS_MAX as MAX_FILTER_TEXT } from "../platform/stored-bounds";
 export const MAX_FILTER_REQUEST_TEXT = 400_000;
 

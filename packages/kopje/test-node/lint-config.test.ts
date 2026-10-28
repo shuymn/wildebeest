@@ -23,4 +23,21 @@ describe("the lint config", () => {
       .toSorted();
     expect(flagged).toEqual(["packages/kopje/src/probe-page.tsx", "packages/kopje/src/probe.ts"]);
   });
+
+  it("refuses an import cycle of values, and passes one closed by a type import", () => {
+    const flagged = lintProbe({
+      "packages/kopje/src/probe-a.ts":
+        'import { b } from "./probe-b";\nexport const a = 1;\nexport const ab = a + b;\n',
+      "packages/kopje/src/probe-b.ts":
+        'import { a } from "./probe-a";\nexport const b = 2;\nexport const ba = a + b;\n',
+      "packages/kopje/src/probe-c.ts":
+        'import { d } from "./probe-d";\nexport type C = { d: number };\nexport const c = d;\n',
+      "packages/kopje/src/probe-d.ts":
+        'import type { C } from "./probe-c";\nexport const d = 1;\nexport const e: C = { d };\n',
+    })
+      .filter((d) => d.code === "import(no-cycle)")
+      .map((d) => d.filename)
+      .toSorted();
+    expect(flagged).toEqual(["packages/kopje/src/probe-a.ts", "packages/kopje/src/probe-b.ts"]);
+  });
 });
