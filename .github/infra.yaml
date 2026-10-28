@@ -94,6 +94,5 @@ spec:
       patterns_allowed:
       - jdx/mise-action@*
       - oven-sh/setup-bun@*
-      - pnpm/action-setup@*
       - shuymn/github-actions/.github/workflows/*@*
     fork_pr_approval: first_time_contributors

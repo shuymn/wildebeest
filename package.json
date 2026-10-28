@@ -25,6 +25,5 @@
 		"check:kopje-package": "node scripts/check-kopje-package.mjs",
 		"test:scripts": "node --test 'scripts/*.test.mjs'",
 		"prepare": "lefthook install"
-	},
-	"packageManager": "pnpm@10.34.7"
+	}
 }

@@ -7,13 +7,13 @@ catalog:
   # version may change the bundle's bytes, which the build then republishes under a new name.
   esbuild: 0.28.2
 
-# Allow dependency build scripts only for reviewed packages.
-onlyBuiltDependencies:
-  - esbuild
-  - lefthook
-  - sharp
-  - unrs-resolver
-  - workerd
+# Dependency build scripts, each reviewed: none runs, since every one of these packages takes its platform binary from
+# optionalDependencies.
+allowBuilds:
+  esbuild: false
+  lefthook: false
+  unrs-resolver: false
+  workerd: false
 
 # Fail installs when an unreviewed dependency build script appears.
 strictDepBuilds: true

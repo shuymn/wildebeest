@@ -1,7 +1,18 @@
-[settings]
-idiomatic_version_file_enable_tools = ["node", "pnpm"]
-
+# Each tool tracks its major version; mise.lock pins the exact versions and checksums, and
+# .github/workflows/mise-update.yml advances it.
 [tools]
-betterleaks = "1.9.0"
-# Applies the repository settings declared in .github/infra.yaml.
-"github:babarot/gh-infra" = "0.17.4"
+node = "24"
+pnpm = "12"
+# Linters the shared security and gha workflows also run; the git hooks use these so local checks match CI.
+actionlint = "1"
+betterleaks = "1"
+ghalint = "1"
+# Applies the repository settings declared in .github/infra.yaml. A 0.x minor can break, so the range stays on 0.17.
+"github:babarot/gh-infra" = "0.17"
+
+[settings]
+lockfile = true
+lockfile_platforms = ["macos-arm64", "linux-x64"]
+locked = true
+# Matches pnpm-workspace.yaml's minimumReleaseAge and the shared Renovate preset's.
+minimum_release_age = "3d"
