@@ -165,7 +165,7 @@ function identifier(text, at) {
  * @param {string} text
  * @param {number} at
  */
-export function scanLiteral(text, at) {
+function scanLiteral(text, at) {
   if (text[at] === "'") {
     let i = at + 1;
     for (;;) {

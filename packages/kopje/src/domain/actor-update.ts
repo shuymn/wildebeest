@@ -145,7 +145,7 @@ export function moderationUpdate(db: Db, accountId: string, now: number): Delive
 }
 
 // `attributionDomains`, as ActivityPub::ActorSerializer adds it: only when the account has one.
-export function attributionDomainsOf(stored: string): { attributionDomains?: string[] } {
+function attributionDomainsOf(stored: string): { attributionDomains?: string[] } {
   const domains = JSON.parse(stored) as string[];
   return domains.length === 0 ? {} : { attributionDomains: domains };
 }

@@ -1,0 +1,60 @@
+// Unused files, dependencies and exports (`pnpm run knip`, CI's check job). Entries the plugins find (wrangler's
+// `main`, the vitest configs and their setup files, playwright's config and global setup, lefthook, oxlint) are not
+// listed again; the rest are below, each with what loads it. Tests count as users of an export. A constant exported
+// under a second name on purpose, a bound of its own that equals another (EMIT_BYTES = TARGET_CHUNK_BYTES), is
+// tagged `/** @alias */` so it is not reported as a duplicate.
+{
+  "$schema": "https://unpkg.com/knip@6/schema.json",
+  // `cloudflare:test` and `cloudflare:workers` are workerd's built-in modules, not packages.
+  "ignoreDependencies": ["cloudflare"],
+  "workspaces": {
+    ".": {
+      // The release scripts' tests (`pnpm run test:scripts`). The scripts themselves are found from the workflows and
+      // package.json; kopje-release-lib.mjs is the module they import.
+      "entry": ["scripts/*.test.mjs"],
+      "project": ["scripts/**/*.mjs"],
+    },
+    "packages/kopje": {
+      "entry": [
+        // The cutover's maintenance bundles (scripts/build-maintenance.mjs) and the client bundle
+        // (scripts/build-assets.mjs).
+        "src/maintenance-worker.ts",
+        "src/maintenance-render.ts",
+        "src/client/main.ts",
+        // The `kopje-admin` bin and scripts/build-{assets,package}.mjs are found from package.json.
+        // build-maintenance.mjs and mastodon-scopes.mjs are run by hand too, but are not entries: the build and the
+        // tests import them, so their exports are checked.
+        // The oxlint JS plugin (.oxlintrc.json `jsPlugins`), whose default export oxlint loads.
+        "lint/signing-keys.js",
+        // Loaded by a computed specifier from browser/render.ts.
+        "browser/fixtures/pages.tsx",
+        // The suites of each vitest config, whose `include` is an absolute path the plugin does not read. No module
+        // imports a suite, so these name no shared helper.
+        "test/**/*.test.ts",
+        "test-node/**/*.test.ts",
+        "browser/*.spec.ts",
+        "vitest*.config.ts",
+      ],
+      "project": [
+        "src/**/*.{ts,tsx}",
+        "cli/**/*.js",
+        "scripts/**/*.mjs",
+        "lint/**/*.js",
+        "browser/**/*.{ts,tsx}",
+        "test/**/*.ts",
+        "test-node/**/*.ts",
+        "*.config.ts",
+      ],
+      "ignoreIssues": {
+        // Written by scripts/build-assets.mjs, which reads its PREVIOUS_* constants back as text to keep the previous
+        // release's assets; the pages import only some of them.
+        "src/web/asset-versions.ts": ["exports"],
+      },
+    },
+    // The operator template, outside the pnpm workspace: its entry is wrangler's `main`, and its build script copies
+    // the installed package's assets.
+    "deploy": {
+      "entry": ["scripts/assets.mjs"],
+    },
+  },
+}

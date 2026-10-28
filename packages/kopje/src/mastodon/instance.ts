@@ -31,8 +31,8 @@ import { MAX_DESCRIPTION } from "./media";
 // Streaming and translation are not chosen by either number: clients use configuration.urls.streaming and
 // configuration.translation.enabled (false).
 
-export const MASTODON_VERSION = "4.5.0";
-export const API_VERSIONS = { mastodon: 7 };
+const MASTODON_VERSION = "4.5.0";
+const API_VERSIONS = { mastodon: 7 };
 
 const SOURCE_URL = "https://github.com/shuymn/kopje";
 

@@ -37,8 +37,8 @@ import { rewrapKeys } from "./key-rewrap";
 // The maintenance gate does not apply: these routes are how an operator works on a Store in maintenance.
 
 export const ADMIN_PREFIX = "/admin";
-export const IMPORT_TOKEN_HEADER = "Kopje-Import-Token";
-export const IMPORT_SESSION_HEADER = "Kopje-Import-Session";
+const IMPORT_TOKEN_HEADER = "Kopje-Import-Token";
+const IMPORT_SESSION_HEADER = "Kopje-Import-Session";
 const MIN_IMPORT_TOKEN_LENGTH = 32;
 const JSON_BODY_LIMIT = 1024 * 1024;
 // A chunk of statements plus room for nothing else; the Store refuses anything larger.

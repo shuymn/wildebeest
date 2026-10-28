@@ -70,14 +70,14 @@ export const GROUP_COUNT = 400;
 // How many of a group's own notifications, shown or hidden, a read of the group by its key walks to find its newest
 // shown one (firstOfGroup), through the group index (notifications_group): a group whose newest GROUP_DISCOVERY are all
 // hidden is not found (404), whatever a page of the list shows.
-export const GROUP_DISCOVERY = 20_000;
+const GROUP_DISCOVERY = 20_000;
 
 // The types whose notifications show their status (REST::NotificationGroupSerializer#status_type?).
 const STATUS_TYPES = new Set(["favourite", "reblog", "status", "mention", "poll", "update", "quote", "quoted_update"]);
 
 // REST::NotificationGroupSerializer. most_recent_notification_id is a number, as Mastodon renders it; the page fields
 // are present in a page of groups only.
-export type NotificationGroup = {
+type NotificationGroup = {
   group_key: string;
   notifications_count: number;
   type: string;
@@ -101,7 +101,7 @@ export type GroupedNotifications = {
   notification_groups: NotificationGroup[];
 };
 
-export type ExpandAccounts = "full" | "partial_avatars";
+type ExpandAccounts = "full" | "partial_avatars";
 
 // The viewer's notifications the rule shows them in `scope` that match `where` (over the parameters: ?1 is the viewer,
 // ?2 the time of the read), in the order and number `tail` gives.

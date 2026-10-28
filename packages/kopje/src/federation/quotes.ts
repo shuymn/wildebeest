@@ -38,7 +38,7 @@ import { fetchRemoteStatus, idOf } from "./remote-status";
 // origin is fetched.
 
 // A round's claim must outlast the round (domain/quotes.ts QUOTE_LEASE_MS): twice its worst case of fetching.
-export const QUOTE_ROUND_WORST_MS = QUOTE_ROUND * QUOTE_STAGES * REQUEST_DEADLINE_MS;
+const QUOTE_ROUND_WORST_MS = QUOTE_ROUND * QUOTE_STAGES * REQUEST_DEADLINE_MS;
 if (QUOTE_LEASE_MS < 2 * QUOTE_ROUND_WORST_MS) {
   throw new Error("QUOTE_LEASE_MS must be at least twice a round of QUOTE_ROUND quotes of QUOTE_STAGES stages");
 }
@@ -91,7 +91,7 @@ async function loadStatus(uri: string, origin: string, loader: DocumentLoader): 
 }
 
 // A stamp as compacted JSON with the ActivityStreams context: ids only.
-export function stampOf(document: unknown): StampInput | null {
+function stampOf(document: unknown): StampInput | null {
   if (!isObject(document)) {
     return null;
   }

@@ -36,7 +36,7 @@ export type EmojiUploadDeps = {
   token: string;
 };
 
-export type EmojiUploadRefusal =
+type EmojiUploadRefusal =
   | EmojiRefusal
   | {
       ok: false;

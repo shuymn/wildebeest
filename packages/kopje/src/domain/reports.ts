@@ -58,7 +58,7 @@ import { edgeRangeSql } from "./windows";
 export const MAX_REPORT_STATUSES = 100;
 export const MAX_FORWARD_DOMAINS = 100;
 // Report::COMMENT_SIZE_LIMIT (app/models/report.rb:30).
-export const MAX_REPORT_COMMENT = 1_000;
+const MAX_REPORT_COMMENT = 1_000;
 
 // Report's category enum (app/models/report.rb:62-67).
 const CATEGORIES = new Set(["other", "spam", "legal", "violation"]);
@@ -381,6 +381,7 @@ export const MAX_ADMIN_REPORTS_LIMIT = 200;
 // The statuses one page of the index presents at most: a page stops before a report that would pass this, after at
 // least one, and offers the next page. One report's worth (MAX_REPORT_STATUSES), which bounds the statuses a page
 // reads and presents; its bytes are bounded by ANSWER_BYTES (listAdminReports).
+/** @alias */
 export const ADMIN_REPORT_STATUS_BUDGET = MAX_REPORT_STATUSES;
 
 // The rules of the instance, read once per response.

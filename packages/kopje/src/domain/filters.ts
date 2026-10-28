@@ -18,10 +18,9 @@ import { FILTER_MATCH_COLUMNS } from "./status-rows";
 
 // CustomFilter::VALID_CONTEXTS, CustomFilter's action enum, TITLE_LENGTH_LIMIT and
 // CustomFilterKeyword::KEYWORD_LENGTH_LIMIT.
-export const FILTER_CONTEXTS = ["home", "notifications", "public", "thread", "account"] as const;
-export type FilterContext = (typeof FILTER_CONTEXTS)[number];
-export const FILTER_ACTIONS = ["warn", "hide", "blur"] as const;
-export type FilterAction = (typeof FILTER_ACTIONS)[number];
+const FILTER_CONTEXTS = ["home", "notifications", "public", "thread", "account"] as const;
+const FILTER_ACTIONS = ["warn", "hide", "blur"] as const;
+type FilterAction = (typeof FILTER_ACTIONS)[number];
 export const MAX_FILTER_TITLE = 256;
 export const MAX_FILTER_KEYWORD = 512;
 
@@ -30,7 +29,7 @@ export const MAX_FILTER_KEYWORD = 512;
 // with its rules (RES-3). Generous for a person's filters: at most 1,000 keywords and 10,000 filtered statuses.
 export const MAX_FILTERS = 50;
 export const MAX_FILTER_KEYWORDS = 20;
-export const MAX_FILTER_STATUSES = 200;
+const MAX_FILTER_STATUSES = 200;
 
 // REST::FilterKeywordSerializer and REST::FilterStatusSerializer.
 export type FilterKeyword = { id: string; keyword: string; whole_word: boolean };
@@ -177,7 +176,7 @@ function expiresAt(expiresIn: string, now: string): string | null | undefined {
 
 const INVALID_DATE = "Invalid date supplied";
 
-export type FilterError =
+type FilterError =
   | { status: "not_found" }
   // A validation failure: Rails' messages, answered as "Validation failed: ..." with 422.
   | { status: "invalid"; errors: string[] }

@@ -100,8 +100,8 @@ const LAST_DAY = dayNumber("9999-12-31");
 // The days a start_at or end_at may name, both as written and as a UTC instant: after the Gregorian reform, where
 // Ruby's Date (Julian before 1582-10-15) and JavaScript's proleptic Gregorian calendar agree, and a year short of
 // 9999, so the axis, the windows and the buckets keep four-digit years. Outside them a date is invalid (422).
-export const MEASURE_FIRST_DAY = dayNumber("1583-01-01");
-export const MEASURE_LAST_DAY = dayNumber("9998-12-31");
+const MEASURE_FIRST_DAY = dayNumber("1583-01-01");
+const MEASURE_LAST_DAY = dayNumber("9998-12-31");
 
 function floorDiv(a: bigint, b: bigint): bigint {
   const q = a / b;
@@ -119,7 +119,7 @@ export function measurableTime(time: MeasureTime): boolean {
 export type MeasureTime = { date: number; ns: bigint };
 
 // Calendar days, both included, as days since 1970-01-01; none when first > last.
-export type DayWindow = { first: number; last: number };
+type DayWindow = { first: number; last: number };
 
 // A request's dates: the series' axis (UTC dates), the total's window and the previous one.
 export type MeasurePeriod = { axis: string[]; current: DayWindow; previous: DayWindow };

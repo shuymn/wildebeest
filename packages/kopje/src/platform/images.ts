@@ -145,7 +145,7 @@ export { IMAGE_MATRIX_LIMIT };
 // avatar.rb:6-7, 25, header.rb:6-7, 26, with vips, config/application.rb:97): less than 8 MB (8,388,608 bytes is
 // refused), JPEG, PNG, GIF or WebP by signature (MEDIA-4).
 export const PROFILE_IMAGE_LIMIT = 8 * 1024 * 1024;
-export const PROFILE_IMAGE_TYPES: readonly ImageType[] = ["image/jpeg", "image/png", "image/gif", "image/webp"];
+const PROFILE_IMAGE_TYPES: readonly ImageType[] = ["image/jpeg", "image/png", "image/gif", "image/webp"];
 
 export const PROFILE_TOO_LARGE = "file size must be less than 8 MB";
 

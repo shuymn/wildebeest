@@ -97,7 +97,7 @@ export const FAILED_RESET_MS = 24 * 60 * 60 * 1000;
 export const EMOJI_UNSEEN_MS = 90 * 24 * 60 * 60 * 1000;
 export const EMOJI_SEEN_STEP_MS = 24 * 60 * 60 * 1000;
 export const EXPIRE_PENDING_MS = 7 * 24 * 60 * 60 * 1000;
-export const EXPIRE_BATCH = 500;
+const EXPIRE_BATCH = 500;
 export const LANE0_CLAIMS = 24;
 // Lane 1 (attachments' files, up to 40 MiB) claims a round, one at a time.
 export const LANE1_CLAIMS = 6;
@@ -114,22 +114,22 @@ export const RETRY_BATCH = 250;
 export const DELETE_SPLITS = 8;
 export const DELETE_BACKOFF_MS = 5 * 60 * 1000;
 export const DELETE_BACKOFF_MAX_MS = 24 * 60 * 60 * 1000;
-export const RESERVATION_EXPIRY_BATCH = 500;
+const RESERVATION_EXPIRY_BATCH = 500;
 export const VALIDITY_WALK = 500;
-export const SUSPENDED_ACCOUNTS = 200;
-export const SUSPENDED_SLOTS = 200;
-export const RECLAIM_VICTIMS = 200;
+const SUSPENDED_ACCOUNTS = 200;
+const SUSPENDED_SLOTS = 200;
+const RECLAIM_VICTIMS = 200;
 export const BACKFILL_BATCH = 200;
-export const BACKFILL_DELAY_MS = 60 * 60 * 1000;
+const BACKFILL_DELAY_MS = 60 * 60 * 1000;
 export const AUDIT_CHUNK = 500;
 // PITR: a restore younger than this stops the round before any write or R2 operation; validation heads at most this
 // many variants a round.
 export const REMOTE_SETTLE_MS = 20 * 60 * 1000;
-export const VALIDATION_HEADS = 100;
+const VALIDATION_HEADS = 100;
 // The failed heads in a row after which validation handles an object as missing.
 export const VALIDATION_FAILURES = 3;
-export const ORPHAN_SWEEP_MS = 60 * 60 * 1000;
-export const ORPHAN_GRACE_MS = 24 * 60 * 60 * 1000;
+const ORPHAN_SWEEP_MS = 60 * 60 * 1000;
+const ORPHAN_GRACE_MS = 24 * 60 * 60 * 1000;
 // The backfill's coverage version: bumped when a release caches another kind.
 const COVERAGE_VERSION = 3;
 
@@ -211,7 +211,7 @@ function chargeObject(db: Db, token: string, change: { bytes?: number; doomed?: 
 
 export type RemoteMediaUsage = { bytes: number; doomed: number; pending: number };
 
-export function usage(db: Db): RemoteMediaUsage {
+function usage(db: Db): RemoteMediaUsage {
   return (
     db.first<RemoteMediaUsage>("SELECT bytes, doomed, pending FROM remote_media_usage WHERE id = 1") ?? {
       bytes: 0,

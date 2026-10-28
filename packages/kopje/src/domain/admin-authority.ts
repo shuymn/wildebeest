@@ -27,7 +27,7 @@ export function accessAdminRefusal(db: Db, authority: ImportAuthority, refusal: 
 //   none      no local account's email matches
 //   suspended the one match is suspended
 //   ambiguous two or more local accounts match (local_accounts.email is unique only byte for byte)
-export type OAuthAdminStatus = "ok" | "unset" | "none" | "suspended" | "ambiguous";
+type OAuthAdminStatus = "ok" | "unset" | "none" | "suspended" | "ambiguous";
 
 export type OAuthAdmin = {
   status: OAuthAdminStatus;

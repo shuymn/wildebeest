@@ -66,7 +66,7 @@ function labels(domain: string): number {
 // Mastodon's DomainValidator (app/validators/domain_validator.rb:4-6, 24-31): a normalized domain is shorter than 256
 // characters, each label 1 to 63 long.
 export const MAX_DOMAIN_LENGTH = 255;
-export const MAX_LABEL_LENGTH = 63;
+const MAX_LABEL_LENGTH = 63;
 // A raw domain (trimmed) longer than this is refused before it is normalized: no normalization of a longer one gives a
 // domain within MAX_DOMAIN_LENGTH.
 export const MAX_DOMAIN_INPUT = 1_024;
@@ -111,7 +111,7 @@ export function reportsRejected(db: Db, domain: string): boolean {
 // Resets the domain job (remote-suspension.ts) in the caller's transaction: its walks start again, its follow bound is
 // the newest follow, and a failing or parked job is fresh again (a new generation, RES-5). Here, not there:
 // deliveries.ts reads hostCovered, and remote-suspension.ts deliveries.ts.
-export function resetDomainJob(db: Db): void {
+function resetDomainJob(db: Db): void {
   db.run(
     `INSERT INTO remote_moderation_jobs (kind, subject, mode, follow_bound, phase, cursor)
 		VALUES ('domain', '', 'domain', (SELECT coalesce(max(id), 0) FROM follows), 'clear', '')

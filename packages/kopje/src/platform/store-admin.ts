@@ -75,7 +75,7 @@ export type Result<T> = ({ ok: true } & T) | Refusal;
 
 // Fault-injection points for tests. Throwing at a point simulates a failure there; the sql handle lets a test leave
 // a durable write behind as a misbehaving storage layer could.
-export type AdminFaultPoint = "import-chunk-in-transaction" | "import-chunk-after-commit";
+type AdminFaultPoint = "import-chunk-in-transaction" | "import-chunk-after-commit";
 
 export type AdminOptions = {
   source: { build: string; version: string };
@@ -120,14 +120,14 @@ export type QueryResult = {
   truncated: boolean;
 };
 
-export const DEFAULT_LEASE_MS = 10 * 60 * 1000;
+const DEFAULT_LEASE_MS = 10 * 60 * 1000;
 const MIN_LEASE_MS = 30 * 1000;
 const MAX_LEASE_MS = 60 * 60 * 1000;
 // The work of one RPC is bounded by what it writes, not by the bytes it receives. A chunk of more than one statement
 // holds at most MAX_IMPORT_CHUNK_STATEMENTS statements in IMPORT_CHUNK_WORK_BYTES; a single larger statement (one row,
 // which the platform limits to 2 MB stored) may come alone in up to MAX_IMPORT_CHUNK_BYTES. Staged links and the
 // reset's unlinking rewrite at most LINK_STEP_BYTES of rows per call (store-import.ts).
-export const MAX_IMPORT_CHUNK_BYTES = 16 * 1024 * 1024;
+const MAX_IMPORT_CHUNK_BYTES = 16 * 1024 * 1024;
 export const IMPORT_CHUNK_WORK_BYTES = 4 * 1024 * 1024;
 export const MAX_IMPORT_CHUNK_STATEMENTS = 2000;
 const LINK_STEP_BYTES = 1024 * 1024;
@@ -136,7 +136,7 @@ const MAX_QUERY_ROWS = 1000;
 const MAX_QUERY_BYTES = 4 * 1024 * 1024;
 const PITR_WINDOW_MS = 30 * 24 * 60 * 60 * 1000;
 // A token import whose session made no successful step for this long may be abandoned with IMPORT_TOKEN.
-export const STALE_IMPORT_MS = 15 * 60 * 1000;
+const STALE_IMPORT_MS = 15 * 60 * 1000;
 const RESET_BATCH_ROWS = 2000;
 const RESET_STEPS = 20;
 // Keys of the cutover's rollback journal in inbound_spool: pending, and kept after a failed verification.

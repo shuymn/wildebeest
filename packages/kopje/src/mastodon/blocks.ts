@@ -34,7 +34,7 @@ const MAX_EXPIRY = Date.UTC(9999, 11, 31, 23, 59, 59, 999);
 
 // When a mute of `duration` seconds expires, as Mastodon reads the parameter (`to_i`: an integer prefix, anything else
 // 0): null for 0 (never); a negative duration has already expired, and a very long one ends at MAX_EXPIRY.
-export function muteExpiry(duration: string | undefined, now: number): string | null {
+function muteExpiry(duration: string | undefined, now: number): string | null {
   const seconds = Number.parseInt(duration ?? "", 10);
   if (Number.isNaN(seconds) || seconds === 0) {
     return null;

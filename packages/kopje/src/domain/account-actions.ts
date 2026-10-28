@@ -63,7 +63,7 @@ export type CredentialsUpdated =
 
 // In the transaction of a credentials update, after `locked` is applied: relocking clears the job, and unlocking with a
 // pending request starts it. True when a job is (still) running for the account.
-export function unlockChanged(db: Db, accountId: string, wasLocked: boolean, locked: boolean | undefined): boolean {
+function unlockChanged(db: Db, accountId: string, wasLocked: boolean, locked: boolean | undefined): boolean {
   if (locked === true) {
     db.run("UPDATE local_accounts SET accept_requests_after = NULL WHERE account_id = ?", accountId);
     return false;

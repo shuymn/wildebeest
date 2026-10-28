@@ -156,7 +156,7 @@ export function previousUserKek(config: Config): string {
 }
 
 // The default share is a tenth of the instance budget: Kopje serves up to about ten local accounts.
-export const ACCOUNT_SHARE_DIVISOR = 10;
+const ACCOUNT_SHARE_DIVISOR = 10;
 
 export function accountMonthlyTransforms(config: Config): number {
   return (

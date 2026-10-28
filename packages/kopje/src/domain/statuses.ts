@@ -435,8 +435,7 @@ export type Prepared =
   | { status: "unexpected_mentions"; accountIds: string[] };
 
 // Mastodon's statuses.errors.quoted_user_not_mentioned, as ActiveRecord::RecordInvalid words it.
-export const QUOTED_USER_NOT_MENTIONED =
-  "Validation failed: Cannot quote a non-mentioned user in a Private Mention post.";
+const QUOTED_USER_NOT_MENTIONED = "Validation failed: Cannot quote a non-mentioned user in a Private Mention post.";
 
 // PostStatusService's checks, before any write, including the raw bound; a quote permits blank text. `scheduledId` is
 // the scheduled status being published, whose media it attaches (null: none). R36 is checked in the writing
@@ -693,7 +692,7 @@ function writeQuote(
 }
 
 // An Idempotency-Key answers for an hour after the post it made (PostStatusService: `redis.setex(key, 3_600, ...)`).
-export const IDEMPOTENCY_MS = 60 * 60 * 1000;
+const IDEMPOTENCY_MS = 60 * 60 * 1000;
 
 // Whether the row's `createdAt` is within the key's hour before the time whose cutoff `cutoff` binds (keyCutoff). The
 // time is read as the ISO form Kopje writes (isoTimeSql), so an imported value that is not one, SQLite's 'now'

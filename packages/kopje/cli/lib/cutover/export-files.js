@@ -10,8 +10,8 @@ import { ExportError } from "./sql-script.js";
 // must stay under 512 MiB. The whole export is capped at 1 GiB: the converter reads one file at a time but keeps the
 // legacy and the Kopje database in memory, about three times the export at peak, which stays within a workstation's
 // memory. Exports larger than that are well past the size a single-user or small legacy instance reaches.
-export const MAX_FILE_BYTES = 512 * 1024 * 1024 - 1;
-export const MAX_EXPORT_BYTES = 1024 * 1024 * 1024;
+const MAX_FILE_BYTES = 512 * 1024 * 1024 - 1;
+const MAX_EXPORT_BYTES = 1024 * 1024 * 1024;
 
 /** @param {string} path */
 export function exportFiles(path) {

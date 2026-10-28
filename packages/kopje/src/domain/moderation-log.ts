@@ -81,8 +81,8 @@ export type ModerationLogEntry = {
   created_at: string;
 };
 
-export const MODERATION_LOG_PAGE = 50;
-export const MAX_MODERATION_LOG_PAGE = 200;
+const MODERATION_LOG_PAGE = 50;
+const MAX_MODERATION_LOG_PAGE = 200;
 
 // A page of the log, newest first, below `before` (a row id) when given; `next` continues it.
 export const moderationLog = readOperation<

@@ -107,7 +107,7 @@ export function keyHashtag(key: string): { stream: HashtagStream; tag: string } 
   return key.startsWith("hashtag:") ? { stream: "hashtag", tag: key.slice("hashtag:".length) } : null;
 }
 
-export function keyPublicFeed(key: string): PublicFeed | null {
+function keyPublicFeed(key: string): PublicFeed | null {
   return PUBLIC_STREAMS.includes(key)
     ? { local: key.includes(":local"), remote: key.includes(":remote"), onlyMedia: key.endsWith(":media") }
     : null;
@@ -123,7 +123,7 @@ export function isFeedKey(key: string): boolean {
 // covers both).
 export type StreamGrant = { statuses: boolean; notifications: boolean };
 
-export function streamGrant(scopes: readonly string[]): StreamGrant {
+function streamGrant(scopes: readonly string[]): StreamGrant {
   return {
     statuses: grantsAny(scopes, "read:statuses"),
     notifications: grantsAny(scopes, "read:notifications"),
@@ -134,7 +134,7 @@ export function maySubscribe(grant: StreamGrant, stream: string): boolean {
   return stream === "user:notification" ? grant.notifications : grant.statuses;
 }
 
-export function carriesNotifications(grant: StreamGrant, key: string): boolean {
+function carriesNotifications(grant: StreamGrant, key: string): boolean {
   switch (key) {
     case "user:notification":
       return grant.notifications;

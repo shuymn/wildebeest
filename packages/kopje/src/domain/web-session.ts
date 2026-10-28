@@ -59,7 +59,7 @@ export function interactionTarget(value: string | null | undefined): string | nu
 }
 
 // How long a sign-in may take (the login cookie's and the code's lifetime).
-export const LOGIN_ATTEMPT_MS = 10 * 60 * 1000;
+const LOGIN_ATTEMPT_MS = 10 * 60 * 1000;
 
 // Expired attempts pruned per new attempt.
 const PRUNE_PER_LOGIN = 20;
@@ -96,7 +96,7 @@ function endSession(db: Db, clientId: string, tokenHash: string): void {
   db.run("DELETE FROM oauth_tokens WHERE token_hash = ? AND client_id = ? AND kind = 'access'", tokenHash, clientId);
 }
 
-export type WebClientInput = { clientId: string; secret: string; redirectUri: string; now: number };
+type WebClientInput = { clientId: string; secret: string; redirectUri: string; now: number };
 
 // The web client's id, created on first use. Its redirect URI follows the fixed domain the caller derives it from; the
 // row is written only when it is missing or differs.
@@ -298,7 +298,7 @@ function webOperation<I, O>(
   });
 }
 
-export type Authorization = {
+type Authorization = {
   clientId: string;
   name: string;
   website: string | null;

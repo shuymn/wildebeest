@@ -120,7 +120,7 @@ export function parse(source: Source): Parsed {
 // - an empty statement in a statement list (`;`) is dropped; one that is a loop's or an if's body is kept;
 // - parentheses are not nodes (ParenthesizedExpression and TSParenthesizedType are unwrapped; parse() keeps none).
 // Line breaks, semicolons and trailing commas are not in the tree.
-export function keyOf(node: Node): string {
+function keyOf(node: Node): string {
   const n = node as Node & Record<string, unknown>;
   if (n.type === "ParenthesizedExpression") {
     return keyOf(n.expression);
