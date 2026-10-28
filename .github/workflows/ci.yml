@@ -1,4 +1,4 @@
-name: Pull request checks
+name: CI
 on:
   push:
     branches:
@@ -43,7 +43,7 @@ jobs:
             git diff --no-renames --name-only HEAD^1 HEAD | bash scripts/test-affected.sh suites | tee -a "$GITHUB_OUTPUT"
             exit 0
           fi
-          passed=$(gh run list --repo "$REPO" --workflow PRs.yml --branch main --event push --status success \
+          passed=$(gh run list --repo "$REPO" --workflow ci.yml --branch main --event push --status success \
             --limit 1 --json headSha --jq '.[0].headSha // ""' || true)
           if [[ "$passed" =~ ^[0-9a-f]{40}$ ]] && git fetch --quiet --no-tags --depth=1 origin "$passed"; then
             echo "compared with $passed, the last main run that passed"
@@ -52,7 +52,7 @@ jobs:
             printf 'kopje=true\nkopje_code=true\n' | tee -a "$GITHUB_OUTPUT"
           fi
 
-  test-api:
+  test:
     # The slowest shard has taken up to 10.3 minutes on a hosted runner.
     timeout-minutes: 15
     runs-on: ubuntu-latest
@@ -83,7 +83,7 @@ jobs:
         run: bash scripts/test-affected.sh --shard "$SHARD"
 
   # Formatting is checked for every change; Kopje's lint, types and checks only when its suites are affected.
-  lint:
+  check:
     timeout-minutes: 10
     runs-on: ubuntu-latest
     needs: changes
@@ -135,7 +135,7 @@ jobs:
   # axe in both colour schemes. Firefox and WebKit are checked by hand before a UI release. The limit holds the worst
   # case: three timed-out downloads (8 min 15 s with the kill grace) after the install and the system dependencies,
   # then the tests (seconds) and the artifact upload.
-  test-browser:
+  browser:
     timeout-minutes: 15
     runs-on: ubuntu-latest
     needs: changes

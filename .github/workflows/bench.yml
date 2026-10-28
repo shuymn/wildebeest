@@ -1,4 +1,4 @@
-name: Kopje migration bench
+name: Migration bench
 # Times Kopje's release-range upgrade on a GitHub-hosted runner, so the measure never shares a machine with other
 # work (scripts/kopje-bench-range.sh). It runs for a pull request that changes the migrations, their registry or the
 # bench itself. Changes to the upgrade code (store-kernel.ts) or the toolchain are measured by the dispatch every
@@ -11,7 +11,7 @@ on:
       - "packages/kopje/test/bench/**"
       - "packages/kopje/vitest.bench.config.ts"
       - "scripts/kopje-bench-range.sh"
-      - ".github/workflows/kopje-bench.yml"
+      - ".github/workflows/bench.yml"
   workflow_dispatch:
 
 permissions: {}

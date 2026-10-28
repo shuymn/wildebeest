@@ -1,4 +1,4 @@
-name: Release kopje
+name: Release
 # Publishes the kopje npm package and its GitHub release for a tag kopje-v<semver> on a commit of main.
 # npm trusted publishing (OIDC) authenticates the publish, so no npm token is stored; npm adds provenance.
 # The one-time setup and the release steps are in packages/kopje/RELEASING.md.
@@ -81,9 +81,8 @@ jobs:
       - name: Install
         run: pnpm install --frozen-lockfile
 
-      # A push to main runs the pull request checks (PRs.yml), so a tagged commit has usually passed them already.
-      # When they did not pass on it (failed, cancelled, never ran, or still running after 20 minutes), the lint, types
-      # and suites run here instead.
+      # A push to main runs CI (ci.yml), so a tagged commit has usually passed it already. When CI did not pass on it
+      # (failed, cancelled, never ran, or still running after 20 minutes), the lint, types and suites run here instead.
       - name: Check main's checks on this commit
         id: main_ci
         env:
