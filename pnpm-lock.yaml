@@ -91,8 +91,8 @@ catalogs:
       specifier: 2.18.1
       version: 2.18.1
     temporal-polyfill:
-      specifier: 1.0.5
-      version: 1.0.5
+      specifier: 1.0.6
+      version: 1.0.6
     typescript:
       specifier: 7.0.2
       version: 7.0.2
@@ -208,7 +208,7 @@ importers:
         version: 2.18.1
       temporal-polyfill:
         specifier: 'catalog:'
-        version: 1.0.5
+        version: 1.0.6
       typescript:
         specifier: 'catalog:'
         version: 7.0.2
@@ -1991,8 +1991,8 @@ packages:
     resolution: {integrity: sha512-SS+jx45GF1QjgEXQx4NJZV9ImqmO2NPz5FNsIHrsDjh2YsHnawpan7SNQ1o8NuhrbHZy9AZhIoCUiCeaW/C80g==}
     engines: {node: '>=18'}
 
-  temporal-polyfill@1.0.5:
-    resolution: {integrity: sha512-+H/mmY74i6wXCMcjIhGuSnODcyZnc4eois2myhOyX0UqRAKNXQY5m9iB1en5jQ/n4SXtjLXo1ElBI5bmn8tZwQ==}
+  temporal-polyfill@1.0.6:
+    resolution: {integrity: sha512-tYyEry1HLGUDbm2356W3iYD0OZdo7rlP7h98Zr/EnjqLZQwTAfcBDUvJnJbfA15v/vQad57hJZScG5O0W2oKEA==}
 
   temporal-spec@1.0.1:
     resolution: {integrity: sha512-wxVoanmDeavXie1vu2JaQ3WIc3JZnWAOYFBsJyATaVsXsycKYUflGsyBmrRSnoCpZJpwPyr38VpgSUlQ8CbFxg==}
@@ -2417,7 +2417,7 @@ snapshots:
       json-canon: 1.0.1
       jsonld: 9.0.0
       structured-field-values: 2.0.4
-      temporal-polyfill: 1.0.5
+      temporal-polyfill: 1.0.6
       urlpattern-polyfill: 10.1.0
 
   '@fedify/testing@2.4.4(@fedify/fedify@2.4.4)':
@@ -2426,7 +2426,7 @@ snapshots:
       '@fedify/vocab': 2.4.4
       '@fedify/vocab-runtime': 2.4.4
       es-toolkit: 1.46.1
-      temporal-polyfill: 1.0.5
+      temporal-polyfill: 1.0.6
 
   '@fedify/uri-template@2.4.4': {}
 
@@ -2460,7 +2460,7 @@ snapshots:
       es-toolkit: 1.46.1
       jsonld: 9.0.0
       pkijs: 3.4.1
-      temporal-polyfill: 1.0.5
+      temporal-polyfill: 1.0.6
 
   '@fedify/webfinger@2.4.4':
     dependencies:
@@ -3513,7 +3513,7 @@ snapshots:
 
   supports-color@10.2.2: {}
 
-  temporal-polyfill@1.0.5:
+  temporal-polyfill@1.0.6:
     dependencies:
       temporal-spec: 1.0.1
       temporal-utils: 1.0.3
