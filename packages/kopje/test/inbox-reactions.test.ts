@@ -341,7 +341,7 @@ describe("ID-7: reaction changes in every arrival order", () => {
           // The arrival order: by the generated keys, ties in sending order.
           const queue = activities
             .map((activity, i) => ({ activity, key: keys[i % keys.length]! + i / 100 }))
-            .sort((a, b) => a.key - b.key)
+            .toSorted((a, b) => a.key - b.key)
             .map((entry) => entry.activity);
           let deliveries = 0;
           for (let next = queue.shift(); next !== undefined; next = queue.shift()) {
@@ -425,7 +425,7 @@ describe("ID-7: a tracked Like whose Undo was lost", () => {
       (
         await sql<{ target_uri: string }>(t.store, "SELECT target_uri FROM inbound_retractions ORDER BY target_uri")
       ).map((row) => row.target_uri),
-    ).toEqual(lost.map((l) => l.id).sort());
+    ).toEqual(lost.map((l) => l.id).toSorted());
     // Only young ids are left: the next Like waits.
     const before = await state(t);
     expect(await receive(fresh[3]!)).toMatchObject({ retry: true, reason: "like-tracking-cap" });

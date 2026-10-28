@@ -400,7 +400,7 @@ describe("the scheduled_statuses endpoints", () => {
     for (let i = 0; i < 5; i++) {
       made.push((await scheduled(h, alice, { status: `s${i}`, scheduled_at: at(NOW + (i + 1) * HOUR) })).id);
     }
-    const newest = [...made].reverse();
+    const newest = [...made].toReversed();
     const first = await h.request("/api/v1/scheduled_statuses?limit=2", bearer(alice.token));
     expect((await first.json<Scheduled[]>()).map((s) => s.id)).toEqual(newest.slice(0, 2));
     expect(first.headers.get("link")).toBe(
@@ -927,8 +927,8 @@ describe("nothing leaks before publication", () => {
         owned[action.author]?.push(created.id);
         expect(await snapshot(h)).toEqual(before);
         for (const [i, user] of users.entries()) {
-          expect((await ids(h, "/api/v1/scheduled_statuses?limit=40", user.token)).sort()).toEqual(
-            [...(owned[i] ?? [])].sort(),
+          expect((await ids(h, "/api/v1/scheduled_statuses?limit=40", user.token)).toSorted()).toEqual(
+            [...(owned[i] ?? [])].toSorted(),
           );
           expect((await getJson(h, `/api/v1/scheduled_statuses/${created.id}`, user.token)).status).toBe(
             user === author ? 200 : 404,

@@ -84,8 +84,8 @@ describe("push subscription endpoints", () => {
         form({
           "subscription[endpoint]": ENDPOINT,
           // Standard base64 with padding, as some clients send it.
-          "subscription[keys][p256dh]": `${btoa(String.fromCharCode(...client.keys.p256dh))}`,
-          "subscription[keys][auth]": `${btoa(String.fromCharCode(...client.keys.auth))}`,
+          "subscription[keys][p256dh]": btoa(String.fromCharCode(...client.keys.p256dh)),
+          "subscription[keys][auth]": btoa(String.fromCharCode(...client.keys.auth)),
           "data[alerts][follow]": "1",
         }),
       ),

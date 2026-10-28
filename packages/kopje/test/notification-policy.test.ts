@@ -427,7 +427,7 @@ describe("the policy as notify writes", () => {
         }),
       );
     }
-    expect((await stored(h, alice)).map(([type]) => type).sort()).toEqual(["poll", "status", "update"]);
+    expect((await stored(h, alice)).map(([type]) => type).toSorted()).toEqual(["poll", "status", "update"]);
     await setPolicy(h, alice, {
       for_not_following: "filter",
       for_not_followers: "filter",
@@ -444,7 +444,7 @@ describe("the policy as notify writes", () => {
         }),
       );
     }
-    expect((await stored(h, alice)).map(([type, , filtered]) => `${type}:${filtered}`).sort()).toEqual([
+    expect((await stored(h, alice)).map(([type, , filtered]) => `${type}:${filtered}`).toSorted()).toEqual([
       "favourite:1",
       "follow:1",
       "follow_request:1",
@@ -877,7 +877,7 @@ describe("notification requests", () => {
       expect((await requests(h, alice)).map((r) => r.account.id)).toEqual([h.users.dave.id]);
       expect(
         await sql(h.store, "SELECT from_account_id FROM notification_permissions ORDER BY from_account_id"),
-      ).toEqual([bob.id, carol.id].sort().map((id) => ({ from_account_id: id })));
+      ).toEqual([bob.id, carol.id].toSorted().map((id) => ({ from_account_id: id })));
       expect(await listed(h, alice)).toEqual([["mention", carol.id]]);
       // Bob's batch was rolled back whole: no conversation links his statuses, carol's alone joined.
       expect(await linked()).toEqual([]);

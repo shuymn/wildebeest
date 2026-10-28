@@ -377,7 +377,7 @@ describe("maintenance (RES-5)", () => {
     expect(await store.setMaintenance(w.h.env.CF_VERSION_METADATA.id, false)).toEqual({ maintenance: false });
     counting.calls.length = 0;
     expect(await failuresOf(() => jobsRound(env, deps))).toEqual([]);
-    expect(counting.calls.filter((name) => STORE_CALLS.includes(name)).sort()).toEqual(STORE_CALLS);
+    expect(counting.calls.filter((name) => STORE_CALLS.includes(name)).toSorted()).toEqual(STORE_CALLS);
     const after = await snapshot(store);
     for (const name of NAMES) {
       expect(after[name], name).not.toEqual(before[name]);
@@ -426,7 +426,7 @@ describe("one jobs round per Queue batch", () => {
     await t.consume();
     expect(await t.actors()).toBe(5);
     expect(t.rounds()).toBe(1);
-    expect(t.counting.calls.filter((name) => STORE_CALLS.includes(name)).sort()).toEqual(STORE_CALLS);
+    expect(t.counting.calls.filter((name) => STORE_CALLS.includes(name)).toSorted()).toEqual(STORE_CALLS);
     expect(kinds(t.queue, "spool")).toEqual([]);
     // The round synced COLLECTION_SYNCS_PER_ROUND of the five actors; the rest asks for the next round, once.
     expect(await t.syncs()).toBe(5 - COLLECTION_SYNCS_PER_ROUND);

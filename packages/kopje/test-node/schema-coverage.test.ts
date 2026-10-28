@@ -508,7 +508,7 @@ function unknown(schema: Map<string, string[]>, columns: Map<string, Set<string>
   );
 }
 
-const sorted = (names: Iterable<string>) => [...names].sort();
+const sorted = (names: Iterable<string>) => [...names].toSorted();
 // The categories put records that compareConversion does not iterate (verify-actual.js CATEGORIES).
 const unregistered = (categories: Iterable<string>) => sorted(categories).filter((c) => !CATEGORIES.includes(c));
 
@@ -610,6 +610,7 @@ describe("the source scanners", () => {
 describe("the dump catalogs", () => {
   // The Store's catalog code, loaded by a computed path: test-node's tsconfig lacks the Workers types it is checked
   // with (the package's own tsc run checks it). Its SqlStorage is a thin adapter over the node database.
+  // oxlint-disable-next-line typescript/no-unnecessary-template-expression -- a literal path would be type-checked
   const store = import(`../src/platform/${"dump-catalog"}.ts`) as Promise<{
     readCatalog: (sql: {
       exec: (query: string, ...bindings: SQLInputValue[]) => { toArray: () => unknown[] };

@@ -84,7 +84,7 @@ function invariants(document: string): Entry[] {
     if (start?.[1] !== undefined) {
       close();
       current = { id: start[1], lines: [line] };
-    } else if (/^#/.test(line) || (line.trim() === "" && /^\S/.test(lines[i + 1] ?? ""))) {
+    } else if (line.startsWith("#") || (line.trim() === "" && /^\S/.test(lines[i + 1] ?? ""))) {
       close();
     } else {
       current?.lines.push(line);

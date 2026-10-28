@@ -105,7 +105,7 @@ describe("remote profile fields are projected bounded (RES-2)", () => {
       `/api/v1/accounts/${ALICE}/followers?limit=80`,
     );
     expect(page.body).toHaveLength(80);
-    expect(page.body.map((account) => account.fields.length).sort((x, y) => x - y)).toEqual([
+    expect(page.body.map((account) => account.fields.length).toSorted((x, y) => x - y)).toEqual([
       ...Array.from({ length: 40 }, () => 3),
       ...Array.from({ length: 40 }, () => MAX_REMOTE_FIELDS),
     ]);

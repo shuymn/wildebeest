@@ -621,7 +621,7 @@ function ownKeywords(db: Db, ownerId: string): { filter: FilterRow; keyword: Key
     filters.map((f) => f.id),
   )
     .map((keyword) => ({ filter: byId.get(keyword.filter_id)!, keyword }))
-    .sort((a, b) => (a.keyword.id < b.keyword.id ? -1 : a.keyword.id > b.keyword.id ? 1 : 0));
+    .toSorted((a, b) => (a.keyword.id < b.keyword.id ? -1 : a.keyword.id > b.keyword.id ? 1 : 0));
 }
 
 // GET /api/v1/filters: every keyword of the viewer's filters, by keyword id.
@@ -861,7 +861,7 @@ export function filterTextLevel(lengths: readonly number[]): number {
   if (total <= MAX_FILTER_REQUEST_TEXT) {
     return Infinity;
   }
-  const sorted = [...lengths].sort((a, b) => a - b);
+  const sorted = [...lengths].toSorted((a, b) => a - b);
   let remaining = MAX_FILTER_REQUEST_TEXT;
   for (let i = 0; i < sorted.length; i++) {
     const length = sorted[i] ?? 0;

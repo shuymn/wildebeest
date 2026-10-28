@@ -255,7 +255,7 @@ describe("familiar followers", () => {
     const shown = await getJson<{ accounts: { id: string }[] }[]>(h, path(target), alice.token);
     // The newest follows of the account first.
     expect(shown.body[0]?.accounts.map((account) => account.id)).toEqual(
-      mutual.slice(-MAX_FAMILIAR_FOLLOWERS).reverse(),
+      mutual.slice(-MAX_FAMILIAR_FOLLOWERS).toReversed(),
     );
   }, 60_000);
 

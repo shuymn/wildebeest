@@ -37,7 +37,7 @@ const MIGRATIONS_DIR = fileURLToPath(new URL("../../legacy-migrations/", import.
 export function legacyMigrations() {
   return readdirSync(MIGRATIONS_DIR)
     .filter((f) => f.endsWith(".sql"))
-    .sort()
+    .toSorted()
     .map((f) => ({ name: f.slice(0, -".sql".length), sql: readFileSync(`${MIGRATIONS_DIR}${f}`, "utf8") }));
 }
 
@@ -114,7 +114,7 @@ function schemaFingerprint(db) {
 /** @param {Map<string, string>} tables */
 function fingerprintDigest(tables) {
   const hash = createHash("sha256");
-  for (const [name, columns] of [...tables].sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))) {
+  for (const [name, columns] of [...tables].toSorted(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))) {
     hash.update(`${name}\n${columns}\n`);
   }
   return hash.digest("hex");
@@ -192,7 +192,7 @@ function rowCounts(db) {
   const counts = new Map();
   for (const name of schemaFingerprint(db).keys()) {
     const row = /** @type {{ n: number }} */ (db.prepare(`SELECT count(*) AS n FROM ${quoteIdentifier(name)}`).get());
-    counts.set(name, Number(row.n));
+    counts.set(name, row.n);
   }
   return counts;
 }
@@ -357,7 +357,7 @@ function load(sources, acceptDeletions, baseTime, path) {
   // Level: the applied names must be exactly the first canonical migrations.
   const applied = migrationRows
     .map((row, i) => ({ order: row.id ?? BigInt(i), name: row.name.replace(/\.sql$/, "") }))
-    .sort((a, b) => (a.order < b.order ? -1 : a.order > b.order ? 1 : 0))
+    .toSorted((a, b) => (a.order < b.order ? -1 : a.order > b.order ? 1 : 0))
     .map((row) => row.name);
   if (applied.length === 0) {
     throw new ExportError("no-migrations-applied");
@@ -541,13 +541,14 @@ function load(sources, acceptDeletions, baseTime, path) {
     outbox: new Map(),
     outboxByPair: new Map(),
   };
-  for (const row of /** @type {{ id: string, properties: unknown, original_actor_id: unknown }[]} */ (
+  // Legacy's TEXT PRIMARY KEY columns admit NULL; such a row is keyed by String(id), as the converter looks it up.
+  for (const row of /** @type {{ id: string | null, properties: unknown, original_actor_id: unknown }[]} */ (
     db.prepare("SELECT id, properties, original_actor_id FROM objects").all()
   )) {
     source.objects.set(String(row.id), addressingOf(row.properties));
     source.authors.set(String(row.id), typeof row.original_actor_id === "string" ? row.original_actor_id : null);
   }
-  for (const row of /** @type {{ id: string, properties: unknown }[]} */ (
+  for (const row of /** @type {{ id: string | null, properties: unknown }[]} */ (
     db.prepare("SELECT id, properties FROM actors").all()
   )) {
     const followers = /** @type {Record<string, unknown> | null} */ (
@@ -626,7 +627,7 @@ function load(sources, acceptDeletions, baseTime, path) {
     levelName: migrations[level]?.name ?? "",
     migrationsApplied: pending.map((m) => m.name),
     schemaFingerprint: fingerprintDigest(actual),
-    nullableInExport: [...nullable].flatMap(([table, columns]) => [...columns].map((c) => `${table}.${c}`)).sort(),
+    nullableInExport: [...nullable].flatMap(([table, columns]) => [...columns].map((c) => `${table}.${c}`)).toSorted(),
     rowsLoaded,
     deletions,
     foreignKeyViolations,

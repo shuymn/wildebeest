@@ -30,6 +30,7 @@ import {
 import { type PlannedStatement, plannedSql, scansOf, staleStatistics } from "./read-helpers";
 import { community, remoteAccount, seedStatus, type SeedStatus } from "./status-helpers";
 import { accessibleName, attr, one, parseHtml, query, text } from "./web-dom";
+import { render } from "./web-fixtures";
 
 // The profile's tabs: Posts with boosts (VIS-6) and pins, Posts and replies, Media and a featured hashtag's posts,
 // each an anonymous page (VIS-4) paged both ways by status id.
@@ -79,8 +80,8 @@ function within(h: Harness, answerBytes: number) {
       throw new Error(page.status);
     }
     expect(jsonBytes({ ...page, site: SITE })).toBeLessThanOrEqual(answerBytes);
-    return String(
-      await jsx(ProfilePage, {
+    return await render(
+      jsx(ProfilePage, {
         account: page.account,
         tab,
         pins: page.pins,
@@ -91,7 +92,7 @@ function within(h: Harness, answerBytes: number) {
         paging: page.paging,
         site: SITE,
         actorUri: "https://kopje.test/ap/users/alice",
-      }).toString(),
+      }),
     );
   };
 }
@@ -515,9 +516,9 @@ describe("the profile tabs as pages", () => {
       );
     }
     // The component alone: one link a section, the current one marked, and none when no section is current.
-    const render = async (items: { href: string; text: string; current: boolean }[]) =>
-      parseHtml(String(await jsx(Tabs, { label: "Sections", items }).toString()));
-    const none = await render([
+    const tabs = async (items: { href: string; text: string; current: boolean }[]) =>
+      parseHtml(await render(jsx(Tabs, { label: "Sections", items })));
+    const none = await tabs([
       { href: "/a", text: "A", current: false },
       { href: "/b", text: "B", current: false },
     ]);

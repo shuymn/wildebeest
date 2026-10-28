@@ -88,7 +88,7 @@ describe("Sha256", () => {
     for (const [message, digest] of NIST) {
       const bytes = new TextEncoder().encode(message);
       for (let round = 0; round < 25; round++) {
-        const cuts = [random(bytes.length), random(bytes.length), random(bytes.length)].sort((a, b) => a - b);
+        const cuts = [random(bytes.length), random(bytes.length), random(bytes.length)].toSorted((a, b) => a - b);
         let hash = new Sha256();
         let at = 0;
         for (const cut of [...cuts, bytes.length]) {

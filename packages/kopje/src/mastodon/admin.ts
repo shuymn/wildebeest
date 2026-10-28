@@ -130,7 +130,7 @@ function listUrl(c: ApiContext, path: string, names: readonly string[], p: Param
     }),
     ...Object.entries(cursor),
   ];
-  for (const [name, value] of entries.sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))) {
+  for (const [name, value] of entries.toSorted(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))) {
     url.searchParams.append(name, value);
   }
   return url.toString();

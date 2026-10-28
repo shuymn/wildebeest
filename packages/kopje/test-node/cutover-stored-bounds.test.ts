@@ -164,7 +164,7 @@ describe("converted rows at the stored bounds", () => {
         .prepare("SELECT url FROM statuses WHERE raw LIKE ? OR raw LIKE ?")
         .all(`%${statusUrls[0]}%`, `%${statusUrls[1]}%`)
         .map((row) => (row as { url: string | null }).url);
-      expect(urls.sort(byText)).toEqual([null, statusUrls[0]].sort(byText));
+      expect(urls.toSorted(byText)).toEqual([null, statusUrls[0]].toSorted(byText));
       const media = db
         .prepare("SELECT url, description FROM media_attachments WHERE url = ? OR description LIKE ? ORDER BY position")
         .all(mediaAt, "d%") as { url: string; description: string }[];

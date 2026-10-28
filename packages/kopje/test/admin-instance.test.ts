@@ -220,7 +220,7 @@ describe("setInstanceSettings", () => {
   }
 
   it("accepts a value for each of the thirteen names", async () => {
-    expect(ACCEPTED.map(([name]) => name).sort()).toEqual([...INSTANCE_ADMIN_NAMES].sort());
+    expect(ACCEPTED.map(([name]) => name).toSorted()).toEqual([...INSTANCE_ADMIN_NAMES].toSorted());
     const s = await store();
     await seedAccount(s, { username: "alice" });
     await runInDurableObject(s, (_instance, state) => {

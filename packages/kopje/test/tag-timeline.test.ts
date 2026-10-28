@@ -121,7 +121,7 @@ describe("hashtag timeline", () => {
                 )
                 .toArray()
                 .map((row) => row.id);
-              return ascending ? ids.reverse() : ids;
+              return ascending ? ids.toReversed() : ids;
             };
             const current = (page: PageQuery) =>
               pageOf(

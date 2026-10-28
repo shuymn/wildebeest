@@ -74,7 +74,7 @@ export function tagPageWithin(db: Db, input: TagPageInput, site: Site, answerByt
       local: true,
       remote: false,
       onlyMedia: false,
-      page: { limit: TAG_PAGE_SIZE, ...(input.cursor ?? {}) },
+      page: { limit: TAG_PAGE_SIZE, ...input.cursor },
       present: pagePresent(site),
     },
     anonymous(site, input.now).viewer,

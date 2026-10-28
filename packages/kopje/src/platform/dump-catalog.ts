@@ -84,7 +84,7 @@ export function readCatalog(sql: SqlStorage): TableSpec[] {
     const columns = info.map((c) => c.name);
     const key = info
       .filter((c) => c.pk > 0)
-      .sort((a, b) => a.pk - b.pk)
+      .toSorted((a, b) => a.pk - b.pk)
       .map((c) => c.name);
     const withoutRowid = /\)\s*WITHOUT\s+ROWID\s*$/i.test(table.sql ?? "");
     const spec: TableSpec = {

@@ -61,7 +61,7 @@ export async function signatureOf(request: SignedRequest, signedHeaders: string[
       const [k, v] = at < 0 ? [pair, ""] : [pair.slice(0, at), pair.slice(at + 1)];
       return [encode(decodeURIComponent(k)), encode(decodeURIComponent(v))] as const;
     })
-    .sort(([k1, v1], [k2, v2]) => (k1 < k2 ? -1 : k1 > k2 ? 1 : v1 < v2 ? -1 : v1 > v2 ? 1 : 0))
+    .toSorted(([k1, v1], [k2, v2]) => (k1 < k2 ? -1 : k1 > k2 ? 1 : v1 < v2 ? -1 : v1 > v2 ? 1 : 0))
     .map(([k, v]) => `${k}=${v}`)
     .join("&");
   const headerValue = (name: string) =>

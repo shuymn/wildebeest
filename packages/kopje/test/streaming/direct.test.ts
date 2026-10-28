@@ -469,7 +469,7 @@ describe("a burst of conversations", () => {
       "SELECT CAST(id AS TEXT) AS id FROM conversations WHERE account_id = ? ORDER BY stream_seq DESC LIMIT 20",
       h.users.alice.id,
     );
-    expect(conversations(inbox).map((c) => c.id)).toEqual(newest.map((row) => row.id).reverse());
+    expect(conversations(inbox).map((c) => c.id)).toEqual(newest.map((row) => row.id).toReversed());
     expect(merged(notified)).toEqual([{ stream: ["user:notification"], event: "notifications_merged", payload: "1" }]);
     // The acceptance journaled nothing but the merge: its notifications were unfiltered by update.
     expect(turns).toBeGreaterThan(0);

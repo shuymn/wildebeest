@@ -1067,7 +1067,7 @@ describe("revoke (QuotesController#revoke, RevokeQuoteService)", () => {
       return 202;
     });
     // bob's personal copy (the quoter, also in the quoted status's reach) and carol's neutral one (a follower).
-    expect([...bodies.keys()].sort()).toEqual([`${MASTODON}/users/bob/inbox`, "https://other.example/inbox"]);
+    expect([...bodies.keys()].toSorted()).toEqual([`${MASTODON}/users/bob/inbox`, "https://other.example/inbox"]);
     expect(new Set(bodies.values()).size).toBe(1);
     const signed = JSON.parse([...bodies.values()][0]!) as Record<string, unknown>;
     expect(signed).toMatchObject({
@@ -1142,7 +1142,7 @@ describe("revoke (QuotesController#revoke, RevokeQuoteService)", () => {
     );
     const { status, body } = await revoke(t, mine.id, quoting);
     expect(status).toBe(200);
-    expect(Object.keys(body).sort()).toEqual(
+    expect(Object.keys(body).toSorted()).toEqual(
       [
         "account",
         "bookmarked",
@@ -1175,7 +1175,7 @@ describe("revoke (QuotesController#revoke, RevokeQuoteService)", () => {
         "uri",
         "url",
         "visibility",
-      ].sort(),
+      ].toSorted(),
     );
     expect(body).toEqual({
       id: quoting,

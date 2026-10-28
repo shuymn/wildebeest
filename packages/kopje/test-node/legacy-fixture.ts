@@ -87,7 +87,7 @@ function upstreamDatabase(level: number): DatabaseSync {
   const dir = fileURLToPath(new URL("./fixtures/upstream-migrations/", import.meta.url));
   const db = new DatabaseSync(":memory:", { enableForeignKeyConstraints: false });
   for (const file of readdirSync(dir)
-    .sort()
+    .toSorted()
     .slice(0, level + 1)) {
     db.exec(readFileSync(`${dir}${file}`, "utf8"));
   }
@@ -121,7 +121,7 @@ function actorTypeDriftDatabase(level: number): DatabaseSync {
 function migrationNames(level: number): string[] {
   const dir = fileURLToPath(new URL("../cli/legacy-migrations/", import.meta.url));
   return readdirSync(dir)
-    .sort()
+    .toSorted()
     .slice(0, level + 1);
 }
 

@@ -93,7 +93,7 @@ for (const [dir, name] of packages) {
   const manifest = JSON.parse(readFileSync(join(dir, "package.json"), "utf8"));
   const files = readdirSync(dir)
     .filter((file) => LICENSE_FILE.test(file))
-    .sort();
+    .toSorted();
   const texts = files.map((file) => readFileSync(join(dir, file), "utf8").trim()).filter((text) => text !== "");
   const id = `${manifest.name ?? name}@${manifest.version}`;
   const reviewed = REVIEWED_WITHOUT_LICENSE_TEXT.get(manifest.name ?? name);
@@ -107,7 +107,7 @@ if (missing.length > 0) {
   throw new Error(`bundled packages without license text: ${missing.join(", ")}`);
 }
 // Several copies of one version (pnpm keeps one per peer set) are listed once.
-const unique = [...new Map(entries.map((entry) => [entry.id, entry])).values()].sort((a, b) =>
+const unique = [...new Map(entries.map((entry) => [entry.id, entry])).values()].toSorted((a, b) =>
   a.id.localeCompare(b.id),
 );
 

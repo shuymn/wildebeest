@@ -286,7 +286,7 @@ describe("the history reads of the lists (RES-7)", () => {
       if (result.status !== "ok") {
         throw new Error(result.status);
       }
-      expect(result.value.items.map((tag) => tag.name)).toEqual([...followed].reverse());
+      expect(result.value.items.map((tag) => tag.name)).toEqual([...followed].toReversed());
       // Status i carries followed[i % 200] and is by author i % 100: one author per hashtag.
       expectCapped(result.value.items, 1);
       return rowsRead(h, followedTags, input);

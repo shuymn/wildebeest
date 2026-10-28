@@ -171,7 +171,7 @@ describe("boosts that cascade with their original (VIS-3)", () => {
     await unfollow(h.store, queued);
     await h.request(`/api/v1/statuses/${original.id}`, bearer(alice.token, { method: "DELETE" }));
     await settleDeliveries(h.store);
-    expect((await undoTargets(h.store)).sort()).toEqual([
+    expect((await undoTargets(h.store)).toSorted()).toEqual([
       "https://leased.example/inbox",
       "https://queued.example/inbox",
     ]);
@@ -459,7 +459,7 @@ describe("retraction targets in every state (VIS-3)", () => {
     await h.request(`/api/v1/statuses/${status.id}`, bearer(alice.token, { method: "DELETE" }));
     await settleDeliveries(h.store);
     const deletes = (await rows(h.store)).filter((r) => r.type === "Delete").map((r) => new URL(r.inbox_url).hostname);
-    expect(deletes.sort()).toEqual(["delivered.example", "gaveup.example", "leased.example", "queued.example"]);
+    expect(deletes.toSorted()).toEqual(["delivered.example", "gaveup.example", "leased.example", "queued.example"]);
   });
 });
 

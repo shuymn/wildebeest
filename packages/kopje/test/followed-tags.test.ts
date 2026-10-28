@@ -104,7 +104,7 @@ describe("followed hashtags", () => {
         prev: cursor("prev", "min_id"),
       };
     };
-    const newest = [...names].reverse();
+    const newest = [...names].toReversed();
     const seen: string[] = [];
     let query = "limit=5";
     for (let i = 0; i < 5; i++) {

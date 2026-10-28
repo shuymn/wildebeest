@@ -241,7 +241,7 @@ function membersOf(db: Db, viewer: UserContext, group: Found, upper: string | nu
     return rows;
   }
   const byId = (a: Shown, b: Shown) => (BigInt(b.id) > BigInt(a.id) ? 1 : BigInt(b.id) < BigInt(a.id) ? -1 : 0);
-  return [...rows.slice(0, GROUP_COUNT - 1), group.first].sort(byId);
+  return [...rows.slice(0, GROUP_COUNT - 1), group.first].toSorted(byId);
 }
 
 // The id of a group's oldest shown notification from the range's lower end up (load_groups_data's min_id), among the

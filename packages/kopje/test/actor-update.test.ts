@@ -185,7 +185,7 @@ describe("Update(Person)", () => {
       "SELECT id, state FROM deliveries WHERE activity_id = ?",
       firstId,
     );
-    expect(firstLeft.map((d) => d.id).sort(byText)).toEqual(leased.map((d) => d.id).sort(byText));
+    expect(firstLeft.map((d) => d.id).toSorted(byText)).toEqual(leased.map((d) => d.id).toSorted(byText));
     expect(await targetsOf(h, firstId)).toBe(firstLeft.length);
     // The status and the second Update reach every follower's server (151 each, expanded or still waiting).
     expect(await targetsOf(h, createId ?? 0)).toBe(151);
@@ -199,7 +199,7 @@ describe("Update(Person)", () => {
       );
       const ids = order.map((d) => d.activity_id);
       expect(ids[0], lane).toBe(firstId);
-      expect(ids.filter((id) => id !== firstId)).toEqual(ids.filter((id) => id !== firstId).sort((x, y) => x - y));
+      expect(ids.filter((id) => id !== firstId)).toEqual(ids.filter((id) => id !== firstId).toSorted((x, y) => x - y));
     }
   }, 30_000);
 });

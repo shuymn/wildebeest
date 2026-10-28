@@ -40,7 +40,7 @@ export function mergedWindow(
     ...params,
   );
   const cut = rows.length > query.size || (rows[0]?.bound ?? null) !== null;
-  return { candidates: rows.slice(0, query.size).map(({ id, o }) => ({ id: String(id), o })), cut };
+  return { candidates: rows.slice(0, query.size).map(({ id, o }) => ({ id, o })), cut };
 }
 
 // The window of one stream: `candidates` selects (id) rows, the stream's candidates from the cursor in cursor order,
@@ -48,7 +48,7 @@ export function mergedWindow(
 // 2^53.
 export function singleWindow(db: Db, candidates: string, size: number, ...params: SqlStorageValue[]): Window {
   return windowOf(
-    db.all<{ id: string }>(candidates, ...params).map(({ id }) => String(id)),
+    db.all<{ id: string }>(candidates, ...params).map(({ id }) => id),
     size,
   );
 }
@@ -93,7 +93,7 @@ export function windowPage<R>(
   const cut = window.cut && !full;
   const more = ordered.length > limit || window.cut;
   return ascending
-    ? { rows: taken.reverse(), newest: far, oldest: near, cut, more }
+    ? { rows: taken.toReversed(), newest: far, oldest: near, cut, more }
     : { rows: taken, newest: near, oldest: far, cut, more };
 }
 

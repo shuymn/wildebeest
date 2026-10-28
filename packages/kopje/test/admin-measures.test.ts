@@ -333,7 +333,7 @@ describe("the measure instance_follows", () => {
       seen.push(Number(await total(w, D)));
     }
     expect(seen.at(-1)).toBe(0);
-    expect(seen).toEqual([...seen].sort((a, b) => b - a));
+    expect(seen).toEqual([...seen].toSorted((a, b) => b - a));
     expect(new Set(seen).size).toBeGreaterThan(2);
   });
 });

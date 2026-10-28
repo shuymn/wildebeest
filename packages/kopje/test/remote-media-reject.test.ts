@@ -122,7 +122,7 @@ describe("reject_media (R38) in the remote media cache", () => {
         seen.add(slot);
       }
     }
-    expect([...seen].sort()).toEqual([
+    expect([...seen].toSorted()).toEqual([
       `attachment ${keptPost.media} https://files.example/m/k.png`,
       `avatar ${kept.id} ${kept.avatar}`,
       "emoji files.example https://files.example/e/b.png",
@@ -142,8 +142,8 @@ describe("reject_media (R38) in the remote media cache", () => {
     const claimed = await claim(w);
     // The early domain's slot is dropped at the claim; the others are claimed.
     expect(claimed.dropped).toBe(1);
-    expect(claimed.claims.map((c) => c.url).sort()).toEqual(
-      [during.avatar, kept.avatar, "https://files.example/e/d.png"].sort(byText),
+    expect(claimed.claims.map((c) => c.url).toSorted()).toEqual(
+      [during.avatar, kept.avatar, "https://files.example/e/d.png"].toSorted(byText),
     );
     expect((await w.slots()).some((s) => s.owner_id === early.id)).toBe(false);
     // A block committed after the claim: the fence refuses the admission and the record of its domain's slots (the
@@ -161,7 +161,7 @@ describe("reject_media (R38) in the remote media cache", () => {
       `avatar ${kept.id} ${kept.avatar} stored`,
       "emoji during.example https://files.example/e/d.png",
     ]);
-    expect((await w.objects()).map((o) => o.state).sort()).toEqual(["doomed", "doomed", "stored"]);
+    expect((await w.objects()).map((o) => o.state).toSorted()).toEqual(["doomed", "doomed", "stored"]);
     await w.exact();
   });
 
@@ -275,8 +275,8 @@ describe("reject_media (R38) in the remote media cache", () => {
     await blockDomain(w.t.store, "other.example", "noop");
     await rejectMedia(w, "b.other.example");
     expect((await maintain(w)).counts.retired).toBe(2);
-    const owners = (await w.slots()).map((s) => s.owner_id).sort(byText);
-    expect(owners).toEqual([exempt.id, deeper.id, other.id].sort());
+    const owners = (await w.slots()).map((s) => s.owner_id).toSorted(byText);
+    expect(owners).toEqual([exempt.id, deeper.id, other.id].toSorted());
     await w.exact();
   });
 

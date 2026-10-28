@@ -31,7 +31,7 @@ export function sources(dir: string, extensions: readonly string[] = [".ts", ".t
     });
   const files = walk(join(PACKAGE, dir))
     .map((path) => ({ path: relative(PACKAGE, path).replaceAll("\\", "/"), text: readFileSync(path, "utf8") }))
-    .sort((a, b) => (a.path < b.path ? -1 : 1));
+    .toSorted((a, b) => (a.path < b.path ? -1 : 1));
   if (files.length === 0) {
     throw new Error(`no sources in ${dir}`);
   }
@@ -159,7 +159,7 @@ export function keyOf(node: Node): string {
   };
   const fields = Object.keys(n)
     .filter((k) => !UNKEYED.has(k))
-    .sort()
+    .toSorted()
     .map((k) => `${k}=${value(n[k], k)}`);
   return `${n.type}{${fields.join(" ")}}`;
 }

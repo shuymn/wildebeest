@@ -335,7 +335,7 @@ class BackupJob {
   async #fingerprint(): Promise<string> {
     const { endpoint, bucket, region, prefix, recipients } = this.#config;
     return sha256Of(
-      new TextEncoder().encode(JSON.stringify([endpoint, bucket, region, prefix, [...recipients].sort()])),
+      new TextEncoder().encode(JSON.stringify([endpoint, bucket, region, prefix, [...recipients].toSorted()])),
     );
   }
 
@@ -876,15 +876,15 @@ class BackupJob {
     const complete = [...runs]
       .filter(([, entry]) => entry.manifests.length > 0)
       .map(([id]) => id)
-      .sort()
-      .reverse();
+      .toSorted()
+      .toReversed();
     const oldestKept = complete[this.#config.retention - 1];
     if (oldestKept === undefined) {
       return 0;
     }
     await this.#save(() => {});
     let deleted = 0;
-    for (const [id, entry] of [...runs].sort(([a], [b]) => (a < b ? -1 : 1))) {
+    for (const [id, entry] of [...runs].toSorted(([a], [b]) => (a < b ? -1 : 1))) {
       if (id >= oldestKept) {
         continue;
       }

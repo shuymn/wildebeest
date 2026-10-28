@@ -218,7 +218,7 @@ describe("retention (RES-4)", () => {
     await round(store);
     const rows = await trendRows(store);
     expect(rows.filter((r) => r.account_id === prolific)).toHaveLength(3);
-    expect(rows.filter((r) => r.account_id !== prolific).map((r) => r.status_id)).toEqual(ids.slice(30).reverse());
+    expect(rows.filter((r) => r.account_id !== prolific).map((r) => r.status_id)).toEqual(ids.slice(30).toReversed());
   });
 
   it("drops the lower rows of an author whose unreviewed top row does not fit the review pool", async () => {

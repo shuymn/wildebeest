@@ -114,5 +114,8 @@ export { customEmoji } from "./emoji-fixtures";
 
 // The bytes a page component renders to.
 export async function render(node: unknown): Promise<string> {
+  // hono's async render returns a String object (raw()) typed as string; String() makes it the primitive the tests
+  // compare and search.
+  // oxlint-disable-next-line typescript/no-unnecessary-type-conversion
   return String(await (node as JSXNode).toString());
 }

@@ -29,6 +29,7 @@ import { MAX_BIO } from "./profile-fixtures";
 import { profileFrameBytes, walkProfile } from "./profile-page-helpers";
 import { community, post, remoteAccount, seedStatus } from "./status-helpers";
 import { attr, one, parseHtml, query, text } from "./web-dom";
+import { render } from "./web-fixtures";
 import { countedHarness, olderOf, postsTab, signIn } from "./web-helpers";
 
 // The read seam of the public pages: one Store call a page, the site facts with it, the composite budget and its
@@ -62,7 +63,7 @@ describe("one Store call a page", () => {
       ["/@alice/tagged/cats", 200, ["webProfilePage"]],
       ["/@alice/with_replies", 200, ["webProfilePage"]],
       ["/@alice/media", 200, ["webProfilePage"]],
-      [`/@alice?max_id=${String(status.id)}`, 200, ["webProfilePage"]],
+      [`/@alice?max_id=${status.id}`, 200, ["webProfilePage"]],
       [`/@alice/with_replies?min_id=1`, 200, ["webProfilePage"]],
       ["/@nobody/media", 404, ["webProfilePage"]],
       ["/@alice/featured", 200, ["webFeaturedPage"]],
@@ -70,7 +71,7 @@ describe("one Store call a page", () => {
       ["/@nobody/featured", 404, ["webFeaturedPage"]],
       [path, 200, ["webStatusPage"]],
       [`${path}?min_id=1`, 200, ["webStatusPage"]],
-      [`${path}?max_id=${String(reply.id)}`, 200, ["webStatusPage"]],
+      [`${path}?max_id=${reply.id}`, 200, ["webStatusPage"]],
       [statusPath(reply), 200, ["webStatusPage"]],
       [`${path}/embed`, 200, ["webStatusPage"]],
       ["/@alice/interact", 200, ["webInteractTarget"]],
@@ -176,7 +177,7 @@ describe("headers", () => {
     await setSetting(h.store, "privacy_policy", "<p>Policy</p>");
     const browser = await signIn(h);
     // The session is the author's: the API shows it the private post.
-    expect((await h.request(`/api/v1/statuses/${String(own.id)}`, bearer(h.users.alice.token))).status).toBe(200);
+    expect((await h.request(`/api/v1/statuses/${own.id}`, bearer(h.users.alice.token))).status).toBe(200);
     for (const path of [
       "/",
       "/about",
@@ -186,7 +187,7 @@ describe("headers", () => {
       "/@alice/with_replies",
       "/@alice/media",
       "/@alice/featured",
-      `/@alice?max_id=${String(status.id)}`,
+      `/@alice?max_id=${status.id}`,
       statusPath(status),
       `${statusPath(status)}/embed`,
       statusPath(own),
@@ -198,7 +199,7 @@ describe("headers", () => {
       expect([path, withSession.status]).toEqual([path, without.status]);
       const body = await withSession.text();
       expect(body, path).toBe(await without.text());
-      for (const hidden of ["only for followers", "only for the mentioned", "a private reply", String(own.id)]) {
+      for (const hidden of ["only for followers", "only for the mentioned", "a private reply", own.id]) {
         expect(body, `${path}: ${hidden}`).not.toContain(hidden);
       }
       expect([...withSession.headers.entries()], path).toEqual([...without.headers.entries()]);
@@ -306,7 +307,7 @@ describe("parent links", () => {
     expect(replyTo("reply to the visible one")).toEqual([statusPath(shown)]);
     expect(replyTo("reply to the private one")).toEqual([]);
     // The private parent leaves nothing in the page: not its id, its text or its URL.
-    for (const trace of [String(secret.id), "the private parent", statusPath(secret)]) {
+    for (const trace of [secret.id, "the private parent", statusPath(secret)]) {
       expect(profile, trace).not.toContain(trace);
     }
     // The status pages: the focal post's parent by the same rule, a remote one linked at its origin.
@@ -318,7 +319,7 @@ describe("parent links", () => {
     expect(text(one(one(remotePage, "main"), "p", "reply-to"))).toContain("@carol@carol.example");
     const secretPage = await (await h.request(statusPath(toSecret))).text();
     expect(secretPage).not.toContain("In reply to");
-    expect(secretPage).not.toContain(String(secret.id));
+    expect(secretPage).not.toContain(secret.id);
     const shownPage = parseHtml(await (await h.request(statusPath(toShown))).text());
     expect(query(one(one(shownPage, "main"), "p", "reply-to"), "a").map((a) => attr(a, "href"))).toEqual([
       statusPath(shown),
@@ -326,7 +327,7 @@ describe("parent links", () => {
 
     // The read itself: an entry for the visible parent only, and none for the private one.
     const read = await h.store.webProfilePage(BUILD, postsTab("alice", null, NOW));
-    expect(read.status === "ok" ? Object.keys(read.parents) : null).toEqual([String(shown.id)]);
+    expect(read.status === "ok" ? Object.keys(read.parents) : null).toEqual([shown.id]);
   });
 });
 
@@ -403,8 +404,8 @@ describe("the composite budget (RES-3)", () => {
     if (page.status !== "ok" || page.stub === null) {
       throw new Error("expected a stubbed first post");
     }
-    const html = String(
-      await jsx(ProfilePage, {
+    const html = await render(
+      jsx(ProfilePage, {
         account: page.account,
         tab: { kind: "posts" },
         pins: page.pins,
@@ -415,7 +416,7 @@ describe("the composite budget (RES-3)", () => {
         paging: page.paging,
         site: SITE,
         actorUri: "https://kopje.test/ap/users/bob",
-      }).toString(),
+      }),
     );
     const row = query(one(parseHtml(html), "main"), "article", "stub")[0]!;
     expect(text(row)).toContain("@bob@kopje.test");
@@ -432,7 +433,7 @@ describe("the composite budget (RES-3)", () => {
     const carol = await remoteAccount(h.store, "carol", "carol.example");
     const local = await post(h, alice, { status: "the local original" });
     const remote = await seedStatus(h.store, { accountId: carol, visibility: "public" });
-    for (const original of [String(local.id), remote]) {
+    for (const original of [local.id, remote]) {
       await h.request(`/api/v1/statuses/${original}/reblog`, bearer(bob.token, { method: "POST" }));
     }
     const stubs = await runInDurableObject(h.store, (_instance, state) => {

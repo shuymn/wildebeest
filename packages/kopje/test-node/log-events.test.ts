@@ -307,7 +307,7 @@ function unknownReferences(text: string, names: ReadonlySet<string>): string[] {
 
 const DOCS = readdirSync(new URL("../docs/", import.meta.url))
   .filter((name) => name.endsWith(".md"))
-  .sort()
+  .toSorted()
   .map((name) => ({ name, text: readFileSync(new URL(`../docs/${name}`, import.meta.url), "utf8") }));
 
 describe("log events", () => {

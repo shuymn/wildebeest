@@ -114,7 +114,7 @@ describe("instance activity: the answer", () => {
       const body = await response.json<Record<string, unknown>[]>();
       expect(body).toHaveLength(ACTIVITY_WEEKS);
       for (const [i, week] of body.entries()) {
-        expect(Object.keys(week).sort()).toEqual(["logins", "registrations", "statuses", "week"]);
+        expect(Object.keys(week).toSorted()).toEqual(["logins", "registrations", "statuses", "week"]);
         expect(Object.values(week).every((value) => typeof value === "string" && /^\d+$/.test(value))).toBe(true);
         expect(week.week).toBe(String((NOW - i * WEEK_MS) / 1000));
       }
@@ -603,8 +603,8 @@ describe("instance activity: concurrency", () => {
     }
     expect((await request).status).toBe(200);
     expect((await posting).status).toBe(200);
-    expect((await logins(h.store)).map((row) => row.account_id).sort()).toEqual(
-      [h.users.alice.id, h.users.bob.id].sort(),
+    expect((await logins(h.store)).map((row) => row.account_id).toSorted()).toEqual(
+      [h.users.alice.id, h.users.bob.id].toSorted(),
     );
   });
 
@@ -692,7 +692,7 @@ describe("instance activity: retention", () => {
       counts: [...new Set((await counts(h.store)).map((row) => row.day))],
       logins: (await logins(h.store)).map((row) => row.day),
     });
-    const kept = (agos: number[]) => agos.map((ago) => day(NOW - ago * DAY_MS)).sort();
+    const kept = (agos: number[]) => agos.map((ago) => day(NOW - ago * DAY_MS)).toSorted();
     expect(await h.store.pruneActivity(BUILD, { now: NOW + DAY_MS - 1 })).toEqual({ counts: 4, logins: 2 });
     expect(await days()).toEqual({ counts: kept([184, 0, -1]), logins: kept([184, 0, -1]) });
     expect(await h.store.pruneActivity(BUILD, { now: NOW + DAY_MS - 1 })).toEqual({ counts: 0, logins: 0 });

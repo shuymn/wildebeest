@@ -246,8 +246,8 @@ async function publicPages(): Promise<{ pages: Page[]; h: Awaited<ReturnType<typ
   await h.request("/api/v1/featured_tags", bearer(alice.token, json({ name: "cats" })));
   const tagged = await post(h, alice, { status: "#cats here" });
   // A pin and a boost, so the profile shows both labels.
-  await h.request(`/api/v1/statuses/${String(tagged.id)}/pin`, bearer(alice.token, { method: "POST" }));
-  await h.request(`/api/v1/statuses/${String(parent.id)}/reblog`, bearer(alice.token, { method: "POST" }));
+  await h.request(`/api/v1/statuses/${tagged.id}/pin`, bearer(alice.token, { method: "POST" }));
+  await h.request(`/api/v1/statuses/${parent.id}/reblog`, bearer(alice.token, { method: "POST" }));
   await post(h, bob, { status: "bob speaks" });
   // A post with an emoji, a poll, a quote of the parent and media of every other type.
   const rich = await post(h, alice, {
@@ -258,9 +258,9 @@ async function publicPages(): Promise<{ pages: Page[]; h: Awaited<ReturnType<typ
     h.store,
     "UPDATE statuses SET emojis = ? WHERE id = ?",
     JSON.stringify([["blob", "https://kopje.test/assets/avatar.jpg"]]),
-    String(rich.id),
+    rich.id,
   );
-  await acceptQuote(h, String(rich.id), String(parent.id));
+  await acceptQuote(h, rich.id, parent.id);
   for (const [i, type] of ["video", "gifv", "audio", "unknown"].entries()) {
     await sql(
       h.store,
@@ -268,7 +268,7 @@ async function publicPages(): Promise<{ pages: Page[]; h: Awaited<ReturnType<typ
 			VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
       `90000000000000000${i}`,
       alice.id,
-      String(rich.id),
+      rich.id,
       i,
       type,
       `https://kopje.test/media/${i}/full.bin`,
@@ -279,7 +279,7 @@ async function publicPages(): Promise<{ pages: Page[]; h: Awaited<ReturnType<typ
   // A post edited twice, the first version behind a warning: its page holds the history dialog.
   const edited = await post(h, alice, { status: "first words", spoiler_text: "a warning" });
   for (const status of ["second words", "last words"]) {
-    await h.request(`/api/v1/statuses/${String(edited.id)}`, bearer(alice.token, json({ status }, { method: "PUT" })));
+    await h.request(`/api/v1/statuses/${edited.id}`, bearer(alice.token, json({ status }, { method: "PUT" })));
   }
   // Followers of alice: a remote account, carol, and bob (suspended below, so left out); carol hides her network.
   const dan = await remoteAccount(h.store, "dan");
@@ -301,7 +301,7 @@ async function publicPages(): Promise<{ pages: Page[]; h: Awaited<ReturnType<typ
   );
   await sql(h.store, "INSERT INTO account_pins (account_id, target_account_id) VALUES (?, ?)", alice.id, dan);
   // dan favourites the parent, which alice boosted and rich quotes: its tabs list each.
-  await sql(h.store, "INSERT INTO favourites (account_id, status_id) VALUES (?, ?)", dan, String(parent.id));
+  await sql(h.store, "INSERT INTO favourites (account_id, status_id) VALUES (?, ?)", dan, parent.id);
   await sql(
     h.store,
     "UPDATE local_accounts SET suspended_at = ? WHERE account_id = ?",
@@ -326,15 +326,15 @@ async function publicPages(): Promise<{ pages: Page[]; h: Awaited<ReturnType<typ
   await add("tagged", 200, "/@alice/tagged/cats");
   await add("posts and replies", 200, "/@alice/with_replies");
   await add("media", 200, "/@alice/media");
-  await add("older posts", 200, `/@alice?max_id=${String(parent.id)}`);
+  await add("older posts", 200, `/@alice?max_id=${parent.id}`);
   await add("followers", 200, "/@alice/followers");
   await add("hidden follows", 200, "/@carol/following");
   await add("featured", 200, "/@alice/featured");
   await add("featured, empty", 200, "/@carol/featured");
   await add("hashtag", 200, "/tags/cats");
-  await add("hashtag, older posts", 200, `/tags/cats?max_id=${String(tagged.id)}`);
+  await add("hashtag, older posts", 200, `/tags/cats?max_id=${tagged.id}`);
   await add("status with media", 200, pathOf(String(parent.url)));
-  await add("status, a page of its replies", 200, `${pathOf(String(parent.url))}?min_id=${String(reply.id)}`);
+  await add("status, a page of its replies", 200, `${pathOf(String(parent.url))}?min_id=${reply.id}`);
   await add("status, its boosts", 200, `${pathOf(String(parent.url))}/reblogs`);
   await add("status, its favourites", 200, `${pathOf(String(parent.url))}/favourites`);
   await add("status, its quotes", 200, `${pathOf(String(parent.url))}/quotes`);

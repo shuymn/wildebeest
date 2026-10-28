@@ -117,7 +117,7 @@ describe("POST /api/v1/statuses", () => {
       [
         { id: h.users.bob.id, username: "bob", url: "https://kopje.test/@bob", acct: "bob" },
         { id: carolId, username: "carol", url: "https://remote.example/@carol", acct: "carol@remote.example" },
-      ].sort((a, b) => a.id.localeCompare(b.id)),
+      ].toSorted((a, b) => a.id.localeCompare(b.id)),
     );
     expect(status.tags).toEqual([{ name: "kopje", url: "https://kopje.test/tags/kopje" }]);
   });
@@ -1165,9 +1165,9 @@ describe("edits never widen a non-public audience", () => {
       // Followers only for private; the addressed accounts as before, never dave or erin.
       const expected = {
         followers: visibility === "private",
-        accounts: [carol, bob.id].sort(),
+        accounts: [carol, bob.id].toSorted(),
       };
-      expect({ ...updates[0]?.audience, accounts: [...(updates[0]?.audience.accounts ?? [])].sort() }).toEqual(
+      expect({ ...updates[0]?.audience, accounts: [...(updates[0]?.audience.accounts ?? [])].toSorted() }).toEqual(
         expected,
       );
       // The new mentions are only linked in the content: they are not addressed or tagged.
@@ -1316,7 +1316,7 @@ describe("media_ids (PostStatusService#validate_media!, MEDIA-1)", () => {
     expect(await posting(h, token, { status: "x", media_ids: ["", "abc", " 12", "1_0"] })).toEqual(
       mediaNotFound("0", "12", "10"),
     );
-    expect(await posting(h, token, { status: "x", media_ids: ["0012", "abc", "0012", `${ID}`] })).toEqual(
+    expect(await posting(h, token, { status: "x", media_ids: ["0012", "abc", "0012", ID] })).toEqual(
       mediaNotFound("12", "0", "12"),
     );
     expect(await posting(h, token, { status: "x", media_ids: ["9007199254740993"] })).toEqual(

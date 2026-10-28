@@ -119,7 +119,7 @@ export function profilePageWithin(db: Db, input: ProfileInput, site: Site, answe
   const list = statusList(budget);
   const read = accountStatusesWithin(
     db,
-    { ...base, page: { limit: PROFILE_PAGE_SIZE, ...(cursor ?? {}) }, pinned: false },
+    { ...base, page: { limit: PROFILE_PAGE_SIZE, ...cursor }, pinned: false },
     options.viewer,
     list.admission,
   );

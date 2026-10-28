@@ -64,7 +64,7 @@ describe("publication after a conversion with --images", () => {
     expect(await publish()).toMatchObject({ ok: true, profileUpdates: 2 });
     const image = (url: string | null) => (url === null ? undefined : { type: "Image", url });
     const sent = await updates(h.store);
-    expect(sent.sort((a, b) => (a.actor < b.actor ? -1 : 1))).toEqual(
+    expect(sent.toSorted((a, b) => (a.actor < b.actor ? -1 : 1))).toEqual(
       locals.map((a) => ({ actor: a.uri, type: "Person", icon: image(a.avatar_url), image: image(a.header_url) })),
     );
     // The new images are Kopje media, and a dropped default header is sent as none.

@@ -10,6 +10,6 @@ export function luminance([r = 0, g = 0, b = 0]: readonly number[]): number {
 }
 
 export function contrast(a: readonly number[], b: readonly number[]): number {
-  const [hi, lo] = [luminance(a), luminance(b)].sort((x, y) => y - x);
+  const [hi, lo] = [luminance(a), luminance(b)].toSorted((x, y) => y - x);
   return (hi! + 0.05) / (lo! + 0.05);
 }

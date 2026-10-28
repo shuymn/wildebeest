@@ -1051,7 +1051,7 @@ export class StoreAdmin {
         return "unlinked";
       }
     }
-    for (const spec of [...record.header.tables].reverse()) {
+    for (const spec of [...record.header.tables].toReversed()) {
       if (deleteRows(this.#sql, spec, this.#resetBatchRows) > 0) {
         this.#touch(record);
         return "more";

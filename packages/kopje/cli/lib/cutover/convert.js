@@ -535,7 +535,7 @@ export function convertLegacy(
   // An original legacy id shared by several actors stays with the oldest; the others get new ids.
   /** @type {Map<string, string>} */
   const legacyOwner = new Map();
-  for (const actor of [...actors].sort((a, b) =>
+  for (const actor of [...actors].toSorted((a, b) =>
     String(a.cdate) < String(b.cdate) ? -1 : String(a.cdate) > String(b.cdate) ? 1 : 0,
   )) {
     const original = originalActorIds.get(String(actor.id));
@@ -1928,7 +1928,7 @@ export function convertLegacy(
   } else if (changedProfiles.size > 0) {
     kopje
       .prepare("INSERT INTO kopje_state (name, value) VALUES ('profile_updates', ?)")
-      .run(JSON.stringify([...changedProfiles].sort()));
+      .run(JSON.stringify([...changedProfiles].toSorted()));
   }
   kopje.exec("COMMIT");
   const violations = kopje.prepare("PRAGMA foreign_key_check").all().length;

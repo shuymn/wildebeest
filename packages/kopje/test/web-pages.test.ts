@@ -572,7 +572,7 @@ describe("permalink (VIS-4)", () => {
     const { response, html } = await page(h, statusPath(reply));
     expect(response.status).toBe(200);
     expect(html).not.toContain("In reply to");
-    expect(html).not.toContain(String(parent.id));
+    expect(html).not.toContain(parent.id);
   });
 
   it("answers the same 404 for private, direct, limited, boosts, remote, another author and nothing", async () => {
@@ -590,7 +590,7 @@ describe("permalink (VIS-4)", () => {
     const bobs = await post(h, bob, { status: "bob public" });
     const boost = await h.request(`/api/v1/statuses/${bobs.id}/reblog`, bearer(alice.token, { method: "POST" }));
     paths.push(`/@alice/${(await boost.json<{ id: string }>()).id}`);
-    paths.push(`/@alice/${String(bobs.id)}`);
+    paths.push(`/@alice/${bobs.id}`);
     const remote = await seedStatus(h.store, { accountId: carol, visibility: "public" });
     paths.push(`/@carol@carol.example/${remote}`, `/@alice/${remote}`, "/@alice/not-an-id");
     for (const path of paths) {

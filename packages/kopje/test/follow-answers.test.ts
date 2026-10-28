@@ -147,7 +147,9 @@ async function snapshot(store: StoreStub) {
     "inbound_retractions",
   ];
   return Promise.all(
-    tables.map(async (table) => (await sql(store, `SELECT * FROM ${table}`)).map((row) => JSON.stringify(row)).sort()),
+    tables.map(async (table) =>
+      (await sql(store, `SELECT * FROM ${table}`)).map((row) => JSON.stringify(row)).toSorted(),
+    ),
   );
 }
 

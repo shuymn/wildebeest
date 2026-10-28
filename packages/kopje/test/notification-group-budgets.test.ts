@@ -330,7 +330,7 @@ describe("grouped notifications within ANSWER_BYTES (RES-3)", () => {
     const most = await runInDurableObject(h.store, (_instance, state) => {
       let largest = 0;
       const counting = observedSql(state.storage.sql, (rows) => {
-        largest = Math.max(largest, rows.filter((row) => "content" in row && "poll_id" in row === false).length);
+        largest = Math.max(largest, rows.filter((row) => "content" in row && !("poll_id" in row)).length);
       });
       listGroupedNotifications.run(counting, {
         credential: { tokenHash, scope: "read:notifications", now: NOW },

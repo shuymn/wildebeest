@@ -304,7 +304,7 @@ function keepPools<T extends ScoredRow>(
   const byKey = (a: T, b: T) => (a.key < b.key ? -1 : a.key > b.key ? 1 : 0);
   const allowedPool = survivors
     .filter(allowed)
-    .sort((a, b) => {
+    .toSorted((a, b) => {
       const first = Number(listed(b)) - Number(listed(a));
       if (first !== 0) {
         return first;
@@ -314,7 +314,7 @@ function keepPools<T extends ScoredRow>(
     .slice(0, TREND_ALLOWED_ROWS);
   const reviewPool = survivors
     .filter((t) => !allowed(t))
-    .sort((a, b) => Number(a.review !== null) - Number(b.review !== null) || b.score - a.score || byKey(a, b))
+    .toSorted((a, b) => Number(a.review !== null) - Number(b.review !== null) || b.score - a.score || byKey(a, b))
     .slice(0, TREND_REVIEW_POOL);
   return [...allowedPool, ...reviewPool];
 }
@@ -473,7 +473,7 @@ function roundStatuses(db: Db, now: number, byDefault: boolean): number {
       allowed: (c.status_review ?? c.account_review ?? (byDefault ? 1 : 0)) === 1,
     }))
     .filter((c) => c.score >= STATUS_DECAY_THRESHOLD)
-    .sort((a, b) => b.score - a.score || (a.id < b.id ? 1 : a.id > b.id ? -1 : 0));
+    .toSorted((a, b) => b.score - a.score || (a.id < b.id ? 1 : a.id > b.id ? -1 : 0));
   type Scored = (typeof scored)[number];
   // Each author's maximum (StatusTrend.allowed lists the author's top-scoring rows that are allowed): the rows tied at
   // it are its top group, met first. Its witness is the first allowed row of the group, else its first unreviewed row,
@@ -497,7 +497,7 @@ function roundStatuses(db: Db, now: number, byDefault: boolean): number {
   const kept: Scored[] = [];
   const fill = (rows: Scored[]) => {
     const allowed = rows.filter((c) => c.allowed);
-    const review = rows.filter((c) => !c.allowed).sort(order);
+    const review = rows.filter((c) => !c.allowed).toSorted(order);
     for (const [pool, list, cap] of [
       ["allowed", allowed, TREND_ALLOWED_ROWS],
       ["review", review, TREND_REVIEW_POOL],

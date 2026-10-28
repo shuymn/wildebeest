@@ -271,7 +271,7 @@ function lossy(store: StoreStub, faults: Record<string, number>): StoreStub {
 }
 
 function keysUnder(h: Harness, prefix: string): string[] {
-  return [...h.s3.objects.keys()].filter((k) => k.startsWith(prefix)).sort();
+  return [...h.s3.objects.keys()].filter((k) => k.startsWith(prefix)).toSorted();
 }
 
 beforeEach(clearOriginals);
@@ -418,7 +418,7 @@ describe("backup run", () => {
     expect(manifest.dump.key).toBe(`${base}dump.kopje.age`);
     expect(manifest.mediaIndex.key).toBe(`${base}media-index.json.age`);
     expect(keysUnder(h, `${PREFIX}backups/`)).toEqual(
-      [`${base}dump.kopje.age`, `${base}manifest.json.age`, `${base}media-index.json.age`].sort(),
+      [`${base}dump.kopje.age`, `${base}manifest.json.age`, `${base}media-index.json.age`].toSorted(),
     );
     expect(index).toEqual([
       {

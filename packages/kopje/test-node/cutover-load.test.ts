@@ -26,7 +26,7 @@ function errorOf(run: () => unknown): ExportError {
 describe("legacy migrations copy", () => {
   it("is the frozen copy of legacy migrations 0000 to 0039", () => {
     const copy = fileURLToPath(new URL("../cli/legacy-migrations/", import.meta.url));
-    const names = readdirSync(copy).sort();
+    const names = readdirSync(copy).toSorted();
     expect(names).toHaveLength(40);
     expect(names[0]).toMatch(/^0000_/);
     expect(names.at(-1)).toMatch(/^0039_/);

@@ -201,9 +201,7 @@ describe("the follow and interact dialogs", () => {
     expect(links.map((l) => [attr(l, "rel"), attr(l, "href")])).toEqual([
       ["alternate", `${ORIGIN}/api/oembed?format=json&url=${encodeURIComponent(String(status.url))}`],
     ]);
-    expect(html).toContain(
-      `/api/oembed?format=json&amp;url=https%3A%2F%2Fkopje.test%2F%40alice%2F${String(status.id)}`,
-    );
+    expect(html).toContain(`/api/oembed?format=json&amp;url=https%3A%2F%2Fkopje.test%2F%40alice%2F${status.id}`);
     const discovered = new URL(attr(links[0]!, "href")!);
     const oembed = await h.request(`${discovered.pathname}${discovered.search}`);
     expect(oembed.status).toBe(200);
@@ -481,15 +479,12 @@ describe("the handoff pages", () => {
     }
     const limited = await seedStatus(h.store, { accountId: alice.id, visibility: "limited", uri: `${ORIGIN}/ap/o/l` });
     const bobs = await post(h, bob, { status: "bob public" });
-    const boost = await h.request(
-      `/api/v1/statuses/${String(bobs.id)}/reblog`,
-      bearer(alice.token, { method: "POST" }),
-    );
+    const boost = await h.request(`/api/v1/statuses/${bobs.id}/reblog`, bearer(alice.token, { method: "POST" }));
     const remote = await seedStatus(h.store, { accountId: carol, visibility: "public" });
     paths.push(
       `/@alice/${limited}/interact`,
       `/@alice/${(await boost.json<{ id: string }>()).id}/interact`,
-      `/@alice/${String(bobs.id)}/interact`,
+      `/@alice/${bobs.id}/interact`,
       `/@carol@carol.example/${remote}/interact`,
       `/@alice/${remote}/interact`,
       "/@alice/100000000000000001/interact",

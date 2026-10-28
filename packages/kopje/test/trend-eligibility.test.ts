@@ -86,7 +86,7 @@ describe("trend eligibility (R41)", () => {
       { author: a, published: t, seq: 13, publishedAt: "2026-10-20T24:00:00.000Z" },
     ]);
     // A whitespace-only warning is no warning once ASCII-trimmed: seq 3 trends.
-    expect(await eligible(store)).toEqual([ok, idOf(t, 3), localOk].sort());
+    expect(await eligible(store)).toEqual([ok, idOf(t, 3), localOk].toSorted());
     // Exactly now is published; a millisecond later is not.
     await trendStatus(store, { author: a, published: t, seq: 20, publishedAt: new Date(AT).toISOString() });
     expect(await eligible(store)).toContain(idOf(t, 20));

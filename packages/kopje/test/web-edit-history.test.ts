@@ -25,10 +25,7 @@ const EDIT_ID_CHUNK = 16;
 type Harness = Awaited<ReturnType<typeof community>>;
 
 async function edit(h: Harness, user: User, status: Status, body: Record<string, unknown>): Promise<void> {
-  const response = await h.request(
-    `/api/v1/statuses/${String(status.id)}`,
-    bearer(user.token, json(body, { method: "PUT" })),
-  );
+  const response = await h.request(`/api/v1/statuses/${status.id}`, bearer(user.token, json(body, { method: "PUT" })));
   expect(response.status).toBe(200);
 }
 
@@ -85,7 +82,7 @@ describe("the edit history on a status page", () => {
     expect(autofocus[0]!.childNodes).toContain(heading);
 
     // Newest first, each with its label, its own time and its own warning; the post shows the newest.
-    const history = await (await h.request(`/api/v1/statuses/${String(status.id)}/history`)).json<Status[]>();
+    const history = await (await h.request(`/api/v1/statuses/${status.id}/history`)).json<Status[]>();
     const versions = query(dialog, "li").filter((li) => attr(li, "class") === "stack");
     expect(
       versions.map((li) => ({
@@ -135,7 +132,7 @@ describe("the edit history on a status page", () => {
     const read = (embed: boolean) =>
       h.store.webStatusPage(BUILD, {
         handle: "alice",
-        id: String(status.id),
+        id: status.id,
         now: NOW,
         tab: embed ? null : { kind: "replies", cursor: null },
       });
@@ -216,7 +213,7 @@ describe("the edit history’s visibility (VIS-4, VIS-11)", () => {
       const status = await post(h, alice, { status: `@bob ${name} version one`, visibility });
       await edit(h, alice, status, { status: `@bob ${name} version two` });
       // The versions exist: the author reads both through the API (the branch the page guards is reached).
-      const own = await h.request(`/api/v1/statuses/${String(status.id)}/history`, bearer(alice.token));
+      const own = await h.request(`/api/v1/statuses/${status.id}/history`, bearer(alice.token));
       expect(
         (await own.json<Status[]>()).map((v) => v.content),
         name,
@@ -257,7 +254,7 @@ describe("the edit history’s read", () => {
     const other = await post(h, alice, { status: "another" });
     const input: StatusInput = {
       handle: "alice",
-      id: String(status.id),
+      id: status.id,
       now: NOW,
       tab: { kind: "replies", cursor: null },
     };
@@ -301,7 +298,7 @@ describe("the edit history’s read", () => {
     await sql(h.store, "UPDATE statuses SET edited_at = ? WHERE id = ?", at, status.id);
     const input: StatusInput = {
       handle: "alice",
-      id: String(status.id),
+      id: status.id,
       now: NOW,
       tab: { kind: "replies", cursor: null },
     };

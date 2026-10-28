@@ -296,6 +296,7 @@ export const recordFieldLink = writeOperation<
     const recorded =
       value !== null &&
       Number.isSafeInteger(input.now) &&
+      // oxlint-disable-next-line typescript/no-unnecessary-boolean-literal-compare -- unchecked RPC input
       recordRemoteFieldLink(db, input.accountId, value, input.verified === true, input.now, iso(input.now));
     return { held: true, recorded };
   }

@@ -176,12 +176,12 @@ describe("the status writer (remote-statuses.ts writeMedia)", () => {
       objects
         .filter((o) => o.state === "stored")
         .map((o) => o.slot_id)
-        .sort(byText),
+        .toSorted(byText),
     ).toEqual(
       [
         before.get(`attachment ${MASTODON}/system/media/1.png`)!.id,
         before.get(`attachment ${MASTODON}/system/media/3.mp4`)!.id,
-      ].sort(byText),
+      ].toSorted(byText),
     );
     expect(objects.filter((o) => o.state === "doomed" && o.kind !== "avatar" && o.kind !== "header")).toHaveLength(2);
     expect(await orphans(w)).toEqual([]);

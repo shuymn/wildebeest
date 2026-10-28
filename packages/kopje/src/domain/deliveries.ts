@@ -309,10 +309,10 @@ function provenanceOf(b: Behind): Provenance {
   if (b.unknown) {
     return {};
   }
-  const domains = b.domains.size > PROVENANCE_MAX ? {} : { domains: [...b.domains].sort() };
+  const domains = b.domains.size > PROVENANCE_MAX ? {} : { domains: [...b.domains].toSorted() };
   return b.accounts.size > PROVENANCE_MAX
     ? { many: true, ...domains }
-    : { accounts: [...b.accounts].sort(), ...domains };
+    : { accounts: [...b.accounts].toSorted(), ...domains };
 }
 
 // How an activity reaches the addressed account with this uri (audienceTargets): true for a copy of its own at its
@@ -407,8 +407,8 @@ function targetsOf(
     targets: [
       ...[...personal]
         .map(([addressee, { inbox, behind }]) => ({ inbox, addressee, ...provenanceOf(behind) }))
-        .sort(byInbox),
-      ...[...neutral].map(([inbox, behind]) => ({ inbox, addressee: null, ...provenanceOf(behind) })).sort(byInbox),
+        .toSorted(byInbox),
+      ...[...neutral].map(([inbox, behind]) => ({ inbox, addressee: null, ...provenanceOf(behind) })).toSorted(byInbox),
     ],
     voters: new Set(recipients.voters.map((v) => v.inbox).filter(isDeliverableInbox)),
   };
@@ -1766,7 +1766,7 @@ function stagedProvenance(unknown: boolean, accounts: string[]): Provenance {
   if (unknown) {
     return {};
   }
-  return accounts.length > PROVENANCE_MAX ? { many: true } : { accounts: [...accounts].sort() };
+  return accounts.length > PROVENANCE_MAX ? { many: true } : { accounts: [...accounts].toSorted() };
 }
 
 // Deletes the first n rows of the staged set in key order, personal copies first: in each half (neutral) a range of

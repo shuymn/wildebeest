@@ -121,7 +121,7 @@ async function pushedTypes(h: ApiHarness, client: Client): Promise<string[]> {
   const { fetch, sent } = recordingFetch();
   await round(h, fetch);
   const payloads = await Promise.all(sent.map((s) => readPush(client, s.request)));
-  return payloads.map((p) => p.notification_type as string).sort();
+  return payloads.map((p) => p.notification_type as string).toSorted();
 }
 
 describe("sending a push", () => {
@@ -279,7 +279,7 @@ describe("sending a push", () => {
     const { fetch, sent } = recordingFetch();
     await round(h, fetch);
     const bodies = await Promise.all(sent.map(async (s) => (await readPush(client, s.request)).body as string));
-    expect(bodies.map((body) => body.replace("@alice from ", "")).sort()).toEqual(senders);
+    expect(bodies.map((body) => body.replace("@alice from ", "")).toSorted()).toEqual(senders);
   });
 
   it("sends to each subscription of the recipient, never to another account’s", async () => {
@@ -290,7 +290,7 @@ describe("sending a push", () => {
     await post(h, h.users.bob, { status: "@alice hi" });
     const { fetch, sent } = recordingFetch();
     await round(h, fetch);
-    expect(sent.map((s) => s.url).sort()).toEqual(["https://push.example/second", ENDPOINT]);
+    expect(sent.map((s) => s.url).toSorted()).toEqual(["https://push.example/second", ENDPOINT]);
     const byUrl = new Map(sent.map((s) => [s.url, s.request]));
     expect((await readPush(client, byUrl.get(ENDPOINT) as Request)).access_token).toBe(h.users.alice.token);
     expect((await readPush(second, byUrl.get("https://push.example/second") as Request)).access_token).toBe(token);

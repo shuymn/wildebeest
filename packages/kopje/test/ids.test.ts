@@ -61,7 +61,7 @@ describe("ID generator", () => {
         expect(id).toMatch(/^\d{18}$/);
       }
       expect(timeOf(ids[0]!)).toBe(NOW);
-      expect([...ids].sort()).toEqual(ids);
+      expect([...ids].toSorted()).toEqual(ids);
       expect(new Set(ids).size).toBe(3);
 
       // The allocation shares the transaction of the write: a failed write does not advance it.

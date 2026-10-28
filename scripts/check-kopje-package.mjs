@@ -451,7 +451,7 @@ function hashes(dir) {
   return Object.fromEntries(
     files
       .map((file) => [relative(dir, file).split("\\").join("/"), sha256(readFileSync(file))])
-      .sort(([a], [b]) => a.localeCompare(b)),
+      .toSorted(([a], [b]) => a.localeCompare(b)),
   );
 }
 

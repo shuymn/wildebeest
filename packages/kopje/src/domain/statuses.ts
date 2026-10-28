@@ -1323,7 +1323,7 @@ export const getStatuses = optionalUserReadOperation<{ ids: readonly string[]; p
       JSON.stringify(resolved),
       viewer.now,
     );
-    const visible = rows.map((row) => row.id).sort((a, b) => (order.get(a) ?? 0) - (order.get(b) ?? 0));
+    const visible = rows.map((row) => row.id).toSorted((a, b) => (order.get(a) ?? 0) - (order.get(b) ?? 0));
     const options = { ...present, viewer };
     return presentStatusesWithin(db, presentation(db, visible, options), visible, ARRAY_ANSWER_BYTES, true).items;
   },
@@ -1443,7 +1443,7 @@ function descendantTree(db: Db, rootId: string, maxDepth: number, budget: number
   }
   const ordered: string[] = [];
   const visit = (id: string): void => {
-    for (const child of (children.get(id) ?? []).sort()) {
+    for (const child of (children.get(id) ?? []).toSorted()) {
       ordered.push(child);
       visit(child);
     }

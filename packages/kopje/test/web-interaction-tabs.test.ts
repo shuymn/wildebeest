@@ -34,7 +34,7 @@ import {
 import { type PlannedStatement, plannedSql, scansOf, staleStatistics } from "./read-helpers";
 import { community, seedStatus } from "./status-helpers";
 import { attr, one, parseHtml, query, text } from "./web-dom";
-import { SITE } from "./web-fixtures";
+import { render, SITE } from "./web-fixtures";
 import { countedHarness } from "./web-helpers";
 
 // A status page's interaction tabs (issue #1185 §5): who boosted it (public and unlisted boosts only), who favourited
@@ -527,15 +527,15 @@ function within(h: Harness, focal: string, kind: Kind, answerBytes: number) {
       throw new Error(page.status);
     }
     expect(jsonBytes({ ...page, site: SITE })).toBeLessThanOrEqual(answerBytes);
-    return String(
-      await jsx(StatusPage, {
+    return await render(
+      jsx(StatusPage, {
         status: page.value,
         parent: page.parent,
         history: page.history,
         site: SITE,
         embed: embedHtml(page.value, SITE.domain),
         thread: { ...page.thread, cursor },
-      }).toString(),
+      }),
     );
   };
 }

@@ -75,7 +75,7 @@ export function featuredPageWithin(db: Db, input: FeaturedInput, site: Site, ans
   const list = accountEndorsementsWithin(
     db,
     row.id,
-    { page: { limit: ENDORSEMENTS_PAGE_SIZE, ...(cursor ?? {}) }, present },
+    { page: { limit: ENDORSEMENTS_PAGE_SIZE, ...cursor }, present },
     (entries) => admitStrict(budget, entries),
   );
   return {

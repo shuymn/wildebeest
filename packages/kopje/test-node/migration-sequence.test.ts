@@ -84,7 +84,7 @@ describe("Store migration registry", () => {
 
   it("registers every file under migrations/ once, by its own name", () => {
     expect(entries.filter((e) => e.file !== e.name)).toEqual([]);
-    expect(entries.map((e) => e.name).sort()).toEqual(files.sort());
+    expect(entries.map((e) => e.name).toSorted()).toEqual(files.toSorted());
   });
 
   // Each fixture is the registry with its first entry edited.

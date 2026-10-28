@@ -141,7 +141,7 @@ describe("a blocked domain's cleanups are verified with stored keys only", () =>
         id: `${bob.uri}#quote-requests/1`,
         type: "QuoteRequest",
         actor: bob.uri,
-        object: `${"https://kopje.test"}/ap/users/alice/statuses/1`,
+        object: `https://kopje.test/ap/users/alice/statuses/1`,
         instrument: mastodonNote(bob).id,
       }),
     ).toBe(202);
@@ -226,7 +226,7 @@ describe("fetches outside the inbox after a block (rows 9, 10)", () => {
       await t.api<{ statuses: unknown[] }>(`/api/v2/search?resolve=true&q=${encodeURIComponent(note.id)}`),
     ).toMatchObject({ status: 200, body: { statuses: [] } });
     for (const endpoint of ACCOUNT_SEARCHES) {
-      const answer = await t.api<unknown>(endpoint.path(`resolve=true&q=${encodeURIComponent(`bob@${BLOCKED}`)}`));
+      const answer = await t.api(endpoint.path(`resolve=true&q=${encodeURIComponent(`bob@${BLOCKED}`)}`));
       expect([endpoint.name, answer.status, answer.body]).toEqual([endpoint.name, 200, endpoint.empty]);
     }
     expect(await accountId(t.store, bob.uri)).toBeUndefined();

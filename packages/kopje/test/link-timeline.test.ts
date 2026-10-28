@@ -201,8 +201,8 @@ describe("GET /api/v1/timelines/link", () => {
         seen.push(...ids(page));
         at = page[rel];
         if (at !== null) {
-          expect([...new URLSearchParams(at.split("?")[1]).keys()].sort()).toEqual(
-            ["limit", rel === "next" ? "max_id" : "min_id", "url"].sort(),
+          expect([...new URLSearchParams(at.split("?")[1]).keys()].toSorted()).toEqual(
+            ["limit", rel === "next" ? "max_id" : "min_id", "url"].toSorted(),
           );
         }
       }

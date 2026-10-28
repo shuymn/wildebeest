@@ -246,7 +246,7 @@ function ordered(
   const texts = textMatches(db, rows, filter);
   return rows
     .filter((row) => inBounds(bounds, row.id) && matches(filter, adminId, row, texts))
-    .sort((a, b) => (a.id < b.id === bounds.ascending ? -1 : 1));
+    .toSorted((a, b) => (a.id < b.id === bounds.ascending ? -1 : 1));
 }
 
 // The candidates that pass the filter's text predicates, tested in SQL so no text is read into the isolate (null when

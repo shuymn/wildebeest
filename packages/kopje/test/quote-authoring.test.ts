@@ -802,7 +802,7 @@ describe("Concurrency: the test table", () => {
     expect((await outbound(t.store)).length).toBe(before);
     // The body delivered to every destination is the one bob signed, byte for byte, and verifies.
     const sent = (await deliver(t)).filter((s) => s.json.type === "Delete" && s.json.object === stamp);
-    expect([...new Set(sent.map((s) => s.inbox))].sort()).toEqual([
+    expect([...new Set(sent.map((s) => s.inbox))].toSorted()).toEqual([
       "https://fans.example/inbox",
       `${MASTODON}/users/bob/inbox`,
     ]);

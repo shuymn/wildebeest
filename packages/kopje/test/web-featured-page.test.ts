@@ -40,6 +40,7 @@ import { expectFullPages, shownAccounts, viaRoute, walkPages, walkProfile } from
 import { observedSql, type PlannedStatement, plannedSql, scansOf, staleStatistics } from "./read-helpers";
 import { community } from "./status-helpers";
 import { accessibleName, attr, closest, one, parseHtml, query, text } from "./web-dom";
+import { render } from "./web-fixtures";
 import { countedHarness } from "./web-helpers";
 
 // The profile's Featured tab: /@user/featured shows a local account's featured hashtags and the accounts it endorses,
@@ -175,15 +176,15 @@ function within(h: Harness, answerBytes: number) {
     const url = new URL(path, "https://kopje.test");
     const page = await readWithin(h, path, answerBytes);
     expect(jsonBytes({ ...page, site: SITE })).toBeLessThanOrEqual(answerBytes);
-    return String(
-      await jsx(FeaturedPage, {
+    return await render(
+      jsx(FeaturedPage, {
         account: page.account,
         tags: page.tags,
         accounts: page.accounts,
         cursor: pageCursor(url.searchParams.get("max_id"), url.searchParams.get("min_id")),
         paging: page.paging,
         site: SITE,
-      }).toString(),
+      }),
     );
   };
 }

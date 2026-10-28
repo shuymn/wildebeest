@@ -39,7 +39,7 @@ describe("verifiableLink", () => {
       }
     }
     const narrower = cases.filter((c) => c.verifiable && !verifiableLink(c.value)).map((c) => c.value);
-    expect(narrower.sort()).toEqual(Object.keys(NARROWER).sort());
+    expect(narrower.toSorted()).toEqual(Object.keys(NARROWER).toSorted());
   });
 
   it.each([
@@ -99,7 +99,7 @@ describe("remoteFieldLink", () => {
     const narrower = remoteCases
       .filter((c) => c.link !== null && remoteFieldLink(c.value) === null)
       .map((c) => c.reason);
-    expect(narrower.sort()).toEqual(Object.keys(REMOTE_NARROWER).sort());
+    expect(narrower.toSorted()).toEqual(Object.keys(REMOTE_NARROWER).toSorted());
   });
 
   it("refuses the over-acceptance cases", () => {

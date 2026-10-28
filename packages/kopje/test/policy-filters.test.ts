@@ -143,7 +143,7 @@ describe("filters on generated worlds", () => {
   afterAll(() => {
     // Each endpoint reported a hide filter and another filter in some case, so the property cannot pass vacuously.
     const endpoints = ["home", "list", "public", "tag", "account statuses", "context", "notifications"];
-    expect([...shown].sort()).toEqual(endpoints.flatMap((e) => [`${e} hide`, `${e} other`]).sort());
+    expect([...shown].toSorted()).toEqual(endpoints.flatMap((e) => [`${e} hide`, `${e} other`]).toSorted());
   });
 
   it("removes nothing, and reports every active filter that matches each status", async () => {

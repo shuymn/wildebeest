@@ -169,7 +169,7 @@ function resolveMentions(db: Db, refs: readonly MentionRef[], origin: string): M
 				ORDER BY b.rowid LIMIT 1)`,
       JSON.stringify(wanted),
     )
-    .sort((a, b) => a.i - b.i);
+    .toSorted((a, b) => a.i - b.i);
   // Two references may name one account (@alice and @alice@<this host>): it is linked for both, counted once.
   const kept = new Map<string, MentionRow>();
   const accounts = new Set<string>();
@@ -398,7 +398,7 @@ export const listAnnouncements = tokenUserReadOperation<{ origin: string }, Anno
         `SELECT ${COLUMNS} FROM announcements a INDEXED BY announcements_published WHERE ${announcementShownSql("a")}
 				LIMIT ${MAX_LIVE_ANNOUNCEMENTS}`,
       )
-      .sort(chronological);
+      .toSorted(chronological);
     const read = new Set(
       listing
         .all<{ id: string }>(

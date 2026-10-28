@@ -213,7 +213,7 @@ export class S3Mock {
         const after = q.get("continuation-token") ?? "";
         const keys = [...this.objects.keys()]
           .filter((k) => k.startsWith(prefix) && k > after && !this.hidden.has(k))
-          .sort();
+          .toSorted();
         const page = keys.slice(0, this.maxListKeys);
         const truncated = keys.length > page.length;
         return xml(
@@ -233,7 +233,7 @@ export class S3Mock {
           .filter(
             ([id, u]) => u.key.startsWith(prefix) && (u.key > marker[0] || (u.key === marker[0] && id > marker[1])),
           )
-          .sort(([a, u], [b, v]) => (u.key < v.key ? -1 : u.key > v.key ? 1 : a < b ? -1 : 1));
+          .toSorted(([a, u], [b, v]) => (u.key < v.key ? -1 : u.key > v.key ? 1 : a < b ? -1 : 1));
         const page = all.slice(0, this.maxListKeys);
         const truncated = all.length > page.length;
         const last = page.at(-1);

@@ -209,7 +209,7 @@ function unseen(element: Element): string[] {
   } else if (bg.length === 4 && bg[3]! < 1) {
     problems.push("no opaque background of its own");
   } else {
-    const [hi, lo] = [luminance(fg), luminance(bg)].sort((a, b) => b - a);
+    const [hi, lo] = [luminance(fg), luminance(bg)].toSorted((a, b) => b - a);
     const ratio = (hi! + 0.05) / (lo! + 0.05);
     if (ratio < 4.5 || (fg.length === 4 && fg[3]! < 1)) {
       problems.push(`text contrast ${ratio.toFixed(2)}`);

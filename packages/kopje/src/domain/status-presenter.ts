@@ -611,7 +611,7 @@ function mediaOf(db: Db, ids: string): Map<string, MediaRow[]> {
 		WHERE m.id IN (SELECT x.id FROM (${STATUS_IDS}) j CROSS JOIN media_attachments x ON x.id IN (${shownMediaSql("j.value")}))`,
     ids,
   );
-  return groupBy(rows.sort((a, b) => a.position - b.position || byCodePoints(a.id, b.id)));
+  return groupBy(rows.toSorted((a, b) => a.position - b.position || byCodePoints(a.id, b.id)));
 }
 
 type TextRow = Pick<StatusRow, "spoiler_text" | "content" | "source_text" | "author_domain">;
@@ -680,7 +680,7 @@ function hydrate(
 				CROSS JOIN accounts a INDEXED BY ${ACCOUNTS_ID_INDEX} WHERE a.id IN (${SHOWN_MENTIONS_SQL})`,
         notBoostsJson,
       )
-      .sort((a, b) => byCodePoints(a.id, b.id)),
+      .toSorted((a, b) => byCodePoints(a.id, b.id)),
   );
   // The attached card of each status but a boost (one row at most, by its key).
   // A quoted status shows none (presentCard), so only the statuses and the boosts' originals are read.
@@ -699,7 +699,7 @@ function hydrate(
         `SELECT ${selectSql(TAG_COLUMN_MAP)} FROM (${STATUS_IDS}) j CROSS JOIN status_tags t WHERE ${SHOWN_TAGS_SQL}`,
         notBoostsJson,
       )
-      .sort((a, b) => byCodePoints(a.name, b.name)),
+      .toSorted((a, b) => byCodePoints(a.name, b.name)),
   );
   const flags = viewerFlags(db, viewerId, all);
   // R36 for the viewer, of every status presented by its own row (a boost answers denied: its original's is shown).

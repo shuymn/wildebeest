@@ -252,7 +252,7 @@ export function blocksPage(db: Db, page: PageQuery): InstanceDomainBlock[] {
     (ascending ? page.minId : page.sinceId) ?? null,
     page.limit,
   );
-  return (ascending ? rows.reverse() : rows).map(present);
+  return (ascending ? rows.toReversed() : rows).map(present);
 }
 
 // Whether a suspend block covers `host`, a normalized domain (hostDomain).
