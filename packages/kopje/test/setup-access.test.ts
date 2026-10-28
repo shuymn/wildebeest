@@ -398,7 +398,9 @@ describe("/setup Access: coordination through the Store (SETUP-2, SETUP-3)", () 
     h.advance(ACCESS_LEASE_MS + 1000);
     const early = await accessPost(h, b.cookie, {}, "quick-token-0123456789");
     expect(early.status).toBe(422);
-    expect(await early.text()).toContain("Another run of this step is in progress");
+    const busy = await early.text();
+    expect(busy).toContain("Another run of this step is in progress");
+    expect(busy).toContain("a stalled run lapses after 2.5 minutes");
     h.advance(ACCESS_SUPERSEDE_GRACE_MS);
     expect((await accessPost(h, b.cookie, {}, "quick-token-0123456789")).status).toBe(200);
     expect((await adminPost(h, b.cookie)).status).toBe(303);
