@@ -120,8 +120,16 @@ function publishedIntegrity(npm, id) {
 	return parsed
 }
 
+// Leads every release's notes. Dependabot shows a release's notes in the body of the pull request that updates an
+// instance to it (the template's .github/dependabot.yml), and has no setting of its own for such a warning.
+export const UPGRADE_NOTE =
+	'Updating an instance to this version deploys it when the update is merged, and the Store may upgrade its schema. ' +
+	'Before merging, read these notes and ' +
+	'[upgrade.md](https://github.com/shuymn/kopje/blob/main/packages/kopje/docs/upgrade.md).'
+
 // Creates the GitHub release for the tag, unless it exists: a rerun after the release was made leaves it as it is.
-// Any answer from `gh release view` other than "found" or "not found" throws without creating anything.
+// Any answer from `gh release view` other than "found" or "not found" throws without creating anything. The notes are
+// UPGRADE_NOTE followed by the notes file.
 export function createRelease({
 	repo,
 	tag,
@@ -141,7 +149,7 @@ export function createRelease({
 		throw new Error(`gh release view ${tag} failed (exit ${view.code}): ${view.stderr.slice(0, 500)}`)
 	}
 	const args = ['release', 'create', tag, '--repo', repo, '--verify-tag', '--title', `Kopje ${version}`]
-	args.push('--notes-file', notesFile)
+	args.push('--notes', `${UPGRADE_NOTE}\n\n${readFileSync(notesFile, 'utf8')}`)
 	if (prerelease) {
 		args.push('--prerelease')
 	}

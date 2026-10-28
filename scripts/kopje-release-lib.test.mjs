@@ -7,7 +7,14 @@ import { tmpdir } from 'node:os'
 import { join, relative } from 'node:path'
 import { after, before, describe, it } from 'node:test'
 
-import { createRelease, mainChecked, publish, runCommand, withManifestVersion } from './kopje-release-lib.mjs'
+import {
+	createRelease,
+	mainChecked,
+	publish,
+	runCommand,
+	UPGRADE_NOTE,
+	withManifestVersion,
+} from './kopje-release-lib.mjs'
 
 let work
 let tarball
@@ -115,30 +122,34 @@ describe('publish', () => {
 })
 
 describe('createRelease', () => {
-	const release = { repo: 'owner/repo', tag: 'kopje-v1.2.3', version: '1.2.3', notesFile: 'notes.md', tarball: 't.tgz' }
+	const release = () => {
+		const notesFile = join(work, 'notes.md')
+		writeFileSync(notesFile, '### Fixed\n\n- Something.\n')
+		return { repo: 'owner/repo', tag: 'kopje-v1.2.3', version: '1.2.3', notesFile, tarball: 't.tgz' }
+	}
 
 	it('never creates a release that exists', () => {
 		const gh = stub({ 'release view': { code: 0, stdout: '{"tagName":"kopje-v1.2.3"}', stderr: '' } })
-		assert.equal(createRelease({ ...release, prerelease: false, gh: gh.command, log: quiet }), 'exists')
+		assert.equal(createRelease({ ...release(), prerelease: false, gh: gh.command, log: quiet }), 'exists')
 		assert.equal(gh.calls.filter((args) => args[1] === 'create').length, 0)
 	})
 
-	it('creates a release that is not found, with the notes and the tarball', () => {
+	it('creates a release that is not found, with the upgrade note, the notes and the tarball', () => {
 		const gh = stub({ 'release view': { code: 1, stdout: '', stderr: 'release not found\n' } })
-		assert.equal(createRelease({ ...release, prerelease: true, gh: gh.command, log: quiet }), 'created')
+		assert.equal(createRelease({ ...release(), prerelease: true, gh: gh.command, log: quiet }), 'created')
 		const creates = gh.calls.filter((args) => args[1] === 'create')
 		assert.equal(creates.length, 1)
 		const args = creates[0]
 		assert.equal(args[2], 'kopje-v1.2.3')
 		assert.ok(args.includes('--verify-tag'))
 		assert.ok(args.includes('--prerelease'))
-		assert.equal(args[args.indexOf('--notes-file') + 1], 'notes.md')
+		assert.equal(args[args.indexOf('--notes') + 1], `${UPGRADE_NOTE}\n\n### Fixed\n\n- Something.\n`)
 		assert.equal(args.at(-1), 't.tgz')
 	})
 
 	it('creates nothing when gh release view fails for another reason', () => {
 		const gh = stub({ 'release view': { code: 1, stdout: '', stderr: 'HTTP 502' } })
-		assert.throws(() => createRelease({ ...release, prerelease: false, gh: gh.command, log: quiet }))
+		assert.throws(() => createRelease({ ...release(), prerelease: false, gh: gh.command, log: quiet }))
 		assert.equal(gh.calls.filter((args) => args[1] === 'create').length, 0)
 	})
 })
