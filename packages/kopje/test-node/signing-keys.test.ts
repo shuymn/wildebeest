@@ -1,23 +1,19 @@
-import * as tsParser from "@typescript-eslint/parser";
-import { Linter } from "eslint";
-import { describe, expect, it } from "vitest";
+import { execFileSync } from "node:child_process";
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 
-import config from "../../../eslint.config.js";
+import { RuleTester } from "oxlint/plugins-dev";
+import { afterAll, describe, expect, it } from "vitest";
 
-// The rules eslint.config.js sets for Kopje's sources: a fetch signs as a local account only with a key loaded while
-// the account is available; the unchecked localKey is read only by federation.ts publishedKeyPair, which returns a bare
-// key pair (never a Signer) for Fedify's key-pairs dispatcher.
-const block = (config as { files?: string[]; rules?: Linter.RulesRecord }[]).find(
-  (entry) => entry.files?.includes("packages/kopje/src/**/*.ts") && entry.rules?.["no-restricted-syntax"] !== undefined,
-);
+import { signingKeys } from "../lint/signing-keys.js";
 
-function flagged(code: string): number {
-  return new Linter({ configType: "flat" }).verify(
-    code,
-    [{ files: ["**/*.ts"], languageOptions: { parser: tsParser }, rules: block?.rules ?? {} }],
-    "federation.ts",
-  ).length;
-}
+// The kopje/signing-keys rule (lint/signing-keys.js): a fetch signs as a local account only with a key loaded while the
+// account is available; the unchecked localKey is read only by federation.ts publishedKeyPair, which returns a bare key
+// pair (never a Signer) for Fedify's key-pairs dispatcher.
+RuleTester.describe = describe;
+RuleTester.it = it;
 
 const ALLOWED = `
 const publishedKeyPair = async (username: string) => {
@@ -27,27 +23,55 @@ const publishedKeyPair = async (username: string) => {
 const signer = async (username: string) => rpc((s) => s.fetchSigner(build, { by: username }))
 federation.setKeyPairsDispatcher(async (_ctx, identifier) => [await publishedKeyPair(identifier)])
 `;
+const FORBIDDEN = ALLOWED.replace("s.fetchSigner(", "s.localKey(");
 
-describe("signing keys", () => {
-  it("lets publishedKeyPair alone read the unchecked key", () => {
-    expect(block).toBeDefined();
-    expect(flagged(ALLOWED)).toBe(0);
-  });
+const cases = (code: string, errors: number) => ({ code, errors, filename: "federation.ts" });
 
-  it("flags the unchecked key read anywhere else, however it is named", () => {
-    expect(flagged(ALLOWED.replace("s.fetchSigner(", "s.localKey("))).toBe(1);
-    expect(flagged(ALLOWED.replace("s.fetchSigner(", "s['localKey']("))).toBe(1);
-    expect(flagged(ALLOWED.replace("s.fetchSigner(", "s.localKey?.("))).toBe(1);
-    expect(flagged(`${ALLOWED}\nconst load = store.localKey`)).toBe(1);
-    expect(flagged(`${ALLOWED}\nconst { localKey } = store`)).toBe(1);
-  });
+new RuleTester().run("signing-keys", signingKeys, {
+  valid: [{ code: ALLOWED, filename: "federation.ts" }],
+  invalid: [
+    cases(FORBIDDEN, 1),
+    cases(ALLOWED.replace("s.fetchSigner(", "s['localKey']("), 1),
+    cases(ALLOWED.replace("s.fetchSigner(", "s.localKey?.("), 1),
+    cases(`${ALLOWED}\nconst load = store.localKey`, 1),
+    cases(`${ALLOWED}\nconst { localKey } = store`, 1),
+    cases(
+      `ctx.getDocumentLoader({ identifier })\nctx['getActorKeyPairs'](name)\nfederation.setInboxListeners('/u/{identifier}/inbox')`,
+      3,
+    ),
+    cases(`const { ['setInboxListeners']: listen } = federation\nconst { getDocumentLoader } = ctx`, 2),
+  ],
+});
 
-  it("flags every Fedify call that signs with the published key pairs", () => {
-    expect(
-      flagged(
-        `ctx.getDocumentLoader({ identifier })\nctx['getActorKeyPairs'](name)\nfederation.setInboxListeners('/u/{identifier}/inbox')`,
-      ),
-    ).toBe(3);
-    expect(flagged(`const { ['setInboxListeners']: listen } = federation\nconst { getDocumentLoader } = ctx`)).toBe(2);
+// The root .oxlintrc.json registers the plugin and turns the rule on for packages/kopje/src alone. The probe runs the
+// real config, plugin and binary in a scratch copy of the layout, so it writes nothing into the source tree.
+describe("signing keys in the lint config", () => {
+  const root = fileURLToPath(new URL("../../..", import.meta.url));
+  const scratch = mkdtempSync(join(tmpdir(), "kopje-signing-keys-"));
+  afterAll(() => rmSync(scratch, { recursive: true, force: true }));
+
+  it("flags the unchecked key in packages/kopje/src and nowhere else", () => {
+    symlinkSync(join(root, ".oxlintrc.json"), join(scratch, ".oxlintrc.json"));
+    symlinkSync(join(root, "node_modules"), join(scratch, "node_modules"));
+    mkdirSync(join(scratch, "packages/kopje/src"), { recursive: true });
+    symlinkSync(join(root, "packages/kopje/lint"), join(scratch, "packages/kopje/lint"));
+    writeFileSync(join(scratch, "packages/kopje/src/probe.ts"), FORBIDDEN);
+    writeFileSync(join(scratch, "packages/kopje/probe-outside.ts"), FORBIDDEN);
+
+    let output: string;
+    try {
+      // The probe files are named: a scratch directory under a Git-ignored path would otherwise be skipped.
+      output = execFileSync(
+        join(root, "node_modules/.bin/oxlint"),
+        ["--type-aware", "-f", "json", "packages/kopje/src/probe.ts", "packages/kopje/probe-outside.ts"],
+        { cwd: scratch, encoding: "utf8" },
+      );
+    } catch (error) {
+      // oxlint exits 1 when it reports an error; its report is still on stdout.
+      output = (error as { stdout: string }).stdout;
+    }
+    const report = JSON.parse(output) as { diagnostics: { code: string; filename: string }[] };
+    const flagged = report.diagnostics.filter((d) => d.code === "kopje(signing-keys)").map((d) => d.filename);
+    expect(flagged).toEqual(["packages/kopje/src/probe.ts"]);
   });
 });

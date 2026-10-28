@@ -204,7 +204,7 @@ export function legacyFollowers(actorId, stored) {
   }
   if (stored.present) {
     // Legacy calls toString() on whatever is stored, an object included ('[object Object]'), and so must this.
-    // eslint-disable-next-line @typescript-eslint/no-base-to-string
+    // oxlint-disable-next-line typescript/no-base-to-string
     return stored.value === null ? null : String(stored.value);
   }
   try {

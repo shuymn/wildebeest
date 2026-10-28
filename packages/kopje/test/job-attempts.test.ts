@@ -118,7 +118,7 @@ describe("isolated (Db.savepoint)", () => {
         [Number.NaN, "test: a string", 0, undefined].map((value) =>
           isolated(db, () => {
             put(db, "a");
-            // eslint-disable-next-line @typescript-eslint/only-throw-error -- a thrown primitive is the case under test
+            // oxlint-disable-next-line typescript/only-throw-error -- a thrown primitive is the case under test
             throw value;
           }),
         ),

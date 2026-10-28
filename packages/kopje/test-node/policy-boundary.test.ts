@@ -474,8 +474,8 @@ describe("policy boundary", () => {
 // types only, made by the policy module after it applied a rule for the viewer. Elsewhere a brand's name may only
 // constrain a value the policy module made: in an import, or as the type of a function parameter. Any other mention (a
 // cast, a type argument such as db.all<{ id: VisibleStatusId }>, a type predicate, an alias, an annotated variable or
-// return type) could make one from a plain string. The presenter is called only from the domain modules, where ESLint
-// refuses an `any` argument (eslint.config.js), so no `any` reaches its parameters either.
+// return type) could make one from a plain string. The presenter is called only from the domain modules, where oxlint
+// refuses an `any` argument (.oxlintrc.json), so no `any` reaches its parameters either.
 const BRANDS = new Set(["VisibleStatusId", "OwnStatusId", "WithVisibleStatus"]);
 const PRESENTER = "src/domain/status-presenter.ts";
 const PRESENTS = /^present(?:Own)?Status(?:es)?$/;

@@ -1,0 +1,188 @@
+{
+  "$schema": "./node_modules/oxlint/configuration_schema.json",
+  "plugins": ["typescript", "unicorn", "oxc", "import", "vitest", "promise"],
+  "jsPlugins": ["./packages/kopje/lint/signing-keys.js"],
+  "categories": { "correctness": "error", "suspicious": "error" },
+  "options": { "typeAware": true, "reportUnusedDisableDirectives": "error" },
+  "ignorePatterns": [
+    "packages/kopje/docs/mastodon-api-spec/**",
+    "packages/kopje/public/assets/kopje.*.js",
+    "packages/kopje/worker-configuration.d.ts"
+  ],
+  "rules": {
+    "eslint/array-callback-return": "error",
+    "eslint/eqeqeq": ["error", "always", { "null": "ignore" }],
+    "eslint/no-array-constructor": "error",
+    "eslint/no-case-declarations": "error",
+    "eslint/no-constructor-return": "error",
+    "eslint/no-empty": "error",
+    "eslint/no-fallthrough": "error",
+    "eslint/no-implicit-coercion": "error",
+    "eslint/no-new-wrappers": "error",
+    "eslint/no-proto": "error",
+    "eslint/no-prototype-builtins": "error",
+    "eslint/no-regex-spaces": "error",
+    "eslint/no-self-compare": "error",
+    "eslint/no-unreachable-loop": "error",
+    "eslint/no-useless-call": "error",
+    "eslint/no-var": "error",
+    "eslint/prefer-const": "error",
+    "eslint/prefer-rest-params": "error",
+    "eslint/prefer-spread": "error",
+    "eslint/symbol-description": "error",
+    "import/export": "error",
+    "import/no-duplicates": "error",
+    "import/no-mutable-exports": "error",
+    "oxc/branches-sharing-code": "error",
+    "promise/no-return-in-finally": "error",
+    "typescript/ban-ts-comment": ["error", { "minimumDescriptionLength": 10 }],
+    "typescript/no-deprecated": "error",
+    "typescript/no-dynamic-delete": "error",
+    "typescript/no-empty-object-type": "error",
+    "typescript/no-explicit-any": "error",
+    "typescript/no-misused-promises": "error",
+    "typescript/no-mixed-enums": "error",
+    "typescript/no-namespace": "error",
+    "typescript/no-non-null-asserted-nullish-coalescing": "error",
+    "typescript/no-require-imports": "error",
+    "typescript/no-unsafe-argument": "error",
+    "typescript/no-unsafe-assignment": "error",
+    "typescript/no-unsafe-call": "error",
+    "typescript/no-unsafe-function-type": "error",
+    "typescript/no-unsafe-member-access": "error",
+    "typescript/no-unsafe-return": "error",
+    "typescript/only-throw-error": "error",
+    "typescript/prefer-literal-enum-member": "error",
+    "typescript/prefer-promise-reject-errors": "error",
+    "typescript/related-getter-setter-pairs": "error",
+    "typescript/require-array-sort-compare": ["error", { "ignoreStringArrays": true }],
+    "typescript/require-await": "error",
+    "typescript/restrict-plus-operands": "error",
+    "typescript/return-await": ["error", "error-handling-correctness-only"],
+    "typescript/use-unknown-in-catch-callback-variable": "error",
+    "unicorn/no-instanceof-array": "error",
+    "unicorn/no-length-as-slice-end": "error",
+    "unicorn/no-negation-in-equality-check": "error",
+    "unicorn/no-unnecessary-array-splice-count": "error",
+    "unicorn/no-unnecessary-slice-end": "error",
+    "unicorn/no-useless-promise-resolve-reject": "error",
+    "unicorn/no-useless-switch-case": "error",
+    "unicorn/require-number-to-fixed-digits-argument": "error",
+    "vitest/valid-expect": ["error", { "maxArgs": 2 }],
+
+    // Rules the categories turn on that do not fit Kopje.
+    // Kopje types SQL rows and JSON reads with `as`; the rule is in no typescript-eslint preset.
+    "typescript/no-unsafe-type-assertion": "off",
+    // Shadowing is not a defect here; the rule is in neither the eslint nor the typescript-eslint recommended set.
+    "eslint/no-shadow": "off",
+    // Test-local helpers sit next to the tests that use them.
+    "unicorn/consistent-function-scoping": "off",
+    // `import fc from "fast-check"` and `fc.*` are fast-check's documented usage.
+    "import/no-named-as-default-member": "off",
+    // Mastodon's API names a parameter `_destroy`.
+    "eslint/no-underscore-dangle": "off",
+    // `[...text]` counts code points, as Mastodon does.
+    "typescript/no-misused-spread": "off",
+    // Exhaustive `switch`es end without a return; tsc reports a missing one.
+    "typescript/consistent-return": "off",
+    // `db.first<T>()` and its kin let the caller name the row type.
+    "typescript/no-unnecessary-type-parameters": "off",
+    // Loop state changes through `Object.assign` and closures the rule does not follow.
+    "eslint/no-unmodified-loop-condition": "off",
+    // Both report callbacks that are correct as written.
+    "promise/always-return": "off",
+    "promise/no-promise-in-callback": "off",
+    // Tests are table and property driven, and assert through oracle helpers.
+    "vitest/expect-expect": "off",
+    "vitest/no-conditional-expect": "off",
+    "vitest/no-standalone-expect": "off",
+    // Prose comments that start with "it (" read as commented-out tests.
+    "vitest/no-commented-out-tests": "off",
+    "vitest/require-mock-type-parameters": "off",
+
+    // Off until their findings are fixed; each is a mechanical rewrite.
+    "typescript/no-unnecessary-boolean-literal-compare": "off",
+    "typescript/no-unnecessary-template-expression": "off",
+    "typescript/no-unnecessary-type-arguments": "off",
+    "typescript/no-unnecessary-type-assertion": "off",
+    "typescript/no-unnecessary-type-conversion": "off",
+    "unicorn/no-array-reverse": "off",
+    "unicorn/no-array-sort": "off",
+    "unicorn/no-useless-fallback-in-spread": "off",
+    "unicorn/no-useless-spread": "off",
+    "unicorn/prefer-string-starts-ends-with": "off",
+
+    // Off until the commits that follow fix their findings.
+    "vitest/require-to-throw-message": "off",
+    "typescript/require-await": "off",
+    "typescript/restrict-template-expressions": "off",
+    "eslint/no-unused-vars": "off",
+    "typescript/require-array-sort-compare": "off",
+    "typescript/no-explicit-any": "off",
+    "eslint/no-unsafe-optional-chaining": "off",
+    "unicorn/no-new-array": "off",
+    "typescript/no-unsafe-assignment": "off",
+    "typescript/no-deprecated": "off",
+    "typescript/no-unsafe-member-access": "off",
+    "eslint/preserve-caught-error": "off",
+    "eslint/no-extend-native": "off",
+    "typescript/no-dynamic-delete": "off",
+    "vitest/valid-title": "off",
+    "unicorn/no-invalid-fetch-options": "off",
+    "typescript/no-generated-empty-object-type": "off",
+    "typescript/return-await": "off",
+    "typescript/no-confusing-non-null-assertion": "off",
+    "unicorn/no-array-fill-with-reference-type": "off",
+    "unicorn/prefer-add-event-listener": "off",
+    "typescript/no-extraneous-class": "off",
+    "typescript/no-unsafe-argument": "off",
+    "typescript/use-unknown-in-catch-callback-variable": "off"
+  },
+  "overrides": [
+    {
+      "files": ["packages/kopje/src/**/*.ts"],
+      "rules": {
+        // lint/signing-keys.js; test-node/signing-keys.test.ts pins this wiring.
+        "kopje/signing-keys": "error",
+        // A nullish value must not reach SQL or HTML text through `${}`.
+        "typescript/restrict-template-expressions": "off"
+      }
+    },
+    // Tests, test-node and the CLI may still assign, read and pass `any`; calling or returning one stays an error.
+    {
+      "files": ["packages/kopje/test/**", "packages/kopje/test-node/**", "packages/kopje/cli/**"],
+      "rules": {
+        "typescript/no-unsafe-argument": "off",
+        "typescript/no-unsafe-assignment": "off",
+        "typescript/no-unsafe-member-access": "off"
+      }
+    },
+    // oxlint does not read the CLI's `/* global */` comments.
+    {
+      "files": ["packages/kopje/cli/**/*.js"],
+      "env": { "node": true },
+      "rules": { "eslint/no-redeclare": "error", "eslint/no-undef": "error" }
+    },
+    // Scripts no tsconfig covers: without types, every value is `any`.
+    {
+      "files": [
+        "packages/kopje/scripts/**",
+        "packages/kopje/lint/**",
+        "packages/kopje/public/assets/embed*.js",
+        "scripts/**",
+        "deploy/scripts/**"
+      ],
+      "rules": {
+        "typescript/no-unsafe-argument": "off",
+        "typescript/no-unsafe-assignment": "off",
+        "typescript/no-unsafe-call": "off",
+        "typescript/no-unsafe-member-access": "off",
+        "typescript/no-unsafe-return": "off"
+      }
+    },
+    // The embed scripts are hand-written ES5.
+    { "files": ["packages/kopje/public/assets/embed*.js"], "rules": { "eslint/no-var": "off" } },
+    // node:test awaits the `describe` and `it` calls itself.
+    { "files": ["scripts/*.test.mjs"], "rules": { "typescript/no-floating-promises": "off" } }
+  ]
+}

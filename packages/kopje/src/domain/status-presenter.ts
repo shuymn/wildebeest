@@ -1097,7 +1097,7 @@ export function presentMedia(row: MediaRow, origin: string | null = null): Media
 const ENCODER = new TextEncoder();
 // What no presented media URL holds as decoded: C0 controls (NUL included), DEL, and U+FFFD, which a stored value that
 // is not well-formed UTF-8 decodes to.
-// eslint-disable-next-line no-control-regex
+// oxlint-disable-next-line no-control-regex
 const MEDIA_URL_REFUSED = /[\u0000-\u001f\u007f\ufffd]/;
 
 // A media URL as presented, live or from an edit's snapshot (HTML-3, RES-2), judged in order: as decoded, within

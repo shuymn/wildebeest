@@ -90,7 +90,7 @@ jobs:
 
       - name: Lint
         if: steps.main_ci.outputs.passed != 'true'
-        run: pnpm run lint:kopje
+        run: pnpm run lint
 
       - name: Check types
         if: steps.main_ci.outputs.passed != 'true'

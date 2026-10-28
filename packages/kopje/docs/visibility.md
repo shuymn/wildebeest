@@ -942,8 +942,8 @@ An allowed file that no longer matches fails the test too, so the list does not 
 It also keeps the status id brands with the policy module. Elsewhere, `VisibleStatusId`, `OwnStatusId` and
 `WithVisibleStatus` may be named only in an import or as the type of a function parameter: a cast, a type argument
 (`db.all<{ id: VisibleStatusId }>`), a type predicate, an alias or an annotated variable or result could make one from
-a plain string. The presenter is called only from `src/domain/`, where ESLint refuses an `any` argument
-(`eslint.config.js`), so no `any` reaches its parameters. The test also checks the generated visibility sets and that
+a plain string. The presenter is called only from `src/domain/`, where oxlint refuses an `any` argument
+(`.oxlintrc.json`), so no `any` reaches its parameters. The test also checks the generated visibility sets and that
 `REACHES_FOLLOWERS_SQL` is the list of the `statuses_feed` index.
 
 The fragments nest: Cloudflare's SQLite refuses an expression deeper than 100 levels, and each nested `EXISTS` and
