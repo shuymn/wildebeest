@@ -186,7 +186,7 @@ describe("status pages are answers within ANSWER_BYTES (RES-3)", () => {
       ["account statuses", `/api/v1/accounts/${w.author}/statuses?limit=40`],
     ] as const;
     const inner = V.slice(1, 19);
-    const firstPages: Partial<Record<"next" | "prev", Walked["pages"][number]>> = {};
+    const firstPages: Partial<Record<"next" | "prev", Walked["pages"][number] | undefined>> = {};
     for (const [name, path] of lists) {
       const older = await walk(h, path, "next", alice.token);
       expectByteCutWalk(name, older, V, "next", size);

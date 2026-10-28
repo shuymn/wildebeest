@@ -64,7 +64,7 @@ async function hkdf(salt: Uint8Array, ikm: Uint8Array, info: Uint8Array, length:
 export async function decryptPush(
   client: Client,
   encoding: PushEncoding,
-  push: { body: Uint8Array; salt?: Uint8Array; senderPublicKey?: Uint8Array },
+  push: { body: Uint8Array; salt?: Uint8Array | undefined; senderPublicKey?: Uint8Array | undefined },
 ): Promise<Uint8Array> {
   let { body, salt, senderPublicKey } = push;
   if (encoding === "aes128gcm") {
