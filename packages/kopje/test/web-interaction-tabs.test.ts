@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 
 import { Db } from "../src/db/sql";
 import { ANSWER_BYTES, jsonBytes } from "../src/domain/answer-budget";
+import { allocateLocalId } from "../src/domain/ids";
 import { LONGEST_STATUS_STUB, WEB_PAGE_BYTES } from "../src/domain/web-pages/budget";
 import { LONGEST_PAGING } from "../src/domain/web-pages/paging";
 import {
@@ -73,22 +74,26 @@ function remoteIn(
   return id;
 }
 
-// A status row written directly, by `id` (above every status the harness wrote, so ids follow the seeding order).
+// A status row written directly: its id. The id is `row.id`, or else the Store's next local id (allocateLocalId), so
+// ids follow the seeding order, and no id or URI meets one the harness allocates before or after (seedStatus at NOW
+// draws within the same millisecond's 65,536 ids).
 function statusIn(
   sqlStorage: SqlStorage,
-  row: { id: string; account: string; local: boolean; visibility: string; content?: string; reblogOf?: string },
-) {
+  row: { id?: string; account: string; local: boolean; visibility: string; content?: string; reblogOf?: string },
+): string {
+  const id = row.id ?? allocateLocalId(new Db(sqlStorage), NOW);
   sqlStorage.exec(
     `INSERT INTO statuses (id, uri, account_id, reblog_of_id, visibility, content, published_at)
 		VALUES (?, ?, ?, ?, ?, ?, ?)`,
-    row.id,
-    row.local ? `https://kopje.test/ap/o/${row.id}` : `https://remote.example/objects/${row.id}`,
+    id,
+    row.local ? `https://kopje.test/ap/o/${id}` : `https://remote.example/objects/${id}`,
     row.account,
     row.reblogOf ?? null,
     row.visibility,
-    row.reblogOf === undefined ? (row.content ?? `<p>status ${row.id}</p>`) : "",
+    row.reblogOf === undefined ? (row.content ?? `<p>status ${id}</p>`) : "",
     new Date(NOW).toISOString(),
   );
+  return id;
 }
 
 // A quote by the status `id` of the status `quoted`, in `state`.
@@ -149,11 +154,9 @@ async function interactions() {
     const expected: Record<Kind & ("reblogs" | "favourites"), string[]> = { reblogs: [], favourites: [] };
     const candidates = { reblogs: new Set<string>(), favourites: new Set<string>() };
     const neverCandidates: string[] = [];
-    let nextStatus = BigInt(focal) + 1000n;
     let n = 0;
     const add = (account: string, href: string | null, visibility = "public", withdrawn = false) => {
-      const id = String(nextStatus++);
-      statusIn(s, { id, account, local: false, visibility, reblogOf: focal });
+      const id = statusIn(s, { account, local: false, visibility, reblogOf: focal });
       if (withdrawn) {
         s.exec("UPDATE statuses SET withdrawn = 1 WHERE id = ?", id);
       }
@@ -261,16 +264,9 @@ describe("a status page’s Boosts and Favourites tabs", () => {
       const s = state.storage.sql;
       const withdrawn = remoteIn(s, "withdrawn");
       const carol = remoteIn(s, "carol");
+      const boost = statusIn(s, { account: withdrawn, local: false, visibility: "public", reblogOf: focal });
+      s.exec("UPDATE statuses SET withdrawn = 1 WHERE id = ?", boost);
       statusIn(s, {
-        id: String(BigInt(focal) + 1n),
-        account: withdrawn,
-        local: false,
-        visibility: "public",
-        reblogOf: focal,
-      });
-      s.exec("UPDATE statuses SET withdrawn = 1 WHERE id = ?", String(BigInt(focal) + 1n));
-      statusIn(s, {
-        id: String(BigInt(focal) + 2n),
         account: carol,
         local: false,
         visibility: "unlisted",
@@ -300,14 +296,12 @@ describe("a status page’s Boosts and Favourites tabs", () => {
   it("name no withdrawn boost as a cursor where it would end a full window", async () => {
     const h = await community(["alice"]);
     const focal = await seedStatus(h.store, { accountId: h.users.alice.id, visibility: "public" });
-    const withdrawn = String(BigInt(focal) + 1000n + 119n);
-    await runInDurableObject(h.store, (_instance, state) => {
+    const withdrawn = await runInDurableObject(h.store, (_instance, state) => {
       const s = state.storage.sql;
+      let withdrawnId = "";
       for (let i = 0; i < 239; i++) {
-        const id = String(BigInt(focal) + 1000n + BigInt(i));
-        const isWithdrawn = id === withdrawn;
-        statusIn(s, {
-          id,
+        const isWithdrawn = i === 119;
+        const id = statusIn(s, {
           account: remoteIn(s, `w${i}`, "remote.example", "", !isWithdrawn),
           local: false,
           visibility: "public",
@@ -315,8 +309,10 @@ describe("a status page’s Boosts and Favourites tabs", () => {
         });
         if (isWithdrawn) {
           s.exec("UPDATE statuses SET withdrawn = 1 WHERE id = ?", id);
+          withdrawnId = id;
         }
       }
+      return withdrawnId;
     });
     for (const query of ["", "?min_id=1"]) {
       const html = await viaRoute(h)(`/@alice/${focal}/reblogs${query}`);
@@ -365,7 +361,6 @@ async function quotes() {
     const expected: string[] = [];
     const candidates = new Set<string>();
     const neverCandidates: string[] = [];
-    let nextStatus = BigInt(focal) + 1000n;
     // `shows`: the card's link (ID standing for the quote's id), 'hidden' (never a candidate) or 'unavailable' (a
     // candidate the rule hides).
     const quote = (
@@ -374,8 +369,7 @@ async function quotes() {
       shows: string,
       quoted = focal,
     ) => {
-      const id = String(nextStatus++);
-      statusIn(s, { id, ...row });
+      const id = statusIn(s, row);
       quoteIn(s, id, quoted, state);
       if (shows === "hidden") {
         neverCandidates.push(id);
@@ -599,19 +593,16 @@ describe("a status page’s interaction tabs within the page budget", () => {
       const s = state.storage.sql;
       const accounts: string[] = [];
       const statuses: string[] = [];
-      let nextStatus = BigInt(focal) + 1000n;
       for (let i = 0; i < 70; i++) {
         const id = remoteIn(s, `m${i}`);
         s.exec("UPDATE accounts SET note = ? WHERE id = ?", `<p>${"x".repeat(i % 7 === 3 ? 20_000 : 3_000)}</p>`, id);
-        statusIn(s, { id: String(nextStatus++), account: id, local: false, visibility: "public", reblogOf: focal });
+        statusIn(s, { account: id, local: false, visibility: "public", reblogOf: focal });
         s.exec("INSERT INTO favourites (account_id, status_id) VALUES (?, ?)", id, focal);
         accounts.unshift(`https://remote.example/@m${i}`);
       }
       for (let i = 0; i < 30; i++) {
-        const id = String(nextStatus++);
         const chars = i === 12 ? 60_000 : i % 5 === 2 ? 30_000 : 5_000;
-        statusIn(s, {
-          id,
+        const id = statusIn(s, {
           account: h.users.bob.id,
           local: true,
           visibility: "public",
@@ -667,18 +658,11 @@ describe("a status page’s interaction tabs within the page budget", () => {
       visibility: "public",
       content: `<p>${"x".repeat(50_000)}</p>`,
     });
-    await runInDurableObject(h.store, (_instance, state) => {
+    const boosts = await runInDurableObject(h.store, (_instance, state) => {
       const s = state.storage.sql;
-      for (let i = 0; i < 3; i++) {
-        const id = remoteIn(s, `big${i}`);
-        statusIn(s, {
-          id: String(BigInt(focal) + 1n + BigInt(i)),
-          account: id,
-          local: false,
-          visibility: "public",
-          reblogOf: focal,
-        });
-      }
+      return [0, 1, 2].map((i) =>
+        statusIn(s, { account: remoteIn(s, `big${i}`), local: false, visibility: "public", reblogOf: focal }),
+      );
     });
     const page = await runInDurableObject(h.store, (_instance, state) =>
       statusPageWithin(
@@ -692,11 +676,7 @@ describe("a status page’s interaction tabs within the page budget", () => {
       throw new Error(page.status);
     }
     expect(page.thread.list.accounts.map((account) => account.username)).toEqual(["big2"]);
-    expect(page.thread.paging).toEqual({
-      newest: String(BigInt(focal) + 3n),
-      oldest: String(BigInt(focal) + 3n),
-      more: true,
-    });
+    expect(page.thread.paging).toEqual({ newest: boosts[2], oldest: boosts[2], more: true });
   });
 });
 
@@ -874,6 +854,8 @@ describe('a status page’s interaction tabs’ reads (RES-7, docs/visibility.md
     );
     const focal = await seedStatus(h.store, { accountId: alice.id, visibility: "public", published: NOW - 86_400_000 });
     const other = await seedStatus(h.store, { accountId: bob.id, visibility: "public", published: NOW - 86_300_000 });
+    // Ids spaced apart, so rows fit between the candidates: all below focal + 3 * 10^7, and `other`, 100 s later, is
+    // above focal + 6.5 * 10^9 (ms << 16), as is every id the harness allocates after it.
     const spacing = 100_000n;
     const base = BigInt(focal) + 1_000_000n;
     const windows = { reblogs: 120, favourites: 120, quotes: 20 };

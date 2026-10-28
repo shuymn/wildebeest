@@ -12,6 +12,18 @@
   },
   "packageRules": [
     {
+      "description": "One pull request for every stable minor and patch update, which the shared preset automerges",
+      "matchUpdateTypes": ["minor", "patch"],
+      "matchCurrentVersion": "!/^v?0+\\./",
+      "groupName": "non-major dependencies"
+    },
+    {
+      "description": "One pull request for pre-1.0 minor and patch updates, kept apart from the automerged group",
+      "matchUpdateTypes": ["minor", "patch"],
+      "matchCurrentVersion": "/^v?0+\\./",
+      "groupName": "pre-1.0 dependencies"
+    },
+    {
       "description": "Group the oxc tools, which change what lint and format report together",
       "groupName": "oxc",
       "matchPackageNames": ["oxlint", "oxlint-tsgolint", "oxfmt", "@oxlint/**"]
@@ -22,5 +34,7 @@
       "matchFileNames": ["deploy/package.json"],
       "minimumReleaseAge": null
     }
-  ]
+  ],
+  "separateMultipleMinor": false,
+  "separateMinorPatch": false
 }
