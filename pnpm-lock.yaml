@@ -96,6 +96,9 @@ catalogs:
     typescript:
       specifier: 7.0.2
       version: 7.0.2
+    valibot:
+      specifier: 1.5.0
+      version: 1.5.0
     vite:
       specifier: 6.4.4
       version: 6.4.4
@@ -105,9 +108,6 @@ catalogs:
     wrangler:
       specifier: 4.149.0
       version: 4.149.0
-    zod:
-      specifier: 4.6.7
-      version: 4.6.7
 
 importers:
 
@@ -212,6 +212,9 @@ importers:
       typescript:
         specifier: 'catalog:'
         version: 7.0.2
+      valibot:
+        specifier: 'catalog:'
+        version: 1.5.0(typescript@7.0.2)
       vite:
         specifier: 'catalog:'
         version: 6.4.4(@types/node@24.19.2)(jiti@1.21.7)(yaml@2.9.1)
@@ -221,9 +224,6 @@ importers:
       wrangler:
         specifier: 'catalog:'
         version: 4.149.0(@cloudflare/workers-types@5.20261025.1)(@types/node@24.19.2)
-      zod:
-        specifier: 'catalog:'
-        version: 4.6.7
 
 packages:
 
@@ -2044,6 +2044,14 @@ packages:
   urlpattern-polyfill@10.1.0:
     resolution: {integrity: sha512-IGjKp/o0NL3Bso1PymYURCJxMPNAf/ILOpendP9f5B6e1rTJgdgiOvgfoT8VxCAdY+Wisb9uhGaJJf3yZ2V9nw==}
 
+  valibot@1.5.0:
+    resolution: {integrity: sha512-nil6AkP2TChWL43Z5uJ6GTxX01CUA+g8LWUM+N/rB9NBbkUMaUsi9PUNzlUPgoKASgmx9f7eGOYpJ04/fSa6FQ==}
+    peerDependencies:
+      typescript: '>=5'
+    peerDependenciesMeta:
+      typescript:
+        optional: true
+
   vite@6.4.4:
     resolution: {integrity: sha512-xGjU/SyjeNyb0E4KxXBvYz/1C+3JXuujvf2hXNOtnlcE+58o5ajd9N2/n2VhkiJvpCP2qQasnUpx5PXNeI+p1Q==}
     engines: {node: ^18.0.0 || ^20.0.0 || >=22.0.0}
@@ -2176,9 +2184,6 @@ packages:
 
   zod@4.6.5:
     resolution: {integrity: sha512-v5l/aFXZQeai4awLbOpSoHecE9UiMrnfx75tEXLjNonXVARxQ5mOeipTjROUchszUNCqnE+hqAMujRsRHsut2Q==}
-
-  zod@4.6.7:
-    resolution: {integrity: sha512-g8W2D2kU6a8untc053fX1uVBKzM7yqAxW/3zwk83+6RyF2+SKOuV+c0wBDhUwzV1PaGapmZH+rmcUzPf+3CGwg==}
 
 snapshots:
 
@@ -3572,6 +3577,10 @@ snapshots:
 
   urlpattern-polyfill@10.1.0: {}
 
+  valibot@1.5.0(typescript@7.0.2):
+    optionalDependencies:
+      typescript: 7.0.2
+
   vite@6.4.4(@types/node@24.19.2)(jiti@1.21.7)(yaml@2.9.1):
     dependencies:
       esbuild: 0.25.12
@@ -3658,5 +3667,3 @@ snapshots:
       youch-core: 0.3.3
 
   zod@4.6.5: {}
-
-  zod@4.6.7: {}

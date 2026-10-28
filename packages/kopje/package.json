@@ -101,10 +101,10 @@
     "sanitize-html": "catalog:",
     "temporal-polyfill": "catalog:",
     "typescript": "catalog:",
+    "valibot": "catalog:",
     "vite": "catalog:",
     "vitest": "catalog:",
-    "wrangler": "catalog:",
-    "zod": "catalog:"
+    "wrangler": "catalog:"
   },
   "engines": {
     "node": ">=22"
