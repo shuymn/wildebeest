@@ -103,8 +103,8 @@ catalogs:
       specifier: 5.0.5
       version: 5.0.5
     wrangler:
-      specifier: 4.149.0
-      version: 4.149.0
+      specifier: 4.150.0
+      version: 4.150.0
     zod:
       specifier: 4.6.7
       version: 4.6.7
@@ -130,7 +130,7 @@ importers:
         version: 5.0.5(@opentelemetry/api@1.9.1)(@types/node@24.19.2)(vite@6.4.4(@types/node@24.19.2)(jiti@1.21.7)(yaml@2.9.1))
       wrangler:
         specifier: 'catalog:'
-        version: 4.149.0(@cloudflare/workers-types@5.20261025.1)(@types/node@24.19.2)
+        version: 4.150.0(@cloudflare/workers-types@5.20261025.1)(@types/node@24.19.2)
 
   packages/kopje:
     devDependencies:
@@ -220,7 +220,7 @@ importers:
         version: 5.0.5(@opentelemetry/api@1.9.1)(@types/node@24.19.2)(vite@6.4.4(@types/node@24.19.2)(jiti@1.21.7)(yaml@2.9.1))
       wrangler:
         specifier: 'catalog:'
-        version: 4.149.0(@cloudflare/workers-types@5.20261025.1)(@types/node@24.19.2)
+        version: 4.150.0(@cloudflare/workers-types@5.20261025.1)(@types/node@24.19.2)
       zod:
         specifier: 'catalog:'
         version: 4.6.7
@@ -1896,8 +1896,8 @@ packages:
   magic-string@1.4.3:
     resolution: {integrity: sha512-z12OxmaPGE0F4xlpGdjuAUckipLpQlTAuAmyGhNoD7ODpYUzvDfvtxUbjM/jwznyP178oju/KDdyi220wNJ0RQ==}
 
-  miniflare@5.20261006.1-alpha:
-    resolution: {integrity: sha512-6ylv8tamkrspDI2R/cAYfv+YWmfGNdXe76Pi9TauEUWsFVXn3LNF9Yk8oduzf1a+TYsSRYTqlOE7+nGGRsMHdw==}
+  miniflare@5.20261006.2-beta:
+    resolution: {integrity: sha512-agufWI3mXF8xGzry2/sOF8Im8AoYs04DWBCLDWDmd4QtMSGEo9IgrPmYOwsCmQA3K3MbLzsvr01GpWc8x3Duqw==}
     engines: {node: '>=22.0.0'}
 
   miniflare@5.20261019.2-beta:
@@ -2197,8 +2197,8 @@ packages:
     engines: {node: '>=16'}
     hasBin: true
 
-  wrangler@4.149.0:
-    resolution: {integrity: sha512-OzK7xmB5r5iLKb3cIT3783g13fe6T7xyeKu9LEdUyl+DKAM2KP/jkjnE0OUhyw+mB/XJM9ycjgF3MWm8PR9amg==}
+  wrangler@4.150.0:
+    resolution: {integrity: sha512-Mf3MiCoGXszX965MtKcOSe8whSyFBL2qpCp+DiSwH94+0FNYveSPQPVRRlMAMH8lkln8PECcSW1do6hnelwPZA==}
     engines: {node: '>=22.0.0'}
     hasBin: true
     peerDependencies:
@@ -3415,7 +3415,7 @@ snapshots:
     dependencies:
       '@jridgewell/sourcemap-codec': 1.6.0
 
-  miniflare@5.20261006.1-alpha(@types/node@24.19.2):
+  miniflare@5.20261006.2-beta(@types/node@24.19.2):
     dependencies:
       '@cspotcode/source-map-support': 0.8.1
       sharp: 0.35.5(@types/node@24.19.2)
@@ -3774,13 +3774,13 @@ snapshots:
       '@cloudflare/workerd-linux-arm64': 1.20261019.1
       '@cloudflare/workerd-windows-64': 1.20261019.1
 
-  wrangler@4.149.0(@cloudflare/workers-types@5.20261025.1)(@types/node@24.19.2):
+  wrangler@4.150.0(@cloudflare/workers-types@5.20261025.1)(@types/node@24.19.2):
     dependencies:
       '@cloudflare/kv-asset-handler': 0.5.0
       '@cloudflare/unenv-preset': 2.16.2(unenv@2.0.0-rc.24)(workerd@1.20261006.1)
       blake3-wasm: 2.1.5
       esbuild: 0.28.2
-      miniflare: 5.20261006.1-alpha(@types/node@24.19.2)
+      miniflare: 5.20261006.2-beta(@types/node@24.19.2)
       path-to-regexp: 6.3.0
       unenv: 2.0.0-rc.24
       workerd: 1.20261006.1
