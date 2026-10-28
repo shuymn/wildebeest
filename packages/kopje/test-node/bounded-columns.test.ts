@@ -383,7 +383,7 @@ const SAFE_INTERPOLATIONS = new Set([
   "remoteFieldLinksPastBoundSql",
   "remoteLinkBackPastBoundSql",
 
-  // A remote account's attachment, bounded as REMOTE_ATTACHMENT_SQL (domain/accounts.ts), cutSql within it.
+  // A remote account's attachment, bounded as REMOTE_ATTACHMENT_SQL (domain/account-columns.ts), cutSql within it.
   "remoteAttachmentSql",
   // Whether an Idempotency-Key's row is within its hour: a predicate over isoTimeSql (domain/statuses.ts).
   "keyFreshSql",
@@ -597,10 +597,10 @@ const ALLOWED: Record<string, { count: number; reason: string }> = {
   "src/domain/accounts.ts accounts.uri": { count: 4, reason: IDENTITY },
   // remoteAttachmentSql's own parts: an attachment entry (cutSql's name and value) and its src, a fixed column name,
   // naming no bounded column.
-  "src/domain/accounts.ts interpolation entry": { count: 1, reason: REMOTE_ATTACHMENT },
-  "src/domain/accounts.ts interpolation eligibility ? ', c.src' : ''": { count: 1, reason: REMOTE_ATTACHMENT },
-  "src/domain/accounts.ts interpolation src": { count: 1, reason: REMOTE_ATTACHMENT },
-  "src/domain/accounts.ts interpolation REMOTE_FIELD_LINKS_BYTES": {
+  "src/domain/account-columns.ts interpolation entry": { count: 1, reason: REMOTE_ATTACHMENT },
+  "src/domain/account-columns.ts interpolation eligibility ? ', c.src' : ''": { count: 1, reason: REMOTE_ATTACHMENT },
+  "src/domain/account-columns.ts interpolation src": { count: 1, reason: REMOTE_ATTACHMENT },
+  "src/domain/account-columns.ts interpolation REMOTE_FIELD_LINKS_BYTES": {
     count: 1,
     reason: "a number constant (remote_field_links.links bound, REMOTE_VERIFIED_SQL), naming no column",
   },

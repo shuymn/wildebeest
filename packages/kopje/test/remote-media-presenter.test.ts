@@ -2,7 +2,8 @@ import { runInDurableObject } from "cloudflare:test";
 import { describe, expect, it } from "vitest";
 
 import { Db } from "../src/db/sql";
-import { ANSWER_CHUNK, MOVED_ACCOUNT_COLUMNS, partialAccountsOf, presentAccountById } from "../src/domain/accounts";
+import { MOVED_ACCOUNT_COLUMNS } from "../src/domain/account-columns";
+import { ANSWER_CHUNK, partialAccountsOf, presentAccountById } from "../src/domain/accounts";
 import {
   CACHED_IMAGE_BYTES,
   CACHED_IMAGE_COLUMNS,

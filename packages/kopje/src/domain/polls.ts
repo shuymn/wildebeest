@@ -1,5 +1,5 @@
 import { writeEach } from "../db/by-ids";
-import { type ColumnMap, fixedColumns, selectSql } from "../db/columns";
+import { selectSql } from "../db/columns";
 import { ACCOUNTS_ID_INDEX, POLL_VOTES_KEY_INDEX, POLLS_STATUS_INDEX, STATUSES_ID_INDEX } from "../db/indexes";
 import type { Db } from "../db/sql";
 import { emojiCacheSql, STATUS_EMOJIS_BYTES, yieldsMoreThan } from "../platform/stored-bounds";
@@ -11,14 +11,15 @@ import { type CustomEmoji, emojiCacheOf, pollEmojis, presentEmojis } from "./cus
 import { notify } from "./notifications";
 import { writeOperation } from "./operation";
 import { MAX_REMOTE_OPTION_LENGTH, MAX_REMOTE_OPTIONS, pollOptionsSql } from "./status-bounds";
+import { OWN_VOTE_COLUMNS, POLL_COLUMN_MAP } from "./status-rows";
 
 // Polls (Mastodon 4.5's Poll, PollVote, VoteService, Api::V1::PollsController and Polls::VotesController,
 // REST::PollSerializer and PollExpirationNotifyWorker). A poll belongs to its status, local or remote, and its API id is
 // its status's. Its counts are kept as votes are cast (or as a remote server reports them) and never recounted on
 // read. Who votes is decided by the policy module (R27, mayVoteSql: whoever may see the status by itself and does not
-// block its author); this module alone reads poll_votes, and shows only counts and a viewer's own votes, never who
-// voted. The cron ends polls (the 'poll' notification to a local author and to local voters, once) and sends the
-// Update of a local poll's counts, debounced, in bounded rounds.
+// block its author); this module alone reads poll_votes (status-rows.ts only counts a viewer's own, for R), and shows
+// only counts and a viewer's own votes, never who voted. The cron ends polls (the 'poll' notification to a local
+// author and to local voters, once) and sends the Update of a local poll's counts, debounced, in bounded rounds.
 
 // PollOptionsValidator and PollExpirationValidator: the limits of a local poll, as the instance entity advertises them.
 export const MAX_OPTIONS = 4;
@@ -280,30 +281,6 @@ type PollRow = {
   votes_count: number;
   voters_count: number | null;
 };
-
-export const POLL_COLUMN_MAP = {
-  status_id: "p.status_id",
-  account_id: "s.account_id",
-  options: pollOptionsSql("p.options"),
-  tallies: "p.tallies",
-  multiple: "p.multiple",
-  hide_totals: "p.hide_totals",
-  expires_at: "p.expires_at",
-  votes_count: "p.votes_count",
-  voters_count: "p.voters_count",
-} as const satisfies ColumnMap;
-
-export const POLL_FROM = `polls p INDEXED BY ${POLLS_STATUS_INDEX}
-	CROSS JOIN statuses s INDEXED BY ${STATUSES_ID_INDEX} ON s.id = p.status_id`;
-
-export const OWN_VOTE_COLUMNS = fixedColumns({ poll_id: "v.poll_id", choice: "v.choice" }, { poll_id: 18, choice: 0 });
-
-// How many votes `viewer` cast in the current generation of the poll of `status`, which presentPolls reads as their
-// own: for the bound of the rows a presentation reads (statusRowBoundSql in status-rows.ts).
-export function ownVoteCountSql(status: string, viewer: string): string {
-  return `(SELECT count(*) FROM polls p INDEXED BY ${POLLS_STATUS_INDEX} CROSS JOIN poll_votes v INDEXED BY ${POLL_VOTES_KEY_INDEX}
-		ON v.poll_id = p.status_id AND v.generation = p.generation AND v.account_id = ${viewer} WHERE p.status_id = ${status})`;
-}
 
 function presentPollRow(row: PollRow, viewer: { id: string | null; votes: number[] }, now: string): Poll {
   const expired = hasEnded(row.expires_at, now);
