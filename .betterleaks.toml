@@ -16,6 +16,17 @@ targetRules = ["generic-api-key"]
 paths = ['''^packages/kopje/test/vectors\.test\.ts$''']
 regexes = ['''^7Fjfp0ZBr1KtDRbnfVdmIw$''', '''^45ghiukldjahdnhzdauz$''']
 
+# The two below cover paths that exist only in history, each tied to its rule and its known value.
 [[allowlists]]
-description = "Paths only in history: the vendored Mastodon docs' old path, and a sample Access JWT in old tests"
-paths = ['''^docs/mastodon-api-spec/''', '''^backend/test/test-data\.ts$''']
+description = "The example push key of the vendored Mastodon OAuth docs at their old path"
+condition = "AND"
+targetRules = ["generic-api-key"]
+paths = ['''^docs/mastodon-api-spec/client-api/auth-oauth\.md$''']
+regexes = ['''^BCk-QqERU0q-CfYZjcuB6lnyyOYfJ2AifKqfeGIm7Z-HiTU5T9eTG5GxVA0_OH5mMlI4UkkDTpaZwozy0TzdZ2M=$''']
+
+[[allowlists]]
+description = "A sample Access JWT in the legacy Wildebeest backend tests, matched by its signature"
+condition = "AND"
+targetRules = ["jwt"]
+paths = ['''^backend/test/test-data\.ts$''']
+regexes = ['''\.EvMo2vXL3-_qFrROO5Pk7r3oUQGmDF2HOzQq9OSMMBESdT3TESKZ48NC36hrmOfB[A-Za-z0-9_-]*$''']
