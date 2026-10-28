@@ -16,8 +16,8 @@ catalogs:
       specifier: 5.20261025.1
       version: 5.20261025.1
     '@fedify/fedify':
-      specifier: 2.4.4
-      version: 2.4.4
+      specifier: 2.4.5
+      version: 2.4.5
     '@fedify/testing':
       specifier: 2.4.5
       version: 2.4.5
@@ -145,10 +145,10 @@ importers:
         version: 5.20261025.1
       '@fedify/fedify':
         specifier: 'catalog:'
-        version: 2.4.4
+        version: 2.4.5
       '@fedify/testing':
         specifier: 'catalog:'
-        version: 2.4.5(@fedify/fedify@2.4.4)
+        version: 2.4.5(@fedify/fedify@2.4.5)
       '@fedify/vocab':
         specifier: 'catalog:'
         version: 2.4.4
@@ -640,8 +640,8 @@ packages:
     cpu: [x64]
     os: [win32]
 
-  '@fedify/fedify@2.4.4':
-    resolution: {integrity: sha512-HVwzK6gWwdGvGrZa4d70Yfqjl77IXGVUxqRVXqXg1tn54WtisyrcMf6bH4D7XOSdmnAfGMefIG9fOoC93f/kHg==}
+  '@fedify/fedify@2.4.5':
+    resolution: {integrity: sha512-XHi/dyLeDBKt1gkfyGxNVFgxmijOVdRdlwZGCwslStrE9+5KHeJPaDTZ5vwchrYIZFbeMlD1qjcYNnxVXNvlxg==}
     engines: {bun: '>=1.1.0', deno: '>=2.0.0', node: '>=22.0.0'}
 
   '@fedify/testing@2.4.5':
@@ -649,8 +649,8 @@ packages:
     peerDependencies:
       '@fedify/fedify': ^2.4.5
 
-  '@fedify/uri-template@2.4.4':
-    resolution: {integrity: sha512-+Ip0bKwNpEIA2rffNJooWXeUFdgthhhwmxkzIbo0moG3tab4OMEbf5QLzPrqlV1OhPyIQAsKJxnOrc7SILO36g==}
+  '@fedify/uri-template@2.4.5':
+    resolution: {integrity: sha512-bIzvZCzBruaemxdoTuBYhboGzzkKFcexJ/tLTFUT8A1+lqCIepYTE/fmpC8DfjlWVe72Jhy1lvsEw4jjPJknKQ==}
     engines: {bun: '>=1.1.0', deno: '>=2.0.0', node: '>=22.0.0'}
 
   '@fedify/vocab-runtime@2.4.4':
@@ -2488,12 +2488,12 @@ snapshots:
   '@esbuild/win32-x64@0.28.2':
     optional: true
 
-  '@fedify/fedify@2.4.4':
+  '@fedify/fedify@2.4.5':
     dependencies:
-      '@fedify/uri-template': 2.4.4
-      '@fedify/vocab': 2.4.4
-      '@fedify/vocab-runtime': 2.4.4
-      '@fedify/webfinger': 2.4.4
+      '@fedify/uri-template': 2.4.5
+      '@fedify/vocab': 2.4.5
+      '@fedify/vocab-runtime': 2.4.5
+      '@fedify/webfinger': 2.4.5
       '@logtape/logtape': 2.4.0
       '@opentelemetry/api': 1.9.1
       '@opentelemetry/core': 2.12.0(@opentelemetry/api@1.9.1)
@@ -2510,16 +2510,16 @@ snapshots:
       temporal-polyfill: 1.0.6
       urlpattern-polyfill: 10.1.0
 
-  '@fedify/testing@2.4.5(@fedify/fedify@2.4.4)':
+  '@fedify/testing@2.4.5(@fedify/fedify@2.4.5)':
     dependencies:
-      '@fedify/fedify': 2.4.4
+      '@fedify/fedify': 2.4.5
       '@fedify/vocab': 2.4.5
       '@fedify/vocab-runtime': 2.4.5
       '@opentelemetry/api': 1.9.1
       es-toolkit: 1.46.1
       temporal-polyfill: 1.0.6
 
-  '@fedify/uri-template@2.4.4': {}
+  '@fedify/uri-template@2.4.5': {}
 
   '@fedify/vocab-runtime@2.4.4':
     dependencies:

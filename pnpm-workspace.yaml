@@ -20,7 +20,7 @@ catalog:
   zod: 4.6.7
 
   # Fedify, one version for all of its packages.
-  "@fedify/fedify": 2.4.4
+  "@fedify/fedify": 2.4.5
   "@fedify/testing": 2.4.5
   "@fedify/vocab": 2.4.4
 
