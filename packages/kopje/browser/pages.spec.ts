@@ -159,6 +159,7 @@ function unseen(element: Element): string[] {
   for (let e: Element | null = element; e !== null; e = e.parentElement) {
     const style = getComputedStyle(e);
     opacity *= Number(style.opacity);
+    // oxlint-disable-next-line typescript/no-deprecated -- a visually hidden element may still clip with `clip`
     if (style.clipPath !== "none" || (style.clip !== "auto" && style.clip !== "")) {
       problems.push(`<${e.tagName.toLowerCase()}> is clipped`);
     }

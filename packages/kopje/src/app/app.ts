@@ -1,6 +1,7 @@
 import { type Context, Hono } from "hono";
 import { cors } from "hono/cors";
 import { HTTPException } from "hono/http-exception";
+import { matchedRoutes, routePath } from "hono/route";
 
 import { ringDoorbell } from "../federation/delivery";
 import { inboxHandler, precheckInbox, requestInboundJobs } from "../federation/inbox";
@@ -242,7 +243,7 @@ export function createApp({
   }
   function failed(c: Context, status: 500 | 503, document: Response) {
     // A page route is a GET route, which a HEAD matches too.
-    return pageRoute(c.req.matchedRoutes) ? negotiate(c, status, document, JSON_TYPE) : document;
+    return pageRoute(matchedRoutes(c)) ? negotiate(c, status, document, JSON_TYPE) : document;
   }
 
   app.notFound((c) => {
@@ -281,7 +282,7 @@ export function createApp({
     console.error({
       event: "kopje.error",
       method: loggedMethod(c.req.method),
-      route: c.req.routePath,
+      route: routePath(c),
       status: 500,
       ...errorFields(error),
     });

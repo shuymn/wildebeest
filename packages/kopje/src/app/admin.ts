@@ -1,5 +1,6 @@
 import { type Context, Hono } from "hono";
 import { createMiddleware } from "hono/factory";
+import { routePath } from "hono/route";
 import type { ContentfulStatusCode } from "hono/utils/http-status";
 
 import type { AnnouncementChanges } from "../domain/announcements";
@@ -1022,7 +1023,7 @@ export function adminRoutes({ build, store, fetch, now, doorbell, jobs, loader, 
     console.error({
       event: "kopje.admin.error",
       method: loggedMethod(c.req.method),
-      route: c.req.routePath,
+      route: routePath(c),
       status: 500,
       ...errorFields(error),
     });

@@ -120,19 +120,18 @@
     "typescript/no-explicit-any": "off",
     "eslint/no-unsafe-optional-chaining": "off",
     "unicorn/no-new-array": "off",
-    "typescript/no-deprecated": "off",
     "eslint/preserve-caught-error": "off",
     "eslint/no-extend-native": "off",
     "typescript/no-dynamic-delete": "off",
     "vitest/valid-title": "off",
     "unicorn/no-invalid-fetch-options": "off",
     "typescript/no-generated-empty-object-type": "off",
-    "typescript/return-await": "off",
     "typescript/no-confusing-non-null-assertion": "off",
     "unicorn/no-array-fill-with-reference-type": "off",
     "unicorn/prefer-add-event-listener": "off",
     "typescript/no-extraneous-class": "off",
-    "typescript/use-unknown-in-catch-callback-variable": "off"
+    "typescript/use-unknown-in-catch-callback-variable": "off",
+    "typescript/return-await": "off"
   },
   "overrides": [
     {
