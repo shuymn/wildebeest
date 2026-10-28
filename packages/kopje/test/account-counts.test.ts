@@ -115,7 +115,7 @@ describe("account counts as they are read", () => {
       followers_count: 0,
     });
     const outbox = await t.request("/ap/users/alice/outbox", { headers: { accept: "application/activity+json" } });
-    expect(((await outbox.json()) as { totalItems: number }).totalItems).toBe(0);
+    expect((await outbox.json<{ totalItems: number }>()).totalItems).toBe(0);
     const instance = (await t.api<{ stats: { status_count: number } }>("/api/v1/instance", null)).body;
     expect(instance.stats.status_count).toBe(3);
   });

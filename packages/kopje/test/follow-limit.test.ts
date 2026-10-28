@@ -12,7 +12,7 @@ const FOLLOWERS = { direction: "followers", domain: "fans.example", base: 710_00
 
 async function followResponse(h: ApiHarness, user: User, targetId: string, body: Record<string, unknown> = {}) {
   const response = await act(h, user, `/api/v1/accounts/${targetId}/follow`, body);
-  return { status: response.status, body: (await response.json()) as Record<string, unknown> };
+  return { status: response.status, body: await response.json<Record<string, unknown>>() };
 }
 
 const followingCount = async (h: ApiHarness, id: string) =>

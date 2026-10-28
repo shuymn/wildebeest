@@ -148,9 +148,11 @@ describe("the maintenance snapshot (OPS-7)", () => {
       await expectParity(h, request, path, init);
     }
     for (const { username, pubkey } of keys) {
-      const actor = (await (await request(`/ap/users/${username}`, { headers: { accept: AP } })).json()) as {
+      const actor = await (
+        await request(`/ap/users/${username}`, { headers: { accept: AP } })
+      ).json<{
         publicKey: { id: string; publicKeyPem: string };
-      };
+      }>();
       expect(actor.publicKey.id).toBe(`${ORIGIN}/ap/users/${username}#main-key`);
       expect(actor.publicKey.publicKeyPem.replace(/\s+/g, "")).toBe(pubkey.replace(/\s+/g, ""));
     }

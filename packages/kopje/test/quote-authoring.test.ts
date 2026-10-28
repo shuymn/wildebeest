@@ -57,7 +57,7 @@ async function postRaw(t: Setup, body: Record<string, unknown>, as: "alice" | "d
     headers: { authorization: `Bearer ${t.tokens[as]}`, "content-type": "application/json" },
     body: JSON.stringify(body),
   });
-  return { status: response.status, body: (await response.json()) as Record<string, unknown> };
+  return { status: response.status, body: await response.json<Record<string, unknown>>() };
 }
 
 async function quotePost(t: Setup, quoted: string, body: Record<string, unknown> = {}, as: "alice" | "dave" = "alice") {
@@ -72,7 +72,7 @@ async function api(t: Setup, method: string, path: string, body?: unknown, as: "
     headers: { authorization: `Bearer ${t.tokens[as]}`, "content-type": "application/json" },
     ...(body === undefined ? {} : { body: JSON.stringify(body) }),
   });
-  return { status: response.status, body: (await response.json()) as Record<string, unknown> };
+  return { status: response.status, body: await response.json<Record<string, unknown>>() };
 }
 
 async function statusId(t: Setup, uri: string): Promise<string> {
@@ -215,9 +215,9 @@ describe("posting a quote (PostStatusService, R36)", () => {
     const stamp = `${new URL(ALICE_URI).origin}/ap/users/dave/quote_authorizations/${row!.authorization_id}`;
     const served = await t.request(new URL(stamp).pathname, { headers: { accept: "application/activity+json" } });
     expect(served.status).toBe(200);
-    const note = (await (
+    const note = await (
       await t.request(new URL(mine.uri).pathname, { headers: { accept: "application/activity+json" } })
-    ).json()) as Record<string, unknown>;
+    ).json<Record<string, unknown>>();
     expect(note).toMatchObject({
       quote: theirs.uri,
       _misskey_quote: theirs.uri,
@@ -491,9 +491,9 @@ describe("the Note’s quote properties", () => {
     const daves = await localStatus(t, { status: "dave", visibility: "public" }, "dave");
     const mine = await quotePost(t, daves.id);
     expect((await api(t, "DELETE", `/api/v1/statuses/${daves.id}`, undefined, "dave")).status).toBe(200);
-    const note = (await (
+    const note = await (
       await t.request(new URL(mine.uri).pathname, { headers: { accept: "application/activity+json" } })
-    ).json()) as Record<string, unknown>;
+    ).json<Record<string, unknown>>();
     expect(note.quote).toEqual({ type: "Tombstone" });
     expect(note).not.toHaveProperty("_misskey_quote");
     expect(note).not.toHaveProperty("quoteAuthorization");

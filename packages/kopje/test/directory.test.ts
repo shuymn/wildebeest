@@ -205,7 +205,7 @@ describe("a remote account's discoverable", () => {
     const AS = "https://www.w3.org/ns/activitystreams";
     // The remote accounts listed (alice, local, is discoverable too).
     const shown = async () =>
-      ((await (await h.request("/api/v1/directory")).json()) as Listed[])
+      (await (await h.request("/api/v1/directory")).json<Listed[]>())
         .map((account) => account.acct)
         .filter((acct) => acct.includes("@"));
 

@@ -45,7 +45,7 @@ describe("features without data yet", () => {
 
   const send = async (h: ApiHarness, method: string, route: string, token?: string) => {
     const response = await h.request(route, token === undefined ? { method } : bearer(token, { method }));
-    return { status: response.status, body: (await response.json()) as unknown };
+    return { status: response.status, body: await response.json<unknown>() };
   };
 
   it.each(userAnswers)("%s %s answers the user under %s (AUTH-2)", async (method, route, scope, status, body) => {

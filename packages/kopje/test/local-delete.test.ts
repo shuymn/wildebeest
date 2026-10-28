@@ -597,7 +597,7 @@ async function api(t: Setup, method: string, path: string, body?: unknown, as: "
   const response = await t.request(path, bearer(t.tokens[as], init));
   return {
     status: response.status,
-    body: (await response.json()) as Record<string, unknown>,
+    body: await response.json<Record<string, unknown>>(),
     link: response.headers.get("link"),
   };
 }

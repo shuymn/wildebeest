@@ -45,7 +45,7 @@ describe("admin authentication", () => {
     const { request, as } = adminHarness(await configuredStore(), team);
     const refused = async (response: Response) => {
       expect(response.status).toBe(401);
-      return ((await response.json()) as { error: string }).error;
+      return (await response.json<{ error: string }>()).error;
     };
     expect(await refused(await request("/admin/version"))).toMatch(/missing/);
     await refused(await as({ ...adminClaims(), aud: ["another-app"] }, "/admin/version"));
@@ -166,10 +166,12 @@ describe("admin endpoints", () => {
       worker: { build: BUILD },
       store: { build: BUILD, applied: LATEST_MIGRATION, expected: LATEST_MIGRATION },
     });
-    const capacity = (await (await as(adminClaims(), "/admin/capacity")).json()) as {
+    const capacity = await (
+      await as(adminClaims(), "/admin/capacity")
+    ).json<{
       databaseSize: number;
       tables: { name: string; rows: number }[];
-    };
+    }>();
     expect(capacity.databaseSize).toBeGreaterThan(0);
     expect(capacity.tables).toContainEqual({ name: "statuses", rows: 3 });
     expect(capacity.tables).toContainEqual({ name: "mutes", rows: 1 });
@@ -208,10 +210,12 @@ describe("admin endpoints", () => {
   it("dumps over HTTP with a framed cursor", async () => {
     const store = await configuredStore();
     const { post } = adminHarness(store, team);
-    const started = (await (await post(adminClaims(), "/admin/dump/start")).json()) as {
+    const started = await (
+      await post(adminClaims(), "/admin/dump/start")
+    ).json<{
       cursor: unknown;
       headerLine: string;
-    };
+    }>();
     expect(started.headerLine).toMatch(/^-- kopje-dump-header /);
     const next = await post(adminClaims(), "/admin/dump/next", { cursor: started.cursor });
     expect(next.headers.get("content-type")).toBe("application/octet-stream");
@@ -338,7 +342,7 @@ describe("import bootstrap over Access", () => {
 
     const begun = await post(adminClaims(), "/admin/import/begin", { header });
     expect(begun.status).toBe(200);
-    const { progress } = (await begun.json()) as { progress: { id: string } };
+    const { progress } = await begun.json<{ progress: { id: string } }>();
     const chunks = await importChunks(text, 1 << 20);
     const teamAccess = { ...ACCESS, teamDomain: team.teamDomain };
     expect(await target.importChunk(BUILD, teamAccess, progress.id, 1, chunks[0]!)).toMatchObject({ ok: true });
@@ -349,9 +353,11 @@ describe("import bootstrap over Access", () => {
     expect(await reset.json()).toMatchObject({ done: true });
     expect((await as(adminClaims(), "/admin/version")).status).toBe(200);
 
-    const again = (await (await post(adminClaims(), "/admin/import/begin", { header })).json()) as {
+    const again = await (
+      await post(adminClaims(), "/admin/import/begin", { header })
+    ).json<{
       progress: { id: string };
-    };
+    }>();
     for (const [i, chunk] of chunks.entries()) {
       expect(await target.importChunk(BUILD, teamAccess, again.progress.id, i + 1, chunk)).toMatchObject({ ok: true });
     }

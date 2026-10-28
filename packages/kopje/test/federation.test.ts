@@ -45,7 +45,7 @@ async function instance(options: { kek?: string } = {}) {
     return {
       status: response.status,
       type: response.headers.get("content-type"),
-      body: (await response.json()) as never,
+      body: await response.json<never>(),
     };
   };
   return { ...h, store, json, generated: () => generated };

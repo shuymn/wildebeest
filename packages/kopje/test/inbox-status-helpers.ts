@@ -69,7 +69,7 @@ export async function setup(clock: { now: number } = { now: NOW }) {
   };
   const api = async <T = unknown>(path: string, as: "alice" | "dave" | null = "alice") => {
     const response = await h.request(path, as === null ? {} : { headers: { authorization: `Bearer ${tokens[as]}` } });
-    return { status: response.status, body: (await response.json()) as T };
+    return { status: response.status, body: await response.json<T>() };
   };
   return { store, web, ...h, post, api, tokens };
 }
@@ -267,7 +267,7 @@ export async function localStatus(t: Setup, body: Record<string, unknown>, as: "
     body: JSON.stringify(body),
   });
   expect(response.status).toBe(200);
-  return (await response.json()) as { id: string; uri: string };
+  return await response.json<{ id: string; uri: string }>();
 }
 
 // The actor's live retractions at MAX_RETRACTIONS_PER_ACTOR (fillers of its origin, expiring in a day).
