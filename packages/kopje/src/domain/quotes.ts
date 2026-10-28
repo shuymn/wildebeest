@@ -1489,7 +1489,7 @@ function answeredQuote(db: Db, actor: { id: string }, ref: QuoteAnswerRef): Answ
 // so receivers treat it as implicit and recheck the stamp or its absence. Use a random id, never a clock; supersede
 // waiting Updates (deliveries.ts).
 function recordStampUpdate(db: Db, statusId: string, authorId: string, now: number): void {
-  const facts = statusFacts(db, statusId);
+  const facts = statusFacts(db, statusId, noteQuote);
   if (facts !== null) {
     recordOutbound(db, authorId, updateActivity(facts, `quote-${crypto.randomUUID()}`), now);
   }
@@ -1611,7 +1611,7 @@ function revokeLocalStamp(
     recordStampUpdate(db, row.status_id, row.author_id, now);
   }
   if (forward !== null) {
-    const reach = statusReach(db, row.status_id);
+    const reach = statusReach(db, row.status_id, noteQuote);
     recordOutbound(
       db,
       row.author_id,

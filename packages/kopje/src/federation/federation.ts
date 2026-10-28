@@ -26,7 +26,6 @@ import {
 } from "@fedify/vocab";
 import { Temporal } from "temporal-polyfill";
 
-import type { FeaturedItem } from "../domain/activities";
 import {
   type CollectionKind,
   type CollectionPage,
@@ -39,6 +38,7 @@ import {
 } from "../domain/actors";
 import type { FollowerSigner } from "../domain/follower-signer";
 import type { PolicyTicket } from "../domain/instance-domain-blocks";
+import type { FeaturedItem } from "../domain/local-notes";
 import type { SnapshotSource } from "../domain/snapshot";
 import { renderFieldValue } from "../domain/status-text";
 import { httpUrl } from "../platform/http-url";

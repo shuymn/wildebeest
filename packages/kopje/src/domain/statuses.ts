@@ -93,6 +93,7 @@ import {
   answeredRequests,
   ensureQuotedAccess,
   localQuoteOf,
+  noteQuote,
   type QuotedForPost,
   quotedUpdates,
   type QuoteState,
@@ -649,7 +650,7 @@ export function writePost(
       });
     }
   }
-  const facts = statusFacts(db, id);
+  const facts = statusFacts(db, id, noteQuote);
   if (facts !== null) {
     recordOutbound(db, accountId, createActivity(facts), input.now);
     // PostStatusService#postprocess_status!: the QuoteRequest follows the Create, to the quoted author alone.
@@ -1063,7 +1064,7 @@ export const editStatus = userWriteOperation<EditStatusInput, Acted<Status>>((db
     });
   }
   notifyQuotedUpdate(db, current.id, accountId, input.now);
-  const facts = statusFacts(db, current.id);
+  const facts = statusFacts(db, current.id, noteQuote);
   if (facts !== null) {
     recordOutbound(db, accountId, updateActivity(facts, editId), input.now);
   }
@@ -1084,7 +1085,7 @@ function setQuotePolicy(db: Db, accountId: string, id: string, policy: number, n
   if (db.run("UPDATE statuses SET quote_policy = ?1 WHERE id = ?2 AND quote_policy <> ?1", policy, id) === 0) {
     return;
   }
-  const facts = statusFacts(db, id);
+  const facts = statusFacts(db, id, noteQuote);
   if (facts !== null) {
     recordOutbound(db, accountId, updateActivity(facts, `quote-policy-${crypto.randomUUID()}`), now);
   }
@@ -2351,7 +2352,9 @@ export const revokeQuote = userWriteOperation<RevokeInput, RevokeResult>((db, in
     }
     state = revokeQuoteRow(db, input.quotingId, quoted, input.expected, input.now) ?? state;
     if (signed !== null) {
-      const reach = [statusReach(db, quoted), statusReach(db, input.quotingId)].filter((r) => r !== null);
+      const reach = [statusReach(db, quoted, noteQuote), statusReach(db, input.quotingId, noteQuote)].filter(
+        (r) => r !== null,
+      );
       recordOutbound(
         db,
         accountId,

@@ -23,15 +23,17 @@ import {
   MAX_FIELDS,
   VERIFIED_AT_JSON_BYTES,
 } from "../src/domain/accounts";
-import { createActivity, getFeatured, noteOf, OUTBOX_BYTES, PIN_LIMIT, statusFacts } from "../src/domain/activities";
+import { createActivity, noteOf, PIN_LIMIT, statusFacts } from "../src/domain/activities";
 import { ANSWER_BYTES } from "../src/domain/answer-budget";
 import { type VisibleStatusId } from "../src/domain/audience";
 import { OWNER_ROLE } from "../src/domain/auth";
 import { listConversations, MAX_PRESENTED_PARTICIPANTS } from "../src/domain/conversations";
 import { MAX_FILTER_KEYWORD, MAX_FILTER_KEYWORDS, MAX_FILTER_TITLE, MAX_FILTERS } from "../src/domain/filters";
+import { getFeatured, OUTBOX_BYTES } from "../src/domain/local-notes";
 import { listGroupedNotifications } from "../src/domain/notification-groups";
 import { listNotifications } from "../src/domain/notifications";
 import { ACTOR_URI_LIMIT, PROFILE_URL_LIMIT, USERNAME_LIMIT } from "../src/domain/profile-bounds";
+import { noteQuote } from "../src/domain/quotes";
 import { getAdminReport } from "../src/domain/reports";
 import {
   MAX_MEDIA_DESCRIPTION_LENGTH,
@@ -2729,7 +2731,7 @@ describe("ActivityPub Notes of a local status at its bounds (RES-3)", () => {
           }
         }
       });
-      const facts = statusFacts(new Db(counting), ids[0]!, { reached: false })!;
+      const facts = statusFacts(new Db(counting), ids[0]!, noteQuote, { reached: false })!;
       const note = noteOf(facts);
       return {
         sqlite,
@@ -2773,7 +2775,7 @@ describe("ActivityPub Notes of a local status at its bounds (RES-3)", () => {
       tags: [1, 2, 3].map((i) => `${i}${"x".repeat(240_000)}`),
     });
     const shown = await runInDurableObject(t.store, (_instance, state) => {
-      const facts = statusFacts(new Db(state.storage.sql), long, { reached: false })!;
+      const facts = statusFacts(new Db(state.storage.sql), long, noteQuote, { reached: false })!;
       return { tags: facts.tags.length, create: jsonBytes(createActivity(facts).activity) };
     });
     expect(shown.tags).toBe(0);

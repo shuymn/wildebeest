@@ -2,9 +2,9 @@ import { runInDurableObject } from "cloudflare:test";
 import { env } from "cloudflare:workers";
 import { describe, expect, it, vi } from "vitest";
 
-import { getOutbox } from "../src/domain/activities";
 import * as deliveries from "../src/domain/deliveries";
 import type { DeliveryOutcome } from "../src/domain/deliveries";
+import { getOutbox } from "../src/domain/local-notes";
 import { postActivity } from "../src/federation/delivery";
 import { type DeliveryDeps, deliveryRound } from "../src/jobs/deliver";
 import type { StoreStub } from "../src/platform/store-client";
@@ -518,7 +518,7 @@ describe("copies as sent on the wire (VIS-2, VIS-7)", () => {
 });
 
 describe("the outbox", () => {
-  // The collection's totalItems is the account's stored statuses_count (activities.ts getOutbox).
+  // The collection's totalItems is the account's stored statuses_count (local-notes.ts getOutbox).
   it("runs no count query, for a page or for the collection", async () => {
     const h = await community(["alice"]);
     await post(h, h.users.alice, { status: "hello" });
