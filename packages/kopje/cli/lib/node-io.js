@@ -94,7 +94,7 @@ export const nodeIO = {
   async sha256(path) {
     const hash = createHash("sha256");
     try {
-      for await (const chunk of createReadStream(path)) {
+      for await (const chunk of /** @type {AsyncIterable<Buffer>} */ (createReadStream(path))) {
         hash.update(chunk);
       }
     } catch (error) {

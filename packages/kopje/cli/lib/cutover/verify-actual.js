@@ -64,18 +64,22 @@ function blobHex(literal) {
 
 /**
  * A media meta value in comparison form: full and preview sizes, null where absent.
- * @param {any} meta
+ * @param {unknown} meta
  */
 function sizesOf(meta) {
   if (typeof meta !== "object" || meta === null) {
     return null;
   }
+  const m =
+    /** @type {{ original?: { width?: unknown, height?: unknown } | null, small?: { width?: unknown, height?: unknown } | null }} */ (
+      meta
+    );
   /** @type {unknown[]} */
   const sizes = [
-    meta.original?.width ?? null,
-    meta.original?.height ?? null,
-    meta.small?.width ?? null,
-    meta.small?.height ?? null,
+    m.original?.width ?? null,
+    m.original?.height ?? null,
+    m.small?.width ?? null,
+    m.small?.height ?? null,
   ];
   return sizes;
 }
@@ -254,11 +258,11 @@ export function actualFromDump(text) {
         const uri = status(t("status_id"))?.uri ?? "";
         emojiRows.status_edits += row.emojis === undefined || row.emojis === "NULL" ? 0 : 1;
         // The attachments a version shows, as its media_json presents them.
-        /** @type {any[]} */
+        /** @type {({ url?: unknown, preview_url?: unknown, description?: unknown, meta?: unknown } | null)[]} */
         let shown = [];
         try {
-          const parsed = JSON.parse(t("media_json") ?? "[]");
-          shown = Array.isArray(parsed) ? parsed : [];
+          const parsed = /** @type {unknown} */ (JSON.parse(t("media_json") ?? "[]"));
+          shown = Array.isArray(parsed) ? /** @type {typeof shown} */ (parsed) : [];
         } catch {
           shown = [];
         }
@@ -279,10 +283,10 @@ export function actualFromDump(text) {
         }
         // Local media served from R2, as `convert --images` makes it from Cloudflare Images.
         if (row.file_token !== undefined && row.file_token !== "NULL") {
-          /** @type {any} */
+          /** @type {unknown} */
           let meta = null;
           try {
-            meta = JSON.parse(t("meta") ?? "null");
+            meta = /** @type {unknown} */ (JSON.parse(t("meta") ?? "null"));
           } catch {
             meta = null;
           }

@@ -202,10 +202,12 @@ export function parseFingerprint(value) {
  * @returns {{ rowsLoaded: Record<string, number>, notificationSequence: string | null }}
  */
 export function parseManifest(value) {
-  const m = /** @type {Record<string, any>} */ (value);
+  const m = /** @type {{ tool?: { command?: unknown } | null, result?: unknown,
+    source?: { rowsLoaded?: unknown, notificationSequence?: unknown } | null } | null} */ (value);
   const tool = m?.tool;
   const source = m?.source;
   const rowsLoaded = source?.rowsLoaded;
+  const sequence = source?.notificationSequence;
   if (
     typeof m !== "object" ||
     m === null ||
@@ -216,11 +218,11 @@ export function parseManifest(value) {
     Array.isArray(rowsLoaded) ||
     Object.keys(rowsLoaded).length === 0 ||
     !Object.values(rowsLoaded).every((n) => Number.isSafeInteger(n) && n >= 0) ||
-    (source.notificationSequence !== null && typeof source.notificationSequence !== "string")
+    (sequence !== null && typeof sequence !== "string")
   ) {
     throw new FingerprintError("not-a-conversion-manifest");
   }
-  return { rowsLoaded, notificationSequence: source.notificationSequence };
+  return { rowsLoaded: /** @type {Record<string, number>} */ (rowsLoaded), notificationSequence: sequence };
 }
 
 // Tables the converter's count map does not cover: its own bookkeeping.

@@ -743,6 +743,7 @@ export async function run({
           /** @type {string | null} */
           let after = null;
           do {
+            /** @type {import('./client.js').Responses["/admin/deliveries/retry"]} */
             const page = await client.post(
               "/admin/deliveries/retry",
               after === null ? { all: true } : { all: true, after },
@@ -1148,6 +1149,7 @@ export async function run({
         /** @type {string | null} */
         let after = null;
         for (;;) {
+          /** @type {import('./client.js').Responses["/admin/keys/rewrap"]} */
           const step = await client.post("/admin/keys/rewrap", { after });
           counts.rewrapped += step.counts.rewrapped;
           counts.current += step.counts.current;
@@ -1215,8 +1217,9 @@ export async function run({
         // A reset names its import: the one saved for <file>, or else the one running on the Store. A token
         // import is reset with the session kept for its file, or with --abandon-stale once it is idle.
         const saved = rest[0] === undefined ? null : await io.readText(`${rest[0]}.import.json`);
-        /** @type {{ id: string, session?: string } | null} */
-        const local = saved === null ? null : JSON.parse(saved);
+        const local = /** @type {{ id: string, session?: string } | null} */ (
+          saved === null ? null : JSON.parse(saved)
+        );
         const resetter = typeof local?.session === "string" ? client.withSession(local.session) : client;
         const id = local?.id ?? (await client.get("/admin/import/progress")).progress?.id;
         if (typeof id !== "string") {
