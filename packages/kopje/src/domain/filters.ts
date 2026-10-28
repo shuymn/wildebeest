@@ -19,7 +19,6 @@ import { FILTER_MATCH_COLUMNS } from "./status-rows";
 // CustomFilter::VALID_CONTEXTS, CustomFilter's action enum, TITLE_LENGTH_LIMIT and
 // CustomFilterKeyword::KEYWORD_LENGTH_LIMIT.
 const FILTER_CONTEXTS = ["home", "notifications", "public", "thread", "account"] as const;
-export type FilterContext = (typeof FILTER_CONTEXTS)[number];
 const FILTER_ACTIONS = ["warn", "hide", "blur"] as const;
 type FilterAction = (typeof FILTER_ACTIONS)[number];
 export const MAX_FILTER_TITLE = 256;

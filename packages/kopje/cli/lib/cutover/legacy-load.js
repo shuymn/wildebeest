@@ -41,8 +41,6 @@ export function legacyMigrations() {
     .map((f) => ({ name: f.slice(0, -".sql".length), sql: readFileSync(`${MIGRATIONS_DIR}${f}`, "utf8") }));
 }
 
-export const LAST_LEGACY_LEVEL = 39;
-
 // Levels a live legacy instance can be at (the supported range of the cutover). T1 is shuymn's Wildebeest fork
 // (0.1.0), T2 the cloudflare/wildebeest line (0.0.1, at most 0010). Below 0011 both lines have the same schema, so they are reported
 // together.
@@ -66,9 +64,6 @@ function isSearchTable(name) {
 function isBookkeeping(name) {
   return name === "d1_migrations" || name.startsWith("sqlite_") || isPlatformTable(name);
 }
-
-// Loader failures carry a fixed code and counts or digests only (DATA-13).
-export const LegacyLoadError = ExportError;
 
 // A fixed pseudo-random stream (SHA-256 in counter mode) for randomblob() and random().
 /** @param {DatabaseSync} db */
