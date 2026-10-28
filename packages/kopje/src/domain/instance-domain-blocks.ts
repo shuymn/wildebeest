@@ -2,12 +2,13 @@ import type { Db } from "../db/sql";
 import { blockedDomain, hostDomain } from "../platform/domain-name";
 import { fetchableHref } from "../platform/http-url";
 import { sha256Hex } from "../platform/sha256";
-import { type PageQuery, edgeRangeSql } from "./accounts";
+import type { PageQuery } from "./accounts";
 import { admit, ARRAY_ANSWER_BYTES } from "./answer-budget";
 import { domainCoveredSql, hostCoveredSql, hostMediaRejectedSql, MAX_BLOCK_LABELS } from "./audience";
 import { authorize, type Authorized, type Credential } from "./auth";
 import { FRESH_ATTEMPTS_SQL } from "./job-attempts";
 import { readOperation, writeOperation } from "./operation";
+import { edgeRangeSql } from "./windows";
 
 // Instance domain blocks (R38, VIS-30; Mastodon's DomainBlock), migration 0046_instance_domain_blocks. Each Store
 // operation commits in one transaction and fetches nothing. A host's rule is its longest matching block (audience.ts

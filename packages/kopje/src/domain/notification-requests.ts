@@ -1,5 +1,5 @@
 import type { Db } from "../db/sql";
-import { type Account, accountsOf, edgeRangeSql, type Page, type PageQuery, type Present } from "./accounts";
+import { type Account, accountsOf, type Page, type PageQuery, type Present } from "./accounts";
 import { admit, admittedPage, ARRAY_ANSWER_BYTES, firstUses } from "./answer-budget";
 import {
   availableSql,
@@ -18,7 +18,7 @@ import { MAX_MEANINGFUL_COUNT, NOTIFICATION_CHUNK, REMOVAL_BATCHES, runRemovals 
 import { writeOperation } from "./operation";
 import { presentation, type Status, statusStream } from "./status-presenter";
 import { streamMerged } from "./streaming";
-import { readWindow, singleWindow, windowJson, windowPage } from "./windows";
+import { edgeRangeSql, readWindow, singleWindow, windowJson, windowPage } from "./windows";
 
 // Notification policies and requests (Mastodon 4.5's NotificationPolicy, NotificationRequest and
 // NotificationPermission; Api::V1 and Api::V2::Notifications::PoliciesController, Api::V1::Notifications::
