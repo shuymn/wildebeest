@@ -529,7 +529,12 @@ export const createDomainBlock: ApiHandler = async (c, deps) => {
   if (p instanceof Response) {
     return p;
   }
-  const input = { credential: optionalCredential(c, deps), domain: p.get("domain"), ...blockRequest(p) };
+  const domain = p.get("domain");
+  const input = {
+    credential: optionalCredential(c, deps),
+    ...(domain === undefined ? {} : { domain }),
+    ...blockRequest(p),
+  };
   return domainBlockResponse(authorized(await storeCall(c, deps, (s, b) => s.createAdminDomainBlock(b, input))), c);
 };
 

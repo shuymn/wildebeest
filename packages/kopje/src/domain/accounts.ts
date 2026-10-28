@@ -1124,7 +1124,7 @@ export type SearchInput = {
   present: Present;
   // The account resolve=true found (remote-statuses.ts resolveSearch), shown first, as Mastodon's
   // AccountSearchService puts the exact match first, when the viewer may find it and, with `following`, follows it.
-  resolvedAccountId?: string;
+  resolvedAccountId?: string | undefined;
 };
 
 // Local and known remote accounts whose search_text contains every term (in any of its variants). An exact username
@@ -1294,7 +1294,12 @@ export function relationshipResult(db: Db, viewerId: string, targetId: string, n
 // Keyset pages over an edge table's INTEGER id (a paging cursor only). max_id and since_id page backwards from the
 // newest; min_id pages forwards from the given cursor and is returned newest first as well. Cursors stay strings:
 // they are read with CAST(id AS TEXT) and compared in SQL, never as JS numbers (which are exact only up to 2^53).
-export type PageQuery = { maxId?: string; sinceId?: string; minId?: string; limit: number };
+export type PageQuery = {
+  maxId?: string | undefined;
+  sinceId?: string | undefined;
+  minId?: string | undefined;
+  limit: number;
+};
 
 // A page of a list. `cut`: the read stopped at its candidate window (windows.ts) before the page filled, or an answer
 // without a page stopped at ANSWER_BYTES, so the next link is offered however few items it holds.

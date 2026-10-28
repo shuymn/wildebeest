@@ -65,7 +65,11 @@ export const getList = userReadOperation<{ id: string }, List | null>((db, { id 
 
 // The attributes a create or an update sets; undefined leaves one as it is (on create: its default). repliesPolicy is
 // the parameter as sent, checked here.
-export type ListChanges = { title?: string; repliesPolicy?: string; exclusive?: boolean };
+export type ListChanges = {
+  title?: string | undefined;
+  repliesPolicy?: string | undefined;
+  exclusive?: boolean | undefined;
+};
 
 export type ListResult =
   | { status: "ok"; list: List }
@@ -218,7 +222,7 @@ export function ownedAccountsWindow(
 // `from`, up to MAX_LIST_MEMBERS_ANSWERED and within ANSWER_BYTES (ownedAccountsPage). A pending member is
 // listed too. Null when the list is not the viewer's.
 export const listAccounts = userReadOperation<
-  { id: string; page: PageQuery | null; from?: string; present: Present },
+  { id: string; page: PageQuery | null; from?: string | undefined; present: Present },
   Page<Account> | null
 >((db, { id, ...query }, { accountId }) => {
   if (ownList(db, accountId, id) === undefined) {
