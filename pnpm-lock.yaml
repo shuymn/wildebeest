@@ -58,8 +58,8 @@ catalogs:
       specifier: 4.10.2
       version: 4.10.2
     hono:
-      specifier: 4.13.13
-      version: 4.13.13
+      specifier: 4.13.14
+      version: 4.13.14
     htmlparser2:
       specifier: 12.0.0
       version: 12.0.0
@@ -187,7 +187,7 @@ importers:
         version: 4.10.2
       hono:
         specifier: 'catalog:'
-        version: 4.13.13
+        version: 4.13.14
       htmlparser2:
         specifier: 'catalog:'
         version: 12.0.0
@@ -1776,8 +1776,8 @@ packages:
     engines: {node: ^8.16.0 || ^10.6.0 || >=11.0.0}
     os: [darwin]
 
-  hono@4.13.13:
-    resolution: {integrity: sha512-CQ46U0ZkAGmbT/4UxdzzGJpacP2IeKgY4a5/tOI9AABbpOMfK739wfDXmv1usCk+3RkKj1hQy4/fjhiwa2xlrA==}
+  hono@4.13.14:
+    resolution: {integrity: sha512-yhRLQ21U6qa9Hsu2N7Qcbh8tE+WKEcoErjIo56LeSGiGXGp9sA7UpE86Ui9uexb61KakiGwuHMn2QdV7w6i6kQ==}
     engines: {node: '>=16.9.0'}
 
   htmlparser2@12.0.0:
@@ -3264,7 +3264,7 @@ snapshots:
   fsevents@2.3.3:
     optional: true
 
-  hono@4.13.13: {}
+  hono@4.13.14: {}
 
   htmlparser2@12.0.0:
     dependencies:
