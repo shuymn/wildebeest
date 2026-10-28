@@ -183,7 +183,7 @@ describe("media rebuild (MEDIA-2, MEDIA-3)", () => {
     const rotated = await addRow(h.store, { contentType: "image/webp", original: bytes(JPEG_ORIENTATION_6) });
     const response = await h.post(adminClaims(), "/admin/media/rebuild");
     expect(response.status).toBe(200);
-    const step = (await response.json()) as Step;
+    const step = await response.json<Step>();
     expect(step).toMatchObject({ done: true, stopped: null, problems: [] });
     expect(step.counts).toMatchObject({ built: 2, "skipped-existing": 0 });
     expect(await files(wide)).toEqual([true, true]);
@@ -212,7 +212,7 @@ describe("media rebuild (MEDIA-2, MEDIA-3)", () => {
         ACCOUNT,
       );
     });
-    const step = (await (await h.post(adminClaims(), "/admin/media/rebuild")).json()) as Step;
+    const step = await (await h.post(adminClaims(), "/admin/media/rebuild")).json<Step>();
     expect(step.counts).toMatchObject({ built: 2 });
     expect(await meta(h.store, animated.id)).toEqual({
       original: { width: 8, height: 6 },
@@ -231,11 +231,11 @@ describe("media rebuild (MEDIA-2, MEDIA-3)", () => {
     const h = await setup();
     const existing = await addRow(h.store, { files: true });
     const missing = await addRow(h.store);
-    const first = (await (await h.post(adminClaims(), "/admin/media/rebuild")).json()) as Step;
+    const first = await (await h.post(adminClaims(), "/admin/media/rebuild")).json<Step>();
     expect(first.counts).toMatchObject({ built: 1, "skipped-existing": 1 });
     expect(await meta(h.store, existing.id)).toMatchObject({ original: { width: 1, height: 1 } });
     const calls = h.codec.calls;
-    const second = (await (await h.post(adminClaims(), "/admin/media/rebuild")).json()) as Step;
+    const second = await (await h.post(adminClaims(), "/admin/media/rebuild")).json<Step>();
     expect(second.counts).toMatchObject({ built: 0, "skipped-existing": 2 });
     expect(h.codec.calls).toBe(calls);
     expect(await files(missing)).toEqual([true, true]);
@@ -255,7 +255,7 @@ describe("media rebuild (MEDIA-2, MEDIA-3)", () => {
         ACCOUNT,
       );
     });
-    const step = (await (await h.post(adminClaims(), "/admin/media/rebuild")).json()) as Step;
+    const step = await (await h.post(adminClaims(), "/admin/media/rebuild")).json<Step>();
     expect(step.counts).toMatchObject({ built: 0, "skipped-existing": 0, "original-missing": 0 });
     expect(await files(doomed)).toEqual([false, false]);
     expect(await files(unfinished)).toEqual([false, false]);
@@ -267,7 +267,7 @@ describe("media rebuild (MEDIA-2, MEDIA-3)", () => {
     // The row says WebP, but a PNG original is served as PNG: its URLs would be wrong, so it is not rebuilt.
     const mismatch = await addRow(h.store, { contentType: "image/webp", original: bytes(PNG_PLAIN) });
     const good = await addRow(h.store);
-    const step = (await (await h.post(adminClaims(), "/admin/media/rebuild")).json()) as Step;
+    const step = await (await h.post(adminClaims(), "/admin/media/rebuild")).json<Step>();
     expect(step.counts).toMatchObject({ built: 1, "original-missing": 1, "type-mismatch": 1 });
     expect(step.problems).toEqual([
       { id: missing.id, outcome: "original-missing" },
@@ -286,13 +286,13 @@ describe("media rebuild (MEDIA-2, MEDIA-3)", () => {
     codec.failEncode = 9422;
     const h = await setup({ codec });
     const row = await addRow(h.store);
-    const quota = (await (await h.post(adminClaims(), "/admin/media/rebuild")).json()) as Step;
+    const quota = await (await h.post(adminClaims(), "/admin/media/rebuild")).json<Step>();
     expect(quota).toMatchObject({ stopped: "quota", done: false, next: null });
     expect(await files(row)).toEqual([false, false]);
 
     const budget = await setup({ env: { IMAGES_MONTHLY_TRANSFORMS: "1" } });
     const unbuilt = await addRow(budget.store);
-    const spent = (await (await budget.post(adminClaims(), "/admin/media/rebuild")).json()) as Step;
+    const spent = await (await budget.post(adminClaims(), "/admin/media/rebuild")).json<Step>();
     expect(spent).toMatchObject({ stopped: "budget", done: false });
     expect(budget.codec.calls).toBe(0);
     expect(await files(unbuilt)).toEqual([false, false]);
@@ -304,13 +304,13 @@ describe("media rebuild (MEDIA-2, MEDIA-3)", () => {
     for (let i = 0; i < MAX_BUILDS_PER_CALL + REBUILD_PAGE + 2; i++) {
       rows.push(await addRow(h.store, { files: i >= MAX_BUILDS_PER_CALL + 1 }));
     }
-    const first = (await (await h.post(adminClaims(), "/admin/media/rebuild")).json()) as Step;
+    const first = await (await h.post(adminClaims(), "/admin/media/rebuild")).json<Step>();
     expect(first.counts).toMatchObject({ built: MAX_BUILDS_PER_CALL });
     expect(first).toMatchObject({ done: false, next: rows[MAX_BUILDS_PER_CALL - 1]?.id });
-    const second = (await (await h.post(adminClaims(), "/admin/media/rebuild", { after: first.next })).json()) as Step;
+    const second = await (await h.post(adminClaims(), "/admin/media/rebuild", { after: first.next })).json<Step>();
     expect(second.counts).toMatchObject({ built: 1, "skipped-existing": REBUILD_PAGE - 1 });
     expect(second).toMatchObject({ done: false, next: rows[MAX_BUILDS_PER_CALL + REBUILD_PAGE - 1]?.id });
-    const third = (await (await h.post(adminClaims(), "/admin/media/rebuild", { after: second.next })).json()) as Step;
+    const third = await (await h.post(adminClaims(), "/admin/media/rebuild", { after: second.next })).json<Step>();
     expect(third).toMatchObject({ done: true, counts: { "skipped-existing": 2 } });
     for (const row of rows) {
       expect(await files(row)).toEqual([true, true]);
@@ -323,7 +323,7 @@ describe("media rebuild (MEDIA-2, MEDIA-3)", () => {
     const h = await setup({ codec });
     const row = await addRow(h.store, { original: bytes(WIDE_PNG) });
     expect(await blurhashOf(h.store, row.id)).toBeNull();
-    const step = (await (await h.post(adminClaims(), "/admin/media/rebuild")).json()) as Step;
+    const step = await (await h.post(adminClaims(), "/admin/media/rebuild")).json<Step>();
     expect(step).toMatchObject({ done: true, stopped: null, counts: { built: 1 } });
     expect(codec.outputs.map((call) => call.options.format)).toEqual(["image/png", "image/png", "rgba"]);
     const hash = imageBlurhash({ data: new Uint8ClampedArray(seen[0]!.buffer), width: 640, height: 160 });
@@ -338,7 +338,7 @@ describe("media rebuild (MEDIA-2, MEDIA-3)", () => {
     const h = await setup({ codec });
     const row = await addRow(h.store);
     await setBlurhash(h.store, row.id, SEEDED);
-    const step = (await (await h.post(adminClaims(), "/admin/media/rebuild")).json()) as Step;
+    const step = await (await h.post(adminClaims(), "/admin/media/rebuild")).json<Step>();
     expect(step).toMatchObject({ done: true, stopped: null, counts: { built: 1 } });
     expect(codec.outputs.map((call) => call.options.format)).toEqual(["image/png", "image/png", "rgba"]);
     expect(await files(row)).toEqual([true, true]);
@@ -360,7 +360,7 @@ describe("media rebuild (MEDIA-2, MEDIA-3)", () => {
       );
     });
     const built = await addRow(h.store);
-    const step = (await (await h.post(adminClaims(), "/admin/media/rebuild")).json()) as Step;
+    const step = await (await h.post(adminClaims(), "/admin/media/rebuild")).json<Step>();
     // The row between them was reached and built.
     expect(step.counts).toMatchObject({ built: 1, "skipped-existing": 1 });
     expect(await files(built)).toEqual([true, true]);
@@ -375,7 +375,7 @@ describe("media rebuild (MEDIA-2, MEDIA-3)", () => {
     const first = await addRow(h.store);
     await setBlurhash(h.store, first.id, SEEDED);
     const second = await addRow(h.store);
-    const step = (await (await h.post(adminClaims(), "/admin/media/rebuild")).json()) as Step;
+    const step = await (await h.post(adminClaims(), "/admin/media/rebuild")).json<Step>();
     expect(step).toMatchObject({ stopped: "quota", done: false, next: first.id, counts: { built: 1 } });
     expect(await files(first)).toEqual([true, true]);
     expect(await blurhashOf(h.store, first.id)).toBe(SEEDED);
@@ -384,7 +384,7 @@ describe("media rebuild (MEDIA-2, MEDIA-3)", () => {
     expect(await transforms(h.store)).toBe(3);
     // The next call starts at the second row.
     codec.failRgba = null;
-    const next = (await (await h.post(adminClaims(), "/admin/media/rebuild", { after: step.next })).json()) as Step;
+    const next = await (await h.post(adminClaims(), "/admin/media/rebuild", { after: step.next })).json<Step>();
     expect(next).toMatchObject({ stopped: null, done: true, counts: { built: 1 } });
     expect(await files(second)).toEqual([true, true]);
   });
@@ -436,7 +436,7 @@ describe("media rebuild (MEDIA-2, MEDIA-3)", () => {
     const h = await setup();
     const row = await addRow(h.store);
     await addRow(h.store, { original: null });
-    const step = (await (await h.post(adminClaims(), "/admin/media/rebuild", { dryRun: true })).json()) as Step;
+    const step = await (await h.post(adminClaims(), "/admin/media/rebuild", { dryRun: true })).json<Step>();
     expect(step.counts).toMatchObject({ "would-build": 1, built: 0, "original-missing": 1 });
     expect(h.codec.calls).toBe(0);
     expect(await transforms(h.store)).toBe(0);
@@ -480,7 +480,7 @@ describe("media rebuild and the operator gate (OPS-8)", () => {
       );
     });
     const unpublished = await addRow(h.store, { original: bytes(WIDE_PNG) });
-    expect(((await (await h.post(adminClaims(), "/admin/media/rebuild")).json()) as Step).counts.built).toBe(1);
+    expect((await (await h.post(adminClaims(), "/admin/media/rebuild")).json<Step>()).counts.built).toBe(1);
     expect(await meta(h.store, unpublished.id)).toMatchObject({ original: { width: 3840, height: 960 } });
     const refused = await rejectionOf(h.store.expiredMedia(BUILD, { now: NOW, limit: 1 }));
     expect(toStoreUnavailable(refused)?.reason).toBe("unpublished");
@@ -490,7 +490,7 @@ describe("media rebuild and the operator gate (OPS-8)", () => {
     });
     await settledMaintenance(h.store);
     const readonly = await addRow(h.store);
-    expect(((await (await h.post(adminClaims(), "/admin/media/rebuild")).json()) as Step).counts.built).toBe(1);
+    expect((await (await h.post(adminClaims(), "/admin/media/rebuild")).json<Step>()).counts.built).toBe(1);
     expect(await files(readonly)).toEqual([true, true]);
     const stillRefused = await rejectionOf(h.store.expiredMedia(BUILD, { now: NOW, limit: 1 }));
     expect(toStoreUnavailable(stillRefused)?.reason).toBe("maintenance");
@@ -664,7 +664,7 @@ describe("media rebuild: races, bounds and real conversions", () => {
       state.storage.sql.exec("DELETE FROM media_attachments WHERE id = ?", row.id);
     });
     release();
-    const step = (await (await running).json()) as Step;
+    const step = await (await running).json<Step>();
     expect(step.counts).toMatchObject({ built: 0, gone: 1 });
     expect(await files(row)).toEqual([false, false]);
   });
@@ -684,7 +684,7 @@ describe("media rebuild: races, bounds and real conversions", () => {
     const steps: Step[] = [];
     let after: string | null = null;
     for (;;) {
-      const step = (await (await h.post(adminClaims(), "/admin/media/rebuild", { after })).json()) as Step;
+      const step: Step = await (await h.post(adminClaims(), "/admin/media/rebuild", { after })).json();
       steps.push(step);
       if (step.done) {
         break;
@@ -703,7 +703,7 @@ describe("media rebuild: races, bounds and real conversions", () => {
     large.set(bytes(PNG_PLAIN));
     const row = await addRow(h.store, { original: large });
     for (const dryRun of [true, false]) {
-      const step = (await (await h.post(adminClaims(), "/admin/media/rebuild", { dryRun })).json()) as Step;
+      const step = await (await h.post(adminClaims(), "/admin/media/rebuild", { dryRun })).json<Step>();
       expect(step.counts).toMatchObject({ "would-build": 0, built: 0, failed: 1 });
       expect(step.problems).toEqual([{ id: row.id, outcome: "failed", detail: "too_large" }]);
     }
@@ -722,7 +722,7 @@ describe("media rebuild: races, bounds and real conversions", () => {
       await env.MEDIA.put(`originals/${id}`, bytes(base64));
     }
     const h = adminHarness(store, team, {}, undefined, () => new TestCodec());
-    const step = (await (await h.post(adminClaims(), "/admin/media/rebuild")).json()) as Step;
+    const step = await (await h.post(adminClaims(), "/admin/media/rebuild")).json<Step>();
     expect(step).toMatchObject({ done: true, stopped: null, problems: [] });
     expect(step.counts.built).toBe(Object.keys(originals).length);
     const rows = await runInDurableObject(store, (_instance, state) =>
@@ -782,14 +782,14 @@ describe("media rebuild only while nothing deletes media, one call at a time", (
     expect(await h.store.setMaintenance(BUILD, true)).toEqual({ maintenance: true });
     const settling = await h.post(adminClaims(), "/admin/media/rebuild");
     expect(settling.status).toBe(409);
-    const body = (await settling.json()) as { code: string; readyAt: number };
+    const body = await settling.json<{ code: string; readyAt: number }>();
     expect(body.code).toBe("rebuild-settling");
     expect(body.readyAt).toBeGreaterThan(Date.now() + REBUILD_SETTLE_MS - 60_000);
     // Entering maintenance again keeps when it began.
     await h.store.setMaintenance(BUILD, true);
     expect(await (await h.post(adminClaims(), "/admin/media/rebuild")).json()).toMatchObject({ readyAt: body.readyAt });
     await settledMaintenance(h.store);
-    expect(((await (await h.post(adminClaims(), "/admin/media/rebuild")).json()) as Step).counts.built).toBe(1);
+    expect((await (await h.post(adminClaims(), "/admin/media/rebuild")).json<Step>()).counts.built).toBe(1);
     expect(await files(row)).toEqual([true, true]);
   });
 
@@ -841,7 +841,7 @@ describe("media rebuild only while nothing deletes media, one call at a time", (
       holder: "other-call",
       release: true,
     });
-    expect(((await (await h.post(adminClaims(), "/admin/media/rebuild")).json()) as Step).counts.built).toBe(1);
+    expect((await (await h.post(adminClaims(), "/admin/media/rebuild")).json<Step>()).counts.built).toBe(1);
     expect(await leaseRow(h.store)).toEqual([]);
   });
 
@@ -1144,7 +1144,7 @@ describe("media rebuild of custom emoji images", () => {
   }
 
   const rebuild = async (h: Awaited<ReturnType<typeof setup>>, body: unknown = {}) =>
-    (await (await h.post(adminClaims(), "/admin/media/rebuild", body)).json()) as Step;
+    await (await h.post(adminClaims(), "/admin/media/rebuild", body)).json<Step>();
 
   it("builds the files of emoji restored from their originals, as an originals-only restore leaves them", async () => {
     const h = await setup();

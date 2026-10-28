@@ -110,7 +110,7 @@ describe("the measure instance_follows", () => {
         }),
       ),
     );
-    expect(((await answer.json()) as Measure[])[0]!.total).toBe("1");
+    expect((await answer.json<Measure[]>())[0]!.total).toBe("1");
   });
 
   it("give per-day counts by follows.created_at from start_at to end_at, both included, of the domain itself", async () => {

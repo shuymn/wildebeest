@@ -104,7 +104,7 @@ async function api(t: Setup, method: string, path: string, body?: unknown, as: A
   const response = await t.request(path, bearer(t.tokens[as], init));
   return {
     status: response.status,
-    body: (await response.json()) as Record<string, unknown>,
+    body: await response.json<Record<string, unknown>>(),
     link: response.headers.get("link"),
   };
 }
@@ -544,14 +544,18 @@ describe("a withdrawn boost before its job (VIS-1, R2)", () => {
       const home = await api(t, "GET", "/api/v1/timelines/home");
       const profile = await api(t, "GET", `/api/v1/accounts/${ALICE}/statuses`, undefined, "dave");
       const boosters = await api(t, "GET", `/api/v1/statuses/${original.id}/reblogged_by?limit=1`, undefined, "dave");
-      const outbox = (await (await t.request("/ap/users/alice/outbox", AP)).json()) as {
+      const outbox = await (
+        await t.request("/ap/users/alice/outbox", AP)
+      ).json<{
         totalItems: number;
         first: string;
-      };
+      }>();
       const first = new URL(outbox.first);
-      const page = (await (await t.request(`${first.pathname}${first.search}`, AP)).json()) as {
+      const page = await (
+        await t.request(`${first.pathname}${first.search}`, AP)
+      ).json<{
         orderedItems: { type: string }[];
-      };
+      }>();
       const [last] = await sql<{ id: string | null }>(
         t.store,
         "SELECT last_status_id AS id FROM accounts WHERE id = ?",

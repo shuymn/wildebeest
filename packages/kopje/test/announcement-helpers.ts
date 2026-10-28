@@ -68,7 +68,7 @@ export async function send(
   token?: string,
 ): Promise<Sent> {
   const response = await h.request(path, token === undefined ? { method } : bearer(token, { method }));
-  return { status: response.status, body: (await response.json()) as unknown };
+  return { status: response.status, body: await response.json<unknown>() };
 }
 
 // The reaction route of an announcement and a name, the name percent-encoded.

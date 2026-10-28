@@ -59,7 +59,7 @@ const grouped = async (
   token: string,
 ) => {
   const response = await h.request(path, bearer(token));
-  return { status: response.status, link: response.headers.get("link"), body: (await response.json()) as Grouped };
+  return { status: response.status, link: response.headers.get("link"), body: await response.json<Grouped>() };
 };
 
 const keys = (body: Grouped) =>
@@ -335,7 +335,7 @@ describe("grouped notifications (API v2)", () => {
       const response = await h.request(path, bearer(alice.token));
       return {
         link: response.headers.get("link"),
-        ids: ((await response.json()) as { id: string }[]).map((a) => a.id),
+        ids: (await response.json<{ id: string }[]>()).map((a) => a.id),
       };
     };
     expect((await accounts(`/api/v2/notifications/${favourites}/accounts`)).ids).toEqual([dave.id, carol.id, bob.id]);

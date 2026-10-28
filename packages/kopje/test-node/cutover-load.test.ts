@@ -296,7 +296,8 @@ describe("an export whose actors.type was added back by ALTER TABLE ADD COLUMN",
           ? `'${value.replaceAll("'", "''")}'`
           : value instanceof Uint8Array
             ? `X'${Buffer.from(value).toString("hex")}'`
-            : String(value as bigint | number);
+            : // oxlint-disable-next-line typescript/no-unnecessary-type-assertion -- no-base-to-string needs the cast
+              String(value as bigint | number);
     // The actor_activities export with its generated type relaxed, and its rows written without that column: with a
     // column list, or without one (values in the export's column order, generated columns left out).
     const activities = (text: string, form: "listed" | "omitted" | "bare", extra: string[] = []) => {

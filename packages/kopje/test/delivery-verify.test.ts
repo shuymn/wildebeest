@@ -490,7 +490,7 @@ describe("copies as sent on the wire (VIS-2, VIS-7)", () => {
     );
     const sent: { url: string; body: Record<string, unknown> }[] = [];
     const fetch = vi.fn(async (request: Request) => {
-      sent.push({ url: request.url, body: (await request.json()) as Record<string, unknown> });
+      sent.push({ url: request.url, body: await request.json<Record<string, unknown>>() });
       return new Response(null, { status: 202 });
     }) as unknown as typeof globalThis.fetch;
     const deps: DeliveryDeps = {

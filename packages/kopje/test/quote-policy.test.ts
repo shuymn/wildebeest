@@ -149,7 +149,7 @@ describe("scheduled statuses carry the quote policy", () => {
     });
     return {
       status: response.status,
-      body: (await response.json()) as { id: string; params: Record<string, unknown> },
+      body: await response.json<{ id: string; params: Record<string, unknown> }>(),
     };
   }
 

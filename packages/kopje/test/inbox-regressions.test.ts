@@ -1049,7 +1049,7 @@ describe("with outbound delivery", () => {
     expect(await t.deliveries()).toEqual([]);
 
     const list = await t.h.request("/api/v1/follow_requests", bearer(t.alice.token));
-    expect(((await list.json()) as { id: string }[]).map((a) => a.id)).toEqual([bobId]);
+    expect((await list.json<{ id: string }[]>()).map((a) => a.id)).toEqual([bobId]);
     const authorized = await t.h.request(
       `/api/v1/follow_requests/${bobId}/authorize`,
       bearer(t.alice.token, { method: "POST" }),
@@ -1140,7 +1140,7 @@ describe("an actor whose deletion has started (R1)", () => {
     await h.request(`/api/v1/accounts/${bobId}/mute`, bearer(carol.token, json({ notifications: false })));
     const read = async (token: string | null, path: string) => {
       const response = await h.request(path, token === null ? {} : bearer(token));
-      return { status: response.status, body: (await response.json()) as unknown };
+      return { status: response.status, body: await response.json<unknown>() };
     };
     const bobStatuses = async (token: string | null) =>
       ((await read(token, "/api/v1/timelines/public?limit=40")).body as { account: { id: string } }[]).filter(
@@ -1204,7 +1204,7 @@ describe("an actor whose deletion has started (R1)", () => {
     await h.request(`/api/v1/accounts/${carol.id}/follow`, bearer(alice.token, { method: "POST" }));
     // carol mentions alice and bob; alice is notified, and would be pushed.
     const posted = await h.request("/api/v1/statuses", bearer(carol.token, json({ status: "@alice hello" })));
-    const status = ((await posted.json()) as { id: string }).id;
+    const status = (await posted.json<{ id: string }>()).id;
     await sql(h.store, "INSERT INTO status_mentions (status_id, account_id, silent) VALUES (?, ?, 0)", status, bobId);
     await sql(
       h.store,
@@ -1222,10 +1222,14 @@ describe("an actor whose deletion has started (R1)", () => {
       PURGE_BATCH * 2 + 100,
     );
     const shown = async () => {
-      const home = (await (await h.request("/api/v1/timelines/home", bearer(alice.token))).json()) as { id: string }[];
-      const listed = (await (await h.request("/api/v1/notifications?types[]=mention", bearer(alice.token))).json()) as {
-        status?: { id: string };
-      }[];
+      const home = await (await h.request("/api/v1/timelines/home", bearer(alice.token))).json<{ id: string }[]>();
+      const listed = await (
+        await h.request("/api/v1/notifications?types[]=mention", bearer(alice.token))
+      ).json<
+        {
+          status?: { id: string };
+        }[]
+      >();
       await sql(h.store, "DELETE FROM push_deliveries");
       await sql(
         h.store,

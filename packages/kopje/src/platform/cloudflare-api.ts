@@ -157,7 +157,7 @@ export function cloudflareApi(token: string, fetcher: typeof fetch, fence: Dispa
     }
     let envelope: Envelope;
     try {
-      envelope = (await response.json()) as Envelope;
+      envelope = await response.json<Envelope>();
     } catch {
       throw new CloudflareApiError(response.ok ? "malformed" : categoryOf(response.status), step, response.status);
     }
@@ -233,7 +233,7 @@ export async function checkTeam(teamDomain: string, fetcher: typeof fetch): Prom
       await response.body?.cancel();
       return `the team's key set answered HTTP ${response.status}`;
     }
-    const body = (await response.json()) as { keys?: unknown };
+    const body = await response.json<{ keys?: unknown }>();
     return Array.isArray(body.keys) && body.keys.length > 0 ? null : "the team's key set lists no keys";
   } catch {
     return "the team's key set could not be read";

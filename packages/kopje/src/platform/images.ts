@@ -124,7 +124,7 @@ export function imagesCodec(binding: ImagesBinding, { input = "stream" }: { inpu
         const result = await guard(() =>
           transformer.output({ format, anim: format === "image/webp" && still !== true }),
         );
-        return await outputBytes(result.image() as ReadableStream<Uint8Array>, limit, guard);
+        return await outputBytes(result.image(), limit, guard);
       } catch (error) {
         // A guard's give-up and an output check are passed on as they are; the binding's errors carry its code.
         throw error instanceof ImageOutputError || error instanceof DeadlinePassed ? error : codecError(error);

@@ -310,8 +310,8 @@ function check(sql: SqlStorage, c: Case): string[] {
     compare(
       "notifications",
       v,
-      was.flatMap((n) => (n.status === undefined ? [] : [n.status as Status])),
-      nowNotifications.flatMap((n) => (n.status === undefined ? [] : [n.status as Status])),
+      was.flatMap((n) => (n.status === undefined ? [] : [n.status])),
+      nowNotifications.flatMap((n) => (n.status === undefined ? [] : [n.status])),
     );
   }
   return problems;

@@ -1189,9 +1189,12 @@ export function convertLegacy(
       shown,
     );
   };
-  /** @param {string | null} url @param {boolean} local @param {(imageId: string) => string} rowKey */
+  /**
+   * @param {string | null} url @param {boolean} local @param {(imageId: string) => string} rowKey
+   * @returns {MappedImage}
+   */
   const attachmentImage = (url, local, rowKey) =>
-    /** @type {MappedImage} */ (local && imageMap !== null ? imageMap.map(url, false, rowKey) : { kind: "keep", url });
+    local && imageMap !== null ? imageMap.map(url, false, rowKey) : { kind: "keep", url };
   /** @type {Map<string, { row: Json, properties: Json, used: boolean }>} */
   const imagesById = new Map();
   /** @type {Map<string, string>} */

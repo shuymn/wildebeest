@@ -1177,7 +1177,7 @@ describe("learning a remote account’s counts from its collections", () => {
       headers: { authorization: `Bearer ${t.tokens.alice}` },
     });
     expect(boost.status).toBe(200);
-    expect(((await boost.json()) as { reblog: { account: Counts } }).reblog.account).toMatchObject(learned);
+    expect((await boost.json<{ reblog: { account: Counts } }>()).reblog.account).toMatchObject(learned);
     // In a notification, and in an account list.
     const notifications = await t.api<{ type: string; account: Counts }[]>("/api/v1/notifications", "alice");
     expect(notifications.body.find((n) => n.type === "follow")?.account).toMatchObject(learned);

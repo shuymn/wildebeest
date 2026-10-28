@@ -1144,7 +1144,7 @@ describe("an ordinary status keeps its mentions and hashtags (RES-2)", () => {
     const response = await h.request(`/api/v1/statuses/${posted.id}`, {
       headers: { authorization: `Bearer ${h.users.alice.token}` },
     });
-    const shown = (await response.json()) as { mentions: { id: string }[] };
+    const shown = await response.json<{ mentions: { id: string }[] }>();
     // The silent rows sort before the current mention.
     expect(bob > String(100_000_000_000_000_000n + BigInt(MAX_STATUS_MENTION_ROWS + 50))).toBe(true);
     expect(shown.mentions.map((m) => m.id)).toEqual([bob]);
@@ -1173,7 +1173,7 @@ describe("an ordinary status keeps its mentions and hashtags (RES-2)", () => {
       const response = await h.request(`/api/v1/timelines/tag/${long}`, {
         headers: { authorization: `Bearer ${h.users.alice.token}` },
       });
-      return ((await response.json()) as { id: string }[]).map((status) => status.id);
+      return (await response.json<{ id: string }[]>()).map((status) => status.id);
     };
     expect(await timeline()).toEqual([posted.id]);
     const edited = await h.request(`/api/v1/statuses/${posted.id}`, {

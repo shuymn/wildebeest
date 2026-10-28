@@ -99,7 +99,7 @@ async function stamp(t: Setup, uri: string) {
   return {
     status: response.status,
     cache: response.headers.get("cache-control"),
-    body: response.status === 200 ? ((await response.json()) as Record<string, unknown>) : null,
+    body: response.status === 200 ? await response.json<Record<string, unknown>>() : null,
   };
 }
 
@@ -108,7 +108,7 @@ async function revoke(t: Setup, quotedId: string, quotingId: string, as: "alice"
     method: "POST",
     headers: { authorization: `Bearer ${t.tokens[as]}` },
   });
-  return { status: response.status, body: (await response.json()) as Record<string, unknown> };
+  return { status: response.status, body: await response.json<Record<string, unknown>>() };
 }
 
 async function statusId(t: Setup, uri: string): Promise<string> {
@@ -337,7 +337,7 @@ describe("QuoteRequest for a local status (QuoteRequest#perform)", () => {
         method: "POST",
         headers: { authorization: `Bearer ${t.tokens.dave}` },
       })
-    ).json() as Promise<{ uri: string }>;
+    ).json<{ uri: string }>();
     const unanswered = [secret.uri, (await boost).uri, `${LOCAL}/ap/o/nothing`, `${MASTODON}/users/bob/statuses/1`];
     for (const object of unanswered) {
       expect(await t.post(bob, quoteRequest(bob, object, note.id))).toBe(202);
@@ -1368,7 +1368,7 @@ describe("local Notes", () => {
     const note = async (id: string, uri: string) => {
       const response = await t.request(new URL(uri).pathname, { headers: { accept: "application/activity+json" } });
       expect(id).toBeDefined();
-      return (await response.json()) as Record<string, unknown>;
+      return await response.json<Record<string, unknown>>();
     };
     const pub = await localStatus(t, { status: "public", visibility: "public" });
     expect((await note(pub.id, pub.uri)).interactionPolicy).toEqual({

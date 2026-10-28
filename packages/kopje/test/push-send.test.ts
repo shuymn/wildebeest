@@ -129,9 +129,13 @@ describe("sending a push", () => {
     const { h, client } = await pushing();
     const { alice, bob } = h.users;
     await post(h, bob, { status: "@alice hello <b>there</b>" });
-    const [notification] = (await (await h.request("/api/v1/notifications", bearer(alice.token))).json()) as {
-      id: string;
-    }[];
+    const [notification] = await (
+      await h.request("/api/v1/notifications", bearer(alice.token))
+    ).json<
+      {
+        id: string;
+      }[]
+    >();
     const { fetch, sent } = recordingFetch();
     expect(await round(h, fetch)).toMatchObject({ claimed: 1, settled: ["delivered"] });
 
@@ -504,9 +508,13 @@ describe("PUSH-3: a push reveals no more than the notification", () => {
     const news = await post(h, bob, { status: "news" });
     const listed = async () =>
       (
-        (await (await h.request("/api/v1/notifications?types[]=status", bearer(alice.token))).json()) as {
-          status: { id: string };
-        }[]
+        await (
+          await h.request("/api/v1/notifications?types[]=status", bearer(alice.token))
+        ).json<
+          {
+            status: { id: string };
+          }[]
+        >()
       ).map((n) => n.status.id);
     expect(await listed()).toEqual([news.id]);
     expect(await rows(h.store)).toHaveLength(1);
