@@ -7,11 +7,11 @@ import { type UserContext, userReadOperation } from "./auth";
 import { statusQueryTerms } from "./search-text";
 import { tagNameSql } from "./status-bounds";
 import { presentation, presentStatusesWithin, type Status } from "./status-presenter";
-import { statusCursor } from "./statuses";
 import { searchedTagKey } from "./tag-bounds";
 import { normalizeTag } from "./tag-name";
 import { LISTED_HISTORY_ROWS, presentTags, type Tag } from "./tags";
 import { tagReviewedSql } from "./trends";
+import { statusCursor } from "./windows";
 
 // GET /api/v2/search: local data only, matched with instr on search_text (NFKC); no virtual
 // table. Accounts: domain/accounts.ts. Statuses: the viewer's library (own statuses, boosted originals, favourites,

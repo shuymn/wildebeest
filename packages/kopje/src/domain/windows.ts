@@ -106,3 +106,24 @@ function int(n: number): number {
 export function edgeRangeSql(column: string, max: string, min: string): string {
   return `${column} < coalesce(CAST(${max} AS INTEGER), 1e19) AND ${column} > coalesce(CAST(${min} AS INTEGER), -1e19)`;
 }
+
+const STATUS_ID_LENGTH = 18;
+
+// Status ids are 18-digit TEXT compared as TEXT (the indexes are on the TEXT column). A shorter cursor is padded so
+// it compares as the number it is; a longer one is beyond every id, ABOVE_EVERY_ID, never the largest id itself (a
+// range below it then keeps that id, and one above it holds nothing).
+export function statusCursor(cursor: string | undefined): string | null {
+  if (cursor === undefined) {
+    return null;
+  }
+  cursor = cursor.replace(/^0+(?=\d)/, "");
+  if (cursor.length > STATUS_ID_LENGTH) {
+    return ABOVE_EVERY_ID;
+  }
+  return cursor.padStart(STATUS_ID_LENGTH, "0");
+}
+
+// Bounds beyond every 18-digit id, for a cursor that is absent: with them a range is always a plain one, read through
+// the index from the cursor rather than filtered from the newest.
+export const ABOVE_EVERY_ID = ":";
+export const BELOW_EVERY_ID = "";

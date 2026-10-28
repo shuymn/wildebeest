@@ -1506,7 +1506,7 @@ export function fieldLinkChecksMigrationSql(): string {
 // the card's fields (Mastodon's PreviewCard and PreviewCardsStatus, as one copy per status). Bounds, each in its unit:
 // url, author_url and provider_url in UTF-8 bytes (a serialized URL is ASCII; url is web-page.ts WEB_PAGE_URL_LIMIT,
 // test/link-cards.test.ts pins them equal); the texts as JSON-escaped UTF-8 bytes with their quotes, so a stored text
-// is at most two fewer raw bytes; language in UTF-8 bytes (mn-Mong, the longest of trends.ts TREND_LANGUAGES).
+// is at most two fewer raw bytes; language in UTF-8 bytes (mn-Mong, the longest of trend-languages.ts TREND_LANGUAGES).
 // Mastodon bounds only the url (PreviewCard validates no text); the others are Kopje's, set so a status with its cards
 // stays within RES-3's budgets (test/status-bounds.test.ts, the table of maxima).
 export const CARD_URL_LIMIT = 2048;

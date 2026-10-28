@@ -3,12 +3,11 @@ import { beforeEach, describe, expect, it } from "vitest";
 
 import { Db } from "../src/db/sql";
 import { TARGET_CHUNK_SIZE } from "../src/domain/deliveries";
+import { MODERATION_ROUND_ROWS, REPORT_ROUND } from "../src/domain/moderation-bounds";
 import {
-  MODERATION_ROUND_ROWS,
   moderationRound,
   REACH_ROUND,
   RECENT_MS,
-  REPORT_ROUND,
   REPORTER_ROUND,
   suspendLocal,
   TOKEN_ROUND_ROWS,

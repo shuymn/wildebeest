@@ -2,11 +2,12 @@ import { runInDurableObject } from "cloudflare:test";
 import { describe, expect, it } from "vitest";
 
 import { Db } from "../src/db/sql";
+import { REPORT_ROUND } from "../src/domain/moderation-bounds";
 import { writeOperation } from "../src/domain/operation";
 import { sweepStaleVotes } from "../src/domain/polls";
 import { remoteModerationRound } from "../src/domain/remote-suspension";
 import { resolveSuspensionReports } from "../src/domain/reports";
-import { moderationRound, REPORT_ROUND } from "../src/domain/suspension";
+import { moderationRound } from "../src/domain/suspension";
 import { sql } from "./api-helpers";
 import { NOW } from "./app-helpers";
 import { observedSql, plannedRun, scansOf, staleStatistics } from "./read-helpers";

@@ -2,9 +2,9 @@ import { runInDurableObject } from "cloudflare:test";
 import { describe, expect, it, vi } from "vitest";
 
 import { EXPANSION_STEP, supersedeEarlier } from "../src/domain/deliveries";
+import { MODERATION_ROUND_ROWS } from "../src/domain/moderation-bounds";
 import { writeOperation } from "../src/domain/operation";
 import { SEVER_ROUND, SEVER_ROWS } from "../src/domain/remote-suspension";
-import { MODERATION_ROUND_ROWS } from "../src/domain/suspension";
 import type { StoreStub } from "../src/platform/store-client";
 import { bearer, json, settle, sql, userToken } from "./api-helpers";
 import { NOW } from "./app-helpers";

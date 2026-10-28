@@ -2,6 +2,7 @@ import { selectSql } from "../db/columns";
 import { ACCOUNTS_ID_INDEX, MEDIA_ID_INDEX, STATUSES_ID_INDEX } from "../db/indexes";
 import type { Db } from "../db/sql";
 import { ACTOR_URI_LIMIT, STATUS_URI_LIMIT, withinIdentityBound } from "../platform/identity-bounds";
+import { iso } from "../platform/iso-time";
 import {
   isoTimeSql,
   STATUS_EMOJIS_BYTES,
@@ -128,7 +129,7 @@ import {
 } from "./status-text";
 import { streamDelete } from "./streaming";
 import { forgetStatusTrend } from "./trends";
-import { edgeRangeSql, readWindow, singleWindow, windowJson, windowPage } from "./windows";
+import { edgeRangeSql, readWindow, singleWindow, statusCursor, windowJson, windowPage } from "./windows";
 
 // Statuses: posting, editing and deleting local statuses, the per-status reads, and favourite, reblog and
 // bookmark. Every read goes through the audience rule (audience.ts); every write recomputes the counters it changes
@@ -364,10 +365,6 @@ export function recountStatus(db: Db, statusId: string | null): void {
 		WHERE id = ?1`,
     statusId,
   );
-}
-
-export function iso(now: number): string {
-  return new Date(now).toISOString();
 }
 
 function searchText(text: string, spoilerText: string): string {
@@ -2377,24 +2374,3 @@ export const revokeQuote = userWriteOperation<RevokeInput, RevokeResult>((db, in
       : presentStatus(db, visible, { ...input.present, viewer });
   return viewed<Status | RedactedStatus>(value);
 });
-
-const STATUS_ID_LENGTH = 18;
-
-// Status ids are 18-digit TEXT compared as TEXT (the indexes are on the TEXT column). A shorter cursor is padded so
-// it compares as the number it is; a longer one is beyond every id, ABOVE_EVERY_ID, never the largest id itself (a
-// range below it then keeps that id, and one above it holds nothing).
-export function statusCursor(cursor: string | undefined): string | null {
-  if (cursor === undefined) {
-    return null;
-  }
-  cursor = cursor.replace(/^0+(?=\d)/, "");
-  if (cursor.length > STATUS_ID_LENGTH) {
-    return ABOVE_EVERY_ID;
-  }
-  return cursor.padStart(STATUS_ID_LENGTH, "0");
-}
-
-// Bounds beyond every 18-digit id, for a cursor that is absent: with them a range is always a plain one, read through
-// the index from the cursor rather than filtered from the newest.
-export const ABOVE_EVERY_ID = ":";
-export const BELOW_EVERY_ID = "";

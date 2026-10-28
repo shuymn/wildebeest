@@ -1,5 +1,6 @@
 import { ACCOUNTS_ID_INDEX, QUOTES_STATUS_INDEX, STATUSES_ID_INDEX, STATUSES_URI_INDEX } from "../db/indexes";
 import type { Db } from "../db/sql";
+import { iso } from "../platform/iso-time";
 import {
   type QuoteRequestRef,
   quoteAnswerActivity,
@@ -20,6 +21,7 @@ import {
   mentionStatusSql,
   type Visibility,
 } from "./audience";
+import { localFollower } from "./follower-signer";
 import { NEW_GENERATION } from "./ids";
 import {
   actorRevision,
@@ -39,7 +41,6 @@ import {
 import { JOB_BOOKKEEPING_ROWS, nextJob, QUOTE_REVOCATIONS, runJobItem } from "./job-attempts";
 import { notify } from "./notifications";
 import { readOperation, writeOperation } from "./operation";
-import { localFollower } from "./remote-collections";
 import {
   followersUri,
   type RemoteQuoteInput,
@@ -49,7 +50,6 @@ import {
   visibilityOf,
 } from "./remote-statuses";
 import { RowBudget } from "./row-budget";
-import { iso } from "./statuses";
 
 // Quote posts received from remote servers (Mastodon 4.5's Quote, ActivityPub::Parser::StatusParser's quote
 // properties, ActivityPub::VerifyQuoteService and the Delete of a QuoteAuthorization), stored and verified in the rows

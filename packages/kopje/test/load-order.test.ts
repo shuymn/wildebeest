@@ -22,8 +22,8 @@ it("loads the status presenter and trends when status-rows.ts is loaded first", 
   vi.resetModules();
   const { STATUS_COLUMN_MAP } = await import("../src/domain/status-rows");
   const { presentation } = await import("../src/domain/status-presenter");
-  const { TREND_LANGUAGES } = await import("../src/domain/trends");
+  const { TREND_TAGS_LIMIT } = await import("../src/domain/trends");
   expect(STATUS_COLUMN_MAP.id).toBe("s.id");
   expect(typeof presentation).toBe("function");
-  expect(TREND_LANGUAGES.size).toBeGreaterThan(0);
+  expect(TREND_TAGS_LIMIT).toBe(10);
 });

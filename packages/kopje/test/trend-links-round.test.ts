@@ -5,17 +5,16 @@ import { Db } from "../src/db/sql";
 import { deleteStatusBatch, PURGE_BATCH } from "../src/domain/inbox";
 import { recordCard } from "../src/domain/link-cards";
 import { readOperation } from "../src/domain/operation";
+import { TREND_LANGUAGES, TREND_LANGUAGES_JSON } from "../src/domain/trend-languages";
 import {
   LINK_HISTORY_BOOSTS,
   LINK_HISTORY_BOOSTS_PER_STATUS,
   LINK_HISTORY_ORIGINALS,
   linkCandidates,
   linkHistory,
-  TREND_LANGUAGES_JSON,
   TREND_LINK_BOOSTS,
   TREND_LINK_BOOSTS_PER_STATUS,
   TREND_LINK_CANDIDATES,
-  TREND_LANGUAGES,
   TREND_LINK_COPIES,
   TREND_LINK_GROUPS,
   TREND_ROW_CAPS,

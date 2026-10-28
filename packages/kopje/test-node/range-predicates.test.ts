@@ -5,7 +5,7 @@ import { parse, sources, type Source } from "./source-scan.js";
 // Cursor ranges are direct ranges (docs/visibility.md "Read bounds"). A range on a nullable parameter written as
 // `(?2 IS NULL OR s.id < ?2)` is an OR, and SQLite does not seek a range through an index for an OR term: a page below
 // a cursor then walks every row newer than the cursor. The direct form puts the absent cursor's bound in the value:
-// `s.id < coalesce(?2, ':')` for TEXT ids (ABOVE_EVERY_ID and BELOW_EVERY_ID in src/domain/statuses.ts), and
+// `s.id < coalesce(?2, ':')` for TEXT ids (ABOVE_EVERY_ID and BELOW_EVERY_ID in src/domain/windows.ts), and
 // edgeRangeSql (src/domain/windows.ts) for INTEGER ids.
 //
 // The rule: inside one pair of parentheses, a parameter tested for NULL, OR, then a comparison (<, >, <=, >=) between

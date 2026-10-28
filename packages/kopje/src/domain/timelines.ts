@@ -20,7 +20,6 @@ import {
 import { optionalUserReadOperation, type UserContext, userReadOperation } from "./auth";
 import { holdingSql, ownList, type RepliesPolicy } from "./lists";
 import { presentation, type Status, statusStream } from "./status-presenter";
-import { statusCursor } from "./statuses";
 import { normalizeTag } from "./tag-name";
 import { listedTrendLinkSql, publicCopiesSql, trendSettings } from "./trends";
 import {
@@ -28,6 +27,7 @@ import {
   mergedWindow,
   readWindow,
   singleWindow,
+  statusCursor,
   streamWindow,
   type Window,
   windowJson,

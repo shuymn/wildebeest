@@ -71,7 +71,7 @@ import {
   TAG_COLUMN_MAP,
   VIEWER_FLAG_COLUMNS,
 } from "./status-rows";
-import { TREND_LANGUAGES } from "./trends";
+import { TREND_LANGUAGES } from "./trend-languages";
 
 // The Status entity as Mastodon 4.0.2's REST::StatusSerializer shows it. One presenter for every read path: it takes
 // a list of ids and the viewer and reads the related rows kind by kind (statuses and reblogged originals, accounts,

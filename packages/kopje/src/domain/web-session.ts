@@ -14,6 +14,7 @@ import {
 } from "./auth";
 import { consumeCode, insertAccessToken, webClientId, WEB_CLIENT_SETTING } from "./oauth";
 import { readOperation, sessionOperation } from "./operation";
+import { FAMILY, LOGIN, MEMBER, sweepPrefix } from "./web-state";
 
 // Web sessions (AUTH, WEB-4). The web UI is an ordinary OAuth client of the instance: Access verifies the person at
 // /oauth/authorize, the consent page issues a PKCE-bound code to the web client's callback, and the callback exchanges
@@ -56,30 +57,6 @@ export function interactionTarget(value: string | null | undefined): string | nu
   }
   return (/^https?:\/\//i.test(value) && httpUrl(value) !== null) || parseAddress(value) !== null ? value : null;
 }
-
-// Sign-in attempts and browser families, in kopje_state (outside the dumped tables: they are short-lived). Values are
-// JSON with an `expiresAt`; expired entries are pruned as attempts are added and by the cron (sweepWebState).
-//
-//   web_login:<sha256(attempt id)>  one sign-in attempt: the OAuth state, the PKCE challenge, the local path to
-//                                   return to, /authorize_interaction's target (interactionTarget), the digest of
-//                                   the session the browser held when it started (taken from its session cookie, so
-//                                   only a session it holds), and the expiry. The
-//                                   browser's login cookie holds only the opaque attempt id the Worker minted; the
-//                                   callback takes everything else from this row, and consumes it atomically, so a
-//                                   second callback of the same attempt starts nothing. Attempts are keyed by the
-//                                   browser's own id and expire after LOGIN_ATTEMPT_MS: there is no shared slot or
-//                                   counter an anonymous party could fill (/login is rate limited per client IP).
-//   web_family:<family>             one browser's sessions of one account: the live one (`current`), its account
-//                                   (`accountId`) and whether the browser signed out (`ended`). A new session of the
-//                                   same account replaces `current`; one of another account ends the family and
-//                                   starts its own, so a retired session of the first account can never sign the
-//                                   second out. Sign-out ends the family, so a callback of a sign-in the browser
-//                                   started before signing out installs nothing.
-//   web_session:<token hash>        the family a session belongs to, kept for its lifetime even after it is replaced,
-//                                   so signing out with a replaced session still ends the family's newer one.
-const LOGIN = "web_login:";
-const FAMILY = "web_family:";
-const MEMBER = "web_session:";
 
 // How long a sign-in may take (the login cookie's and the code's lifetime).
 export const LOGIN_ATTEMPT_MS = 10 * 60 * 1000;
@@ -300,23 +277,6 @@ function endFamily(db: Db, clientId: string, familyId: string, now: number): voi
     endSession(db, clientId, current);
   }
   writeState(db, familyName, { current: null, ended: true, expiresAt: now + LOGIN_ATTEMPT_MS } satisfies Family);
-}
-
-// Removes expired entries of one kind, at most `limit`.
-function sweepPrefix(db: Db, prefix: string, now: number, limit: number): number {
-  return db.all(
-    `DELETE FROM kopje_state WHERE name IN (SELECT name FROM kopje_state
-			WHERE substr(name, 1, ?1) = ?2 AND json_extract(value, '$.expiresAt') <= ?3 LIMIT ?4) RETURNING name`,
-    prefix.length,
-    prefix,
-    now,
-    limit,
-  ).length;
-}
-
-// The cron: expired attempts, families and session memberships.
-export function sweepWebState(db: Db, now: number, limit: number): number {
-  return [LOGIN, FAMILY, MEMBER].reduce((total, prefix) => total + sweepPrefix(db, prefix, now, limit), 0);
 }
 
 // Operations of the web UI only: the credential must be a live session of the web client, so an API token (even one

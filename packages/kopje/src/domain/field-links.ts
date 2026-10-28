@@ -1,4 +1,5 @@
 import type { Db } from "../db/sql";
+import { iso } from "../platform/iso-time";
 import {
   boundedLocalFieldsSql,
   FIELD_LINK_MAX_ATTEMPTS,
@@ -19,7 +20,6 @@ import {
   recordRemoteFieldLink,
   remoteLinksHeld,
 } from "./remote-field-links";
-import { iso } from "./statuses";
 
 // Account fields[].verified_at of local accounts (Mastodon's VerifyAccountLinksWorker and VerifyLinkService,
 // app/workers/verify_account_links_worker.rb, app/services/verify_link_service.rb, v4.5.11): the Store's part. The
