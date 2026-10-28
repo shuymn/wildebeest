@@ -97,7 +97,7 @@
     "eslint/no-underscore-dangle": "off",
     // `[...text]` counts code points, as Mastodon does.
     "typescript/no-misused-spread": "off",
-    // Exhaustive `switch`es end without a return; tsc reports a missing one.
+    // tsc's `noImplicitReturns` covers it, and accepts exhaustive `switch`es that end without a return.
     "typescript/consistent-return": "off",
     // `db.first<T>()` and its kin let the caller name the row type.
     "typescript/no-unnecessary-type-parameters": "off",
