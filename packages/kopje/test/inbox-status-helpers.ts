@@ -109,7 +109,7 @@ export function mastodonNote(actor: TestActor, extra: Record<string, unknown> = 
     likes: { id: `${id}/likes`, type: "Collection", totalItems: 0 },
     shares: { id: `${id}/shares`, type: "Collection", totalItems: 0 },
     ...extra,
-  } as Note;
+  };
 }
 
 // A Note as Misskey's ApRendererService#renderNote renders it: MFM source in _misskey_content and source, quotes in
@@ -135,7 +135,7 @@ export function misskeyNote(actor: TestActor, extra: Record<string, unknown> = {
     sensitive: false,
     tag: [],
     ...extra,
-  } as Note;
+  };
 }
 
 export function create(actor: TestActor, object: Note, context: unknown = AS) {

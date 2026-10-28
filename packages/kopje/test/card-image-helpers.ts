@@ -86,10 +86,10 @@ export async function cardWorld(overrides: Record<string, unknown> = {}) {
     addRoutes: (more: Record<string, Route>) => {
       routes = { ...routes, ...more };
     },
-    cardRound: () => linkCardsRound(h.env as unknown as Env, deps()),
+    cardRound: () => linkCardsRound(h.env, deps()),
     imageDeps,
     imageRound: (extra: Partial<CardImagesDeps> = {}, env: Record<string, unknown> = {}) =>
-      cardImagesRound({ ...h.env, ...env } as unknown as Env, imageDeps(extra)),
+      cardImagesRound({ ...h.env, ...env }, imageDeps(extra)),
     postLink: async (url: string) => (await post(h, alice, { status: `see ${url}` })).id,
     card: async (id: string) =>
       (

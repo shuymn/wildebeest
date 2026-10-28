@@ -292,7 +292,7 @@ describe("announcement events at their bounds (RES-3)", () => {
     const sent = events(inbox).map((m) => ({
       event: m.event,
       id: (JSON.parse(m.payload!) as { id: string }).id,
-      bytes: new TextEncoder().encode(m.payload!).length,
+      bytes: new TextEncoder().encode(m.payload).length,
     }));
     console.log(JSON.stringify({ event: "announcement-stream-payloads", sent }));
     expect(sent.map((m) => [m.event, m.id])).toEqual([

@@ -74,7 +74,7 @@ export async function readBodyPrefix(
           // Only a stream cancelled elsewhere ends without the view; its bytes went with the buffer.
           throw new TypeError("Body stream was cancelled");
         }
-        buffer = value.buffer as ArrayBuffer;
+        buffer = value.buffer;
         if (done) {
           break;
         }

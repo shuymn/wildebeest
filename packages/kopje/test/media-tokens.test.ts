@@ -71,7 +71,7 @@ function seeding(store: StoreStub, method: string, owner: Owner, accountId: () =
         return stub[method]!(build, input);
       };
     },
-  }) as StoreStub;
+  });
 }
 
 describe("the uniqueness of file tokens across their owners", () => {

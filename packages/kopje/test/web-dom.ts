@@ -7,7 +7,6 @@ import { type DefaultTreeAdapterMap, parse } from "parse5";
 export type Document = DefaultTreeAdapterMap["document"];
 export type Element = DefaultTreeAdapterMap["element"];
 type Node = DefaultTreeAdapterMap["node"];
-type Parent = DefaultTreeAdapterMap["parentNode"];
 
 export function parseHtml(html: string): Document {
   return parse(html);
@@ -19,7 +18,7 @@ function childrenOf(node: Node): Node[] {
   if (isElement(node) && node.tagName === "template") {
     return (node as DefaultTreeAdapterMap["template"]).content.childNodes;
   }
-  return "childNodes" in node ? (node as Parent).childNodes : [];
+  return "childNodes" in node ? node.childNodes : [];
 }
 
 // Every element under `root`, in document order.

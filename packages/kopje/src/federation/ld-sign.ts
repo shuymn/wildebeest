@@ -9,7 +9,7 @@ import { createKeyring } from "../security/keyring";
 // fetches. The signed body is recorded once and delivered unedited to every destination (an immutable envelope).
 
 const preloaded: DocumentLoader = (url) => {
-  const document = (preloadedContexts as Record<string, unknown>)[url];
+  const document = preloadedContexts[url];
   return document === undefined
     ? Promise.reject(new Error(`Not a preloaded JSON-LD context: ${url}`))
     : Promise.resolve({ document, documentUrl: url, contextUrl: null });
@@ -25,7 +25,7 @@ export async function signAsAuthor(
     salt: sign.key.salt,
     pubkey: sign.key.pubkey,
   });
-  return (await signJsonLd(sign.activity, signer.keyPair.privateKey, signer.keyId, {
+  return await signJsonLd(sign.activity, signer.keyPair.privateKey, signer.keyId, {
     contextLoader: preloaded,
-  })) as Record<string, unknown>;
+  });
 }

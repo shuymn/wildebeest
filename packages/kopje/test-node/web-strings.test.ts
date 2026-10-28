@@ -45,14 +45,14 @@ function uncatalogued(files: readonly Source[]): string[] {
       } else if (node.type === "JSXAttribute" && node.name.type === "JSXIdentifier") {
         const name = node.name.name;
         const value = node.value?.type === "JSXExpressionContainer" ? node.value.expression : node.value;
-        for (const text of NAMED_ATTRIBUTES.has(name) ? words(value as Node | null) : []) {
+        for (const text of NAMED_ATTRIBUTES.has(name) ? words(value) : []) {
           at(node, `${name} ${JSON.stringify(text)}`);
         }
       } else if (
         node.type === "JSXExpressionContainer" &&
         (parents[0]?.type === "JSXElement" || parents[0]?.type === "JSXFragment")
       ) {
-        for (const text of words(node.expression as Node)) {
+        for (const text of words(node.expression)) {
           at(node, `child ${JSON.stringify(text)}`);
         }
       }

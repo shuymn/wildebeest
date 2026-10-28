@@ -123,10 +123,10 @@ export function parse(source: Source): Parsed {
 export function keyOf(node: Node): string {
   const n = node as Node & Record<string, unknown>;
   if (n.type === "ParenthesizedExpression") {
-    return keyOf(n.expression as Node);
+    return keyOf(n.expression);
   }
   if (n.type === "TSParenthesizedType") {
-    return keyOf(n.typeAnnotation as Node);
+    return keyOf(n.typeAnnotation);
   }
   if (n.type === "Literal") {
     if (typeof n.value === "string") {
