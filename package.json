@@ -2,7 +2,6 @@
 	"name": "kopje-workspace",
 	"version": "0.1.0",
 	"type": "module",
-	"author": "Sven Sauleau <sven@cloudflare.com>",
 	"devDependencies": {
 		"@eslint/eslintrc": "3.3.7",
 		"@eslint/js": "9.39.5",
