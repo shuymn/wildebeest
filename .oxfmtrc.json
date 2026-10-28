@@ -1,0 +1,6 @@
+{
+  "$schema": "./node_modules/oxfmt/configuration_schema.json",
+  "printWidth": 120,
+  "sortImports": true,
+  "ignorePatterns": ["packages/kopje/docs/mastodon-api-spec/**", "packages/kopje/public/assets/kopje.*"]
+}
