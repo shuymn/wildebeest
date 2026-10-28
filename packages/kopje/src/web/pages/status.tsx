@@ -31,7 +31,7 @@ export type StatusView = {
   parent: ParentLink | null;
   history: PageHistory | null;
   site: Site;
-  thread?: Thread & { cursor: PageCursor };
+  thread?: (Thread & { cursor: PageCursor }) | undefined;
   embed: string;
 };
 

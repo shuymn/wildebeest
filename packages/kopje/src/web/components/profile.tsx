@@ -32,7 +32,7 @@ export const Fields: FC<{ fields: FieldView[] }> = ({ fields }) =>
 type FollowLinks = Record<"following" | "followers", string>;
 
 // The counts; a local account's following and followers link to its follow lists (`follows`), another server's do not.
-export const Stats: FC<{ stats: AccountView["stats"]; follows?: FollowLinks }> = ({ stats, follows }) => {
+export const Stats: FC<{ stats: AccountView["stats"]; follows?: FollowLinks | undefined }> = ({ stats, follows }) => {
   const { m, f } = useUi();
   return (
     <ul class="stats" role="list">
