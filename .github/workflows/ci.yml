@@ -11,6 +11,9 @@ concurrency:
   group: "${{ github.workflow }} @ ${{ github.event.pull_request.head.label || github.head_ref || github.ref }}"
   cancel-in-progress: true
 
+env:
+  OCTOCOV_VERSION: v0.83.3
+
 jobs:
   # Decides which suites a change can affect, so a change that is all Kopje Markdown runs only the Node suite. A
   # pull request is compared with its base. A push to main is compared with the commit of the last main run that
@@ -79,7 +82,47 @@ jobs:
           KOPJE: ${{ needs.changes.outputs.kopje }}
           KOPJE_CODE: ${{ needs.changes.outputs.kopje_code }}
           SHARD: ${{ matrix.shard }}/${{ strategy.job-total }}
-        run: bash scripts/test-affected.sh --shard "$SHARD"
+        # The code suites collect V8 coverage of Kopje's src/ and cli/ (vitest.config.ts) for the coverage job; it adds
+        # a few percent to a shard. A run of only the Node suite collects none.
+        run: |
+          args=(--shard "$SHARD")
+          if [ "$KOPJE_CODE" = true ]; then
+            args+=(--coverage)
+          fi
+          bash scripts/test-affected.sh "${args[@]}"
+
+      - name: Upload coverage
+        if: needs.changes.outputs.kopje_code == 'true'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: coverage-${{ matrix.shard }}
+          path: coverage/lcov.info
+          if-no-files-found: error
+          retention-days: 7
+
+  # Merges the shards' coverage and reports it with octocov (.octocov.yml): a comment on a pull request from this
+  # repository, the job summary, and on main the report a pull request is compared with. Not a required check.
+  coverage:
+    timeout-minutes: 10
+    runs-on: ubuntu-latest
+    needs: [changes, test]
+    if: needs.changes.outputs.kopje_code == 'true'
+    permissions:
+      contents: read
+      pull-requests: write # for octocov to update its pull request comment
+      actions: write # for octocov to read and replace the artifact that keeps main's report
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: coverage-*
+
+      - uses: k1LoW/octocov-action@a167dc0dee441b7ffc45e1b862ab55ec0d87f278 # v1.5.2
+        with:
+          version: ${{ env.OCTOCOV_VERSION }}
 
   # Formatting and lint are checked for every change; Kopje's types and checks only when its suites are affected.
   check:

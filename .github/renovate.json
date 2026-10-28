@@ -11,6 +11,16 @@
   "github-actions": {
     "managerFilePatterns": ["/^deploy/ci/[^/]+\\.ya?ml$/"]
   },
+  "customManagers": [
+    {
+      "customType": "regex",
+      "description": "Update OCTOCOV_VERSION in the CI workflow",
+      "managerFilePatterns": ["/^\\.github/workflows/ci\\.yml$/"],
+      "matchStrings": ["OCTOCOV_VERSION: (?<currentValue>v?\\d+\\.\\d+\\.\\d+)"],
+      "datasourceTemplate": "github-releases",
+      "depNameTemplate": "k1LoW/octocov"
+    }
+  ],
   "packageRules": [
     {
       "description": "Group stable npm and GitHub Actions minor/patch updates by manager",
@@ -26,14 +36,14 @@
       "groupName": "{{manager}} pre-1.0 dependencies"
     },
     {
-      "description": "Group Vitest packages together",
+      "description": "Group Vitest and its coverage provider, which must match its version exactly",
       "groupName": "vitest",
-      "matchPackageNames": ["vitest"]
+      "matchPackageNames": ["vitest", "@vitest/**"]
     },
     {
       "description": "Create Vitest major update PRs only after status checks pass",
       "matchManagers": ["npm"],
-      "matchPackageNames": ["vitest"],
+      "matchPackageNames": ["vitest", "@vitest/**"],
       "matchUpdateTypes": ["major"],
       "prCreation": "status-success"
     },

@@ -1,0 +1,21 @@
+# Kopje's test coverage, merged from the four test shards (the coverage job in .github/workflows/ci.yml). The report
+# kept from main is what a pull request's comment compares with.
+coverage:
+  if: true
+  paths:
+    - coverage-1/lcov.info
+    - coverage-2/lcov.info
+    - coverage-3/lcov.info
+    - coverage-4/lcov.info
+diff:
+  datastores:
+    - artifact://${GITHUB_REPOSITORY}
+comment:
+  if: is_pull_request && github.event.pull_request.head.repo.full_name == env.GITHUB_REPOSITORY
+  updatePrevious: true
+summary:
+  if: true
+report:
+  if: is_default_branch
+  datastores:
+    - artifact://${GITHUB_REPOSITORY}
