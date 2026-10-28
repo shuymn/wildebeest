@@ -1,0 +1,43 @@
+{
+	"$schema": "https://docs.renovatebot.com/renovate-schema.json",
+	"extends": ["github>shuymn/github-actions#main"],
+	"mise": {
+		"enabled": false
+	},
+	"github-actions": {
+		"managerFilePatterns": ["/^deploy/ci/[^/]+\\.ya?ml$/"]
+	},
+	"packageRules": [
+		{
+			"description": "Group Vitest packages together",
+			"groupName": "vitest",
+			"matchPackageNames": ["vitest"]
+		},
+		{
+			"description": "Create Vitest major update PRs only after status checks pass",
+			"matchManagers": ["npm"],
+			"matchPackageNames": ["vitest"],
+			"matchUpdateTypes": ["major"],
+			"prCreation": "status-success"
+		},
+		{
+			"description": "Group the oxc tools, which change what lint and format report: reviewed, never merged automatically",
+			"groupName": "oxc",
+			"matchPackageNames": ["oxlint", "oxlint-tsgolint", "oxfmt", "@oxlint/**"],
+			"automerge": false
+		},
+		{
+			"description": "kopje is this repository's own package: bump the deploy/ template as soon as a version is on npm, release candidates included",
+			"matchPackageNames": ["kopje"],
+			"matchFileNames": ["deploy/package.json"],
+			"minimumReleaseAge": null,
+			"ignoreUnstable": false
+		},
+		{
+			"description": "Update Kopje (packages/kopje and the deploy/ template) in pull requests of its own",
+			"matchFileNames": ["packages/kopje/**", "deploy/**"],
+			"additionalBranchPrefix": "kopje-",
+			"commitMessageSuffix": "(kopje)"
+		}
+	]
+}
