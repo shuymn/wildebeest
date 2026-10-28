@@ -110,7 +110,7 @@ describe("module layering", () => {
         { path: "src/stray/d.ts", text: "" },
         {
           path: "src/client/f.ts",
-          text: "import { g } from './g'\nimport { h } from '../web/format'\nimport 'zod'\nimport '../../scripts/x'",
+          text: "import { g } from './g'\nimport { h } from '../web/format'\nimport 'valibot'\nimport '../../scripts/x'",
         },
         { path: "src/web/i.ts", text: "import { f } from '../client/f'" },
       ]),
@@ -122,7 +122,7 @@ describe("module layering", () => {
       "src/security/e.ts: security imports domain (../domain/ids)",
       "src/stray/d.ts: directory is not part of the layering",
       "src/client/f.ts: client imports web (../web/format)",
-      "src/client/f.ts: client imports zod",
+      "src/client/f.ts: client imports valibot",
       "src/client/f.ts: client imports ../../scripts/x",
       "src/web/i.ts: web imports client (../client/f)",
     ]);
@@ -142,7 +142,7 @@ describe("module layering", () => {
     },
     passed: {
       "its own layer, a lower one and a package":
-        "import { a } from './ids'\nimport { b } from '../db/sql'\nimport { z } from 'zod'",
+        "import { a } from './ids'\nimport { b } from '../db/sql'\nimport * as v from 'valibot'",
       "an import in a comment": "// import { x } from '../app/app'\nconst s = \"import '../app/app'\"",
     },
   });
