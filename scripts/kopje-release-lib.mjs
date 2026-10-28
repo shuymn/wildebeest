@@ -166,12 +166,11 @@ export function createRelease({
 const MINUTE = 60_000
 
 // Whether the pull request checks (PRs.yml) passed on the commit as a push to main. Such a run compares the commit
-// with the last main run that passed and runs the suites the difference can affect, so its success means the
-// commit's whole tree passed them, through the runs before it. While a run is queued or in progress it waits, up to
-// `wait` from the start; while no run is listed, up to `appear` (a tag pushed right after the merge may come before
-// the run, and a commit whose paths PRs.yml ignores never gets one). Every other answer, a failed or cancelled run,
-// no run, a wait that ran out, or gh failing, stalling (a minute a call) or answering something else, is false: the
-// caller then runs the suites itself.
+// with the last main run that passed and runs the lint, type and test checks the difference can affect, so its
+// success means the commit's whole tree passed them, through the runs before it. While a run is queued or in progress
+// it waits, up to `wait` from the start; while no run is listed, up to `appear` (a tag pushed right after the merge
+// may come before the run). Every other answer, a failed or cancelled run, no run, a wait that ran out, or gh
+// failing, stalling (a minute a call) or answering something else, is false: the caller then runs those checks itself.
 export async function mainChecked({
 	repo,
 	sha,
