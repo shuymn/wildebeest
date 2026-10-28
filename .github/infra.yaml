@@ -93,9 +93,6 @@ spec:
       verified_allowed: true
       patterns_allowed:
         - jdx/mise-action@*
-        # octocov's action (ci.yml's coverage job) and the action it runs to install octocov.
-        - k1LoW/gh-setup@*
-        - k1LoW/octocov-action@*
         - oven-sh/setup-bun@*
         - shuymn/github-actions/.github/workflows/*@*
     fork_pr_approval: first_time_contributors

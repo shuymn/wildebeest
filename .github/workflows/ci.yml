@@ -11,9 +11,6 @@ concurrency:
   group: "${{ github.workflow }} @ ${{ github.event.pull_request.head.label || github.head_ref || github.ref }}"
   cancel-in-progress: true
 
-env:
-  OCTOCOV_VERSION: v0.83.3
-
 jobs:
   # Decides which suites a change can affect, so a change that is all Kopje Markdown runs only the Node suite. A
   # pull request is compared with its base. A push to main is compared with the commit of the last main run that
@@ -120,9 +117,22 @@ jobs:
         with:
           pattern: coverage-*
 
-      - uses: k1LoW/octocov-action@a167dc0dee441b7ffc45e1b862ab55ec0d87f278 # v1.5.2
+      # octocov at the version and checksum mise.lock pins.
+      - uses: jdx/mise-action@82a612c5ab8bcda7cc5db6b7e81a8e7584c3dc6e # v5.2.3
         with:
-          version: ${{ env.OCTOCOV_VERSION }}
+          install_args: github:k1LoW/octocov
+
+      # Storing main's report in an artifact needs ACTIONS_RUNTIME_TOKEN, which the runner gives an action's process
+      # and not a run step, so octocov runs from github-script. A reporting failure leaves the run passed: the release
+      # workflow and the changes job read whether main's run passed.
+      - name: Report coverage
+        continue-on-error: true
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        with:
+          script: |
+            await exec.exec(await io.which('octocov', true))
 
   # Formatting and lint are checked for every change; Kopje's types and checks only when its suites are affected.
   check:

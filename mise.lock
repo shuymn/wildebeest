@@ -66,6 +66,23 @@ checksum = "sha256:c2aa18348cd898e7a99da3eacec7141085eed3b975c9c931dd60b52506a4d
 url = "https://github.com/babarot/gh-infra/releases/download/v0.17.4/gh-infra_darwin_arm64.tar.gz"
 url_api = "https://api.github.com/repos/babarot/gh-infra/releases/assets/656608905"
 
+[[tools."github:k1LoW/octocov"]]
+version = "0.83.3"
+backend = "github:k1LoW/octocov"
+specifiers = ["0.83"]
+
+[tools."github:k1LoW/octocov"."platforms.linux-x64"]
+checksum = "sha256:8d6576580d151e785474f193d740f63cb91b70ac767d402410fcd7f187a34202"
+url = "https://github.com/k1LoW/octocov/releases/download/v0.83.3/octocov_v0.83.3_linux_amd64.tar.gz"
+url_api = "https://api.github.com/repos/k1LoW/octocov/releases/assets/624610889"
+provenance = "github-attestations"
+
+[tools."github:k1LoW/octocov"."platforms.macos-arm64"]
+checksum = "sha256:8a6537a6c9d0ffcbe1d629e8d0d357c23722b8fb3d5d4b98e074334214db1f80"
+url = "https://github.com/k1LoW/octocov/releases/download/v0.83.3/octocov_v0.83.3_darwin_arm64.zip"
+url_api = "https://api.github.com/repos/k1LoW/octocov/releases/assets/624610891"
+provenance = "github-attestations"
+
 [[tools.node]]
 version = "24.22.1"
 backend = "core:node"
