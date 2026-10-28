@@ -116,13 +116,17 @@ export function parse(source: Source): Parsed {
 // two different trees never share one. Only what a formatter may change is normalised, here and nowhere else:
 // - a string literal is its value (any quote, any escape);
 // - a number is its value, tagged (`Num(1)`, `Num(Infinity)`), and a bigint its digits, tagged apart;
-// - a static property key, an identifier or a string, is `Key(name)` either way;
-// - parentheses are not nodes (ParenthesizedExpression is unwrapped; parse() keeps none).
+// - a static property key or enum member name, an identifier or a string, is `Key(name)` either way;
+// - an empty statement in a statement list (`;`) is dropped; one that is a loop's or an if's body is kept;
+// - parentheses are not nodes (ParenthesizedExpression and TSParenthesizedType are unwrapped; parse() keeps none).
 // Line breaks, semicolons and trailing commas are not in the tree.
 export function keyOf(node: Node): string {
 	const n = node as Node & Record<string, unknown>
 	if (n.type === 'ParenthesizedExpression') {
 		return keyOf(n.expression as Node)
+	}
+	if (n.type === 'TSParenthesizedType') {
+		return keyOf(n.typeAnnotation as Node)
 	}
 	if (n.type === 'Literal') {
 		if (typeof n.value === 'string') {
@@ -137,12 +141,14 @@ export function keyOf(node: Node): string {
 	}
 	const value = (v: unknown, owner?: string): string => {
 		if (Array.isArray(v)) {
-			return `[${v.map((e) => value(e)).join(' ')}]`
+			const list =
+				STATEMENT_LISTS[n.type] === owner ? v.filter((e) => (e as Node | null)?.type !== 'EmptyStatement') : v
+			return `[${list.map((e) => value(e)).join(' ')}]`
 		}
 		if (typeof v === 'object' && v !== null && typeof (v as Node).type === 'string') {
 			const child = v as Node & Record<string, unknown>
 			const staticKey =
-				owner === 'key' &&
+				(owner === 'key' || (owner === 'id' && n.type === 'TSEnumMember')) &&
 				n.computed !== true &&
 				(child.type === 'Identifier' || (child.type === 'Literal' && typeof child.value === 'string'))
 			return staticKey ? `Key(${JSON.stringify(child.type === 'Identifier' ? child.name : child.value)})` : keyOf(child)
@@ -157,16 +163,33 @@ export function keyOf(node: Node): string {
 }
 
 const UNKEYED = new Set(['type', 'start', 'end', 'range', 'loc', 'raw'])
+// The property holding a statement list, by node type.
+const STATEMENT_LISTS: Record<string, string> = {
+	Program: 'body',
+	BlockStatement: 'body',
+	StaticBlock: 'body',
+	TSModuleBlock: 'body',
+	SwitchCase: 'consequent',
+}
 
 // The structural key of `snippet`, one expression, parsed as TypeScript. It throws unless the snippet is exactly one
-// expression, so a key written by hand (an allowlist entry) cannot silently name nothing.
+// expression, so a key written by hand (an allowlist entry) cannot silently name nothing: the parentheses it is parsed
+// in must enclose the whole of it, so they cannot close a snippet such as `a) + (b`.
 export function expressionKey(snippet: string): string {
-	const result = parseSync('snippet.ts', `(${snippet}\n)`, { preserveParens: false })
+	const text = `(${snippet}\n)`
+	const result = parseSync('snippet.ts', text, { preserveParens: true })
 	const [statement, ...rest] = result.program.body
-	if (result.errors.length > 0 || rest.length > 0 || statement?.type !== 'ExpressionStatement') {
+	const expression = statement?.type === 'ExpressionStatement' ? statement.expression : undefined
+	if (
+		result.errors.length > 0 ||
+		rest.length > 0 ||
+		expression?.type !== 'ParenthesizedExpression' ||
+		expression.start !== 0 ||
+		expression.end !== text.length
+	) {
 		throw new Error(`not one expression: ${snippet}`)
 	}
-	return keyOf(statement.expression)
+	return keyOf(expression)
 }
 
 function constantOf(node: Node, parents: readonly Node[]): string | null {

@@ -63,6 +63,13 @@ describe('the source scan', () => {
 			["class { 'm'() {} }", 'class { m() {} }'],
 			// Number spelling.
 			['f(1.0, 0x10)', 'f(1, 16)'],
+			// Enum member-name quotes.
+			["class { m() { enum E { 'a' = 1 } } }", 'class { m() { enum E { a = 1 } } }'],
+			// Empty statements in a statement list, and type parentheses.
+			['() => { a;; b; }', '() => { a; b }'],
+			['() => { switch (a) { case 1: b;; } }', '() => { switch (a) { case 1: b } }'],
+			['class { static { a;; } }', 'class { static { a } }'],
+			['x as (A | B)[]', 'x as (A | B)[]'],
 		]
 		for (const [a, b] of same) {
 			expect(key(a), `${a} | ${b}`).toBe(key(b))
@@ -100,6 +107,11 @@ describe('the source scan', () => {
 			['x as A', 'x as B'],
 			['f<A>()', 'f<B>()'],
 			['(x: A) => x', '(x: B) => x'],
+			// An empty statement that is a body.
+			['() => { if (a); b }', '() => { if (a) b }'],
+			['() => { while (a); b }', '() => { while (a) b }'],
+			['() => { for (;;); b }', '() => { for (;;) b }'],
+			['() => { l: ; b }', '() => { l: b }'],
 		]
 		for (const [a, b] of different) {
 			expect(key(a), `${a} | ${b}`).not.toBe(key(b))
@@ -109,6 +121,9 @@ describe('the source scan', () => {
 	it('refuses an allowlist snippet that is not one expression', () => {
 		expect(() => expressionKey('f(')).toThrow('not one expression')
 		expect(() => expressionKey('a); (b')).toThrow('not one expression')
+		expect(() => expressionKey('a) + (b')).toThrow('not one expression')
+		expect(() => expressionKey("projected).join(' '")).toThrow('not one expression')
+		expect(expressionKey('(a) + (b)')).toBe(expressionKey('a + b'))
 	})
 
 	it('throws on a parse error rather than skip the file', () => {
