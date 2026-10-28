@@ -1,4 +1,4 @@
-# betterleaks configuration: the default rules, plus allowlisted paths that hold sample or test-only credentials.
+# betterleaks configuration: the default rules, plus allowlists for sample or test-only credentials.
 [extend]
 useDefault = true
 
@@ -8,3 +8,14 @@ paths = [
 	'''^packages/kopje/docs/mastodon-api-spec/''',
 	'''^packages/kopje/test/fixtures/legacy-keys\.json$''',
 ]
+
+[[allowlists]]
+description = "Published example credentials of RFC 6749 (client secret) and RFC 7009 (token), used as test vectors"
+condition = "AND"
+targetRules = ["generic-api-key"]
+paths = ['''^packages/kopje/test/vectors\.test\.ts$''']
+regexes = ['''^7Fjfp0ZBr1KtDRbnfVdmIw$''', '''^45ghiukldjahdnhzdauz$''']
+
+[[allowlists]]
+description = "Paths only in history: the vendored Mastodon docs' old path, and a sample Access JWT in old tests"
+paths = ['''^docs/mastodon-api-spec/''', '''^backend/test/test-data\.ts$''']
