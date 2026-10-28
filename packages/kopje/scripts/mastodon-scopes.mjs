@@ -1572,7 +1572,8 @@ if (process.argv[1] !== undefined && resolve(process.argv[1]) === fileURLToPath(
     readFileSync(join(root, "..", "..", ".oxfmtrc.json"), "utf8"),
   );
   const { format } = await import("oxfmt");
-  const formatted = await format(target, JSON.stringify(table), config);
+  // Named as JSON whatever the output file is called: format() picks its parser by the name.
+  const formatted = await format("access.json", JSON.stringify(table), config);
   if (formatted.errors.length > 0) {
     throw new Error(`oxfmt: ${formatted.errors.map((e) => e.message).join("; ")}`);
   }
