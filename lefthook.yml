@@ -17,6 +17,11 @@ pre-commit:
     - name: pretty
       run: pnpm exec oxfmt --no-error-on-unmatched-pattern {staged_files}
       stage_fixed: true
+    # Unused files, dependencies and exports (knip.jsonc). knip reads the whole working tree, in about a second; CI
+    # runs the same (pnpm run knip).
+    - name: knip
+      glob: "*.{js,mjs,cjs,jsx,ts,mts,cts,tsx,json,jsonc,yaml}"
+      run: pnpm exec knip --no-progress
     # Blocks commits that stage secrets; CI scans the whole history (security.yml).
     - name: secrets
       run: mise exec -- betterleaks git --pre-commit --staged --redact --no-banner --verbose

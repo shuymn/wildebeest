@@ -198,6 +198,10 @@ jobs:
       - name: Check linting
         run: pnpm run lint
 
+      # Unused files, dependencies and exports across the workspace and the deploy/ template (knip.jsonc).
+      - name: Check unused code
+        run: pnpm run knip
+
       - name: Check kopje types
         if: needs.changes.outputs.kopje == 'true'
         working-directory: packages/kopje
