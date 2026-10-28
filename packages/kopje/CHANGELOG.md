@@ -22,6 +22,16 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
 - The header's mark stands a little further from the server's name (8 px instead of 4 px), as a filled disc reads
   closer to its text than a line icon does.
 
+### Fixed
+
+- A public page's pager no longer offers a newer or older page where nothing lies: a full page offered the side past
+  it even when it held the last rows, so the newest page reached by "Newer posts" linked to an empty page above it, and
+  an exact last page to an empty one below it. A side is now offered only when the read passed a row past the page,
+  its candidate window was cut, or the page was cut by bytes. This holds for every paged public list: the profile tabs,
+  the hashtag page, the follow lists, the Featured tab's accounts and a status page's replies, boosts, favourites and
+  quotes; the quotes list reads one candidate past its page for it
+  ([docs/visibility.md](docs/visibility.md), "Read bounds"). No migration; `wrangler.jsonc`: unchanged.
+
 ## [0.1.0] - 2026-10-28
 
 The first release, published under the npm dist-tag `latest`. Its code is that of 0.1.0-rc.26.

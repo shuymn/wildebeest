@@ -25,6 +25,7 @@ import {
   cursorOf,
   cursorsOf,
   expectCursors,
+  expectFullPages,
   pagerLinks,
   shownAccounts,
   viaRoute,
@@ -554,6 +555,33 @@ function frameBytes(kind: Kind): number {
   });
 }
 
+describe("a status page’s interaction tabs at their ends", () => {
+  it("offer a side only when a row lies there, at both ends of exact pages", async () => {
+    const h = await community(["alice"]);
+    const focal = await seedStatus(h.store, { accountId: h.users.alice.id, visibility: "public" });
+    await runInDurableObject(h.store, (_instance, state) => {
+      const s = state.storage.sql;
+      let nextStatus = BigInt(focal) + 1000n;
+      for (let i = 0; i < 2 * INTERACTORS_PAGE_SIZE; i++) {
+        const account = remoteIn(s, `exact${i}`);
+        statusIn(s, { id: String(nextStatus++), account, local: false, visibility: "public", reblogOf: focal });
+        s.exec("INSERT INTO favourites (account_id, status_id) VALUES (?, ?)", account, focal);
+        if (i < 2 * QUOTES_PAGE_SIZE) {
+          const id = String(nextStatus++);
+          statusIn(s, { id, account, local: false, visibility: "public" });
+          quoteIn(s, id, focal, "accepted");
+        }
+      }
+    });
+    for (const kind of ["reblogs", "favourites"] as const) {
+      const walked = await walkPages(viaRoute(h), `/@alice/${focal}/${kind}`, shownAccountTab);
+      expectFullPages(walked, INTERACTORS_PAGE_SIZE, 2);
+    }
+    const walked = await walkPages(viaRoute(h), `/@alice/${focal}/quotes`, shownQuoteTab);
+    expectFullPages(walked, QUOTES_PAGE_SIZE, 2);
+  });
+});
+
 describe("a status page’s interaction tabs within the page budget", () => {
   // 70 boosters and favouriters of about 3 kB of JSON each, every seventh about 20 kB, and 30 quotes of about 5 kB,
   // every fifth about 30 kB: within 45 kB past the head, pages cut short by bytes, each continuing from its last
@@ -924,8 +952,9 @@ describe('a status page’s interaction tabs’ reads (RES-7, docs/visibility.md
           const seek = run.plans.find((statement) =>
             statement.plan.some((d) => new RegExp(`USING (?:COVERING )?INDEX ${index}`).test(d)),
           );
-          // The quotes' window reads each candidate's index entry and its status's row (its audience).
-          expect([kind, seek?.rows]).toEqual([kind, kind === "quotes" ? 2 * size : size]);
+          // The quotes' window reads each candidate's index entry and its status's row (its audience), for the page's
+          // candidates and the one past them.
+          expect([kind, seek?.rows]).toEqual([kind, kind === "quotes" ? 2 * (size + 1) : size]);
           for (const statement of run.plans) {
             expect([
               kind,
