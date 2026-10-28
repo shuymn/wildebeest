@@ -43,11 +43,10 @@ export const ORIGINALS_DIR = 'originals'
 export const IMAGES_FORMAT = 1
 export const DELIVERY_PREFIX = 'https://imagedelivery.net/'
 
-// The account hash of the images cloudflare/wildebeest ships as defaults (its default header, in
-// packages/backend/src/config/accounts.ts). A profile image under it is a default, not the user's: the converter
-// leaves it out, so Kopje's own default applies.
+// The account hash of the images cloudflare/wildebeest ships as defaults (its default header). A profile image under
+// it is a default, not the user's: the converter leaves it out, so Kopje's own default applies.
 export const UPSTREAM_ACCOUNT_HASH = 'NkfPDviynOyTAOI79ar_GQ'
-// Legacy's default avatar (packages/backend/src/config/accounts.ts), which it hotlinks from Mastodon's repository.
+// Legacy's default avatar, which it hotlinks from Mastodon's repository.
 export const LEGACY_DEFAULT_AVATAR =
 	'https://raw.githubusercontent.com/mastodon/mastodon/main/public/avatars/original/missing.png'
 

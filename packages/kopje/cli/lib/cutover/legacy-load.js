@@ -2,7 +2,7 @@
 // (0039), without ever touching the legacy D1:
 //
 //   1. the level is the d1_migrations prefix of the canonical legacy migrations (cli/legacy-migrations, a frozen copy
-//      of the repository's /migrations), and the export's schema must match the canonical schema at that level
+//      of legacy Wildebeest's 0000 to 0039), and the export's schema must match the canonical schema at that level
 //      (columns by name; see compareColumns for the one variance accepted);
 //   2. the rows are loaded, by column name, into a database built from the canonical migrations up to that level, so
 //      the bridge always starts from the canonical schema whatever the column order of the export;
@@ -43,8 +43,8 @@ export function legacyMigrations() {
 
 export const LAST_LEGACY_LEVEL = 39
 
-// Levels a live legacy instance can be at (the supported range of the cutover). T1 is the line in this repository (0.1.0), T2 the
-// cloudflare/wildebeest line (0.0.1, at most 0010). Below 0011 both lines have the same schema, so they are reported
+// Levels a live legacy instance can be at (the supported range of the cutover). T1 is shuymn's Wildebeest fork
+// (0.1.0), T2 the cloudflare/wildebeest line (0.0.1, at most 0010). Below 0011 both lines have the same schema, so they are reported
 // together.
 /** @param {number} level */
 export function supportedLevel(level) {

@@ -22,8 +22,8 @@ import type { StoreStub } from '../src/platform/store-client'
 // Rolling a cutover back (docs/cutover-runbook.md, "Rolling back"), on the converted legacy dump of the global setup:
 //   - the cutover reset takes a Store with a completed import back to empty, only before publication (OPS-8);
 //   - the requests Kopje spooled during the window go to the legacy Queue, verified, in spool order, and leave
-//     nothing behind that a later cutover could replay (OPS-9). The legacy consumer's side is in
-//     packages/consumer/test/rollback-drain.test.ts.
+//     nothing behind that a later cutover could replay (OPS-9). The legacy consumer's side has no
+//     test here (an OPS-9 residual).
 
 declare module 'vitest' {
 	export interface ProvidedContext {

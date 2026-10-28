@@ -1,6 +1,6 @@
 // Synthetic legacy Wildebeest D1 exports, at any supported migration level, in the shape `wrangler d1 export
 // --table` writes (one SQL text per table: the table's CREATE statement, then one INSERT per row). Every row is made
-// up here; no real export is ever read. Row shapes follow the legacy writers (packages/backend: createPerson,
+// up here; no real export is ever read. Row shapes follow the legacy writers (createPerson,
 // createObject, addObjectInOutbox, createReblog, insertActivity, the notification writers).
 //
 // T1 fixtures are built from the canonical migrations (cli/legacy-migrations); T2 fixtures from the cloudflare/

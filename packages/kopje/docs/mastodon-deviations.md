@@ -14,8 +14,8 @@ without ids under [Differences the checks cannot see](#differences-the-checks-ca
 
 A cap that drops protocol-visible data (a field, an item or part of a value Mastodon presents or federates) is a
 behaviour change: check what Mastodon does first, and cap only within it or as a departure decided here. A code comment
-calling a difference deliberate is not a decision. To accept a departure, add an entry here with the reason and who
-decided it, and change the exceptions that cite the gap.
+calling a difference deliberate is not a decision. To accept a departure, add an entry here with the reason, ending
+"Accepted, <date>.", and change the exceptions that cite the gap.
 
 A pull request that fixes a gap removes the exceptions that cite it. When Kopje follows a newer Mastodon release,
 regenerate the fixtures with `scripts/mastodon-scopes.mjs`, review each new exception, and review the behaviour by
@@ -26,13 +26,13 @@ reading Mastodon's source: a parameter that is read and then dropped, or a wrong
 - **MD-1: Registration through the API is closed.** `POST /api/v1/accounts` answers 403, as Mastodon does with
   registrations closed, and `POST /api/v1/emails/confirmations` refuses, since no user signs up through an app. Besides
   the admin's, made by `/setup`, an account is made only by invitation: the first sign-in through Cloudflare Access of
-  an email the Access admin invited ([setup.md](setup.md), "Adding accounts"; threat model AUTH-9). Decided by the
-  coordinator, 2026-10-15; the invitation rule by the owner, 2026-10-27.
+  an email the Access admin invited ([setup.md](setup.md), "Adding accounts"; threat model AUTH-9). Accepted,
+  2026-10-15; the invitation rule, 2026-10-27.
 - **MD-2: Admin operations withheld from Mastodon's API.** Domain allows, IP, email domain and canonical email
   blocks, link publishers and admin tags answer 403 or 404, as Mastodon answers a role without the permission;
   dimensions and retention answer `[]` to the OAuth admin and 403 to everyone else. Kopje has no sign-ups, recorded IPs
   or allowlist mode. Trends review through the Mastodon admin API (approve, reject) answers 403; the Access admin
-  reviews trends (`kopje-admin trends`). Decided by the coordinator, 2026-10-16. Of the measures
+  reviews trends (`kopje-admin trends`). Accepted, 2026-10-16. Of the measures
   (`POST /api/v1/admin/measures`), `active_users` (Kopje keeps login days only for the instance activity, from the
   upgrade that added them and for today, the 184 days before it and tomorrow, plus an imported backlog until the prune
   reaches it (RES-4 in `docs/threat-model.md`), where the measure takes any range), `interactions` (no count of replies,
@@ -40,10 +40,10 @@ reading Mastodon's source: a parameter that is read and then dropped, or a wrong
   hashtag history over an arbitrary range, and a hashtag's API id names no stored row) and `instance_statuses` (a
   server's statuses stay stored while their deletion runs) answer 422
   `measure <key> is not served` to the OAuth admin, the whole request; Mastodon's 400 for a missing object and 422 for
-  an invalid date come first, to every caller. Decided by the orchestrator, 2026-10-22.
+  an invalid date come first, to every caller. Accepted, 2026-10-22.
 - **MD-3: Features not built yet answer as Mastodon with the feature off.** Translation, async refreshes and the
-  admin domain allows list answer empty or 404 until the feature is built; the backlog tracks them. Decided by the
-  coordinator, 2026-10-20.
+  admin domain allows list answer empty or 404 until the feature is built; the backlog tracks them. Accepted,
+  2026-10-20.
 - **MD-4: Announcements differ in what they embed and when they change.** `statuses` is always `[]`: Mastodon embeds
   the statuses the text links, each up to a whole quote, in a list with no paging; the links stay in `content`. At most
   16 mentions (of available accounts, among the first 64 references) and 16 hashtags are listed; `content` links every
@@ -51,8 +51,7 @@ reading Mastodon's source: a parameter that is read and then dropped, or a wrong
   mentioned account's URL grew) is shown escaped with no link. A scheduled announcement is published by the 5-minute
   cron within 5 minutes after `scheduled_at`, with `published_at` = `scheduled_at`. At most 16 are published or
   scheduled and 1,000 kept. Reactions are grouped by name (Mastodon groups by name and emoji), and a Unicode reaction is
-  any fully qualified RGI emoji or its unqualified form, a superset of Mastodon's emoji map. Decided by the owner,
-  2026-10-20.
+  any fully qualified RGI emoji or its unqualified form, a superset of Mastodon's emoji map. Accepted, 2026-10-20.
 - **MD-5: Trends are worked out from Kopje's stored statuses.** Every 5 minutes Kopje counts again from the newest 4,000
   public originals with ids from yesterday 00:00 UTC on, classified by publication day (Mastodon counts on receipt); at
   most 100 hashtags per post and 8,000 in all are read, and the 400 hashtags with the most accounts today are scored.
@@ -86,10 +85,10 @@ reading Mastodon's source: a parameter that is read and then dropped, or a wrong
   cards (an empty page cut at its window links on, as Kopje's other timelines); `local` and `remote` are not read, since
   Mastodon reads them only to require a user when a topic feed is not public. Its answer may be cached publicly only
   when no token was sent, as Kopje's trends lists and directory; Mastodon also caches an answer to an app token, which
-  has no user. Decided by the owner (delegated), 2026-10-20; the link rules by the orchestrator, 2026-10-24.
+  has no user. Accepted, 2026-10-20; the link rules, 2026-10-24.
 - **MD-6: Media have no short link.** MediaAttachment `text_url` is always null. Mastodon shows it only for a local
   attachment with a shortcode, and has assigned no shortcode to new media since v3.5.0, so only its older local media
-  show one; Kopje assigns none and serves no short link route. Decided by the orchestrator, 2026-10-22.
+  show one; Kopje assigns none and serves no short link route. Accepted, 2026-10-22.
 
 ## Differences the checks cannot see
 
@@ -176,7 +175,7 @@ Link previews (a status's `card`, Mastodon's `FetchLinkCardService`):
 - `authors[].account` is always null, where Mastodon shows the account a page's `fediverse:creator` names when that
   account's attribution domains cover the page's host. An Account in every status's card would take the status lists
   past their answer budgets (RES-3), and Kopje stores neither the handle nor remote accounts' attribution domains.
-  Clients lose only the card's link to the author's profile. Decided by the owner, 2026-10-23.
+  Clients lose only the card's link to the author's profile. Accepted, 2026-10-23.
 - A quoted status (a status's `quote.quoted_status`) shows no card, where Mastodon's `ShallowStatusSerializer` shows
   it, so a status with its quote stays within the answer budgets (RES-3); the quoted status's own read shows it.
 - Only public and unlisted originals get a card, a privacy choice: Mastodon fetches the link of every visibility,
@@ -363,7 +362,7 @@ Instance and apps (`/api/v1/apps`, `/api/v{1,2}/instance`, `/api/v1/preferences`
   renders each from Markdown with Redcarpet (`REST::PrivacyPolicySerializer`, `REST::TermsOfServiceSerializer`,
   `REST::ExtendedDescriptionSerializer`, without `safe_links_only`), keeping h1 to h6 and relative links as written.
   `test/instance-reads.test.ts` ("keeps a document’s headings in the API, as the pages show them"), `test/html.test.ts`
-  ("keeps headings as h2 to h4, without attributes, under the page’s own h1"). Decided by the coordinator, 2026-10-28.
+  ("keeps headings as h2 to h4, without attributes, under the page’s own h1"). Accepted, 2026-10-28.
 
 OAuth (`/oauth/authorize`, `/oauth/token/info`, `/oauth/introspect`):
 
@@ -629,8 +628,8 @@ Removing a favourite or bookmark (`POST /api/v1/statuses/:id/unfavourite` and `/
   lost, and while its author is suspended, being purged or covered by a suspending domain block. Kopje keeps the 404 so
   that a block, a lost follow or a removal shows the viewer nothing they could no longer read. A deleted status answers
   404 in both. Without a favourite or bookmark the answer follows VIS-1: an author who blocks the viewer hides every
-  visibility, where Mastodon's `show?` still shows a private, direct or limited status to a mentioned viewer. Decided
-  by the owner, 2026-10-27.
+  visibility, where Mastodon's `show?` still shows a private, direct or limited status to a mentioned viewer. Accepted,
+  2026-10-27.
 
 Forwarded deletes (a remote author's `Delete` of a status that local accounts boosted; Mastodon's
 `ActivityPub::Forwarder`, `app/lib/activitypub/forwarder.rb`, run by `Activity::Delete#delete_status`):

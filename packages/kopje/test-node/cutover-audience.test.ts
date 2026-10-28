@@ -8,8 +8,7 @@ import { legacyAudience, legacyFollowers } from '../cli/lib/cutover/convert.js'
 import { audienceOf, followersOf } from '../cli/lib/cutover/verify-expect.js'
 
 // The audience never widens (DATA-15): visibility and recipients come from the addressing as exported, as legacy
-// authorized it (packages/backend/src/mastodon/status_visibility.ts). Also ids, the notification counter, settings
-// and determinism.
+// authorized it (its detectVisibility and isVisible). Also ids, the notification counter, settings and determinism.
 
 const space = workspace()
 const PUBLIC = 'https://www.w3.org/ns/activitystreams#Public'

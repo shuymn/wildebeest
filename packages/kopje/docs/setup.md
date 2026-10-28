@@ -325,7 +325,7 @@ KEK. The steps below hold outgoing work with the `MAINTENANCE` variable for thos
 
 ## Things to check on a real account
 
-The wizard was tested against a fake of the Cloudflare API. Confirmed on a verification instance:
+The wizard's tests use a fake of the Cloudflare API. Confirmed against the real API and in a browser:
 
 - `GET /accounts/{id}/access/organizations` returns `auth_domain` as `<team>.cloudflareaccess.com`.
 - Reusable policies report `app_count`, and applications list their policies with ids.
@@ -340,13 +340,12 @@ same-origin`, because under `no-referrer` browsers send `Origin: null` on these 
 Still to confirm:
 
 - `GET /accounts` lists the account for a token with only account-scoped permissions (Account Settings, Read), when the
-  account ID is left empty. On the verification instance the lookup did not find exactly one account, and the account
-  ID was entered instead. The wizard now says whether the token reached no account or several.
+  account ID is left empty. In the one check so far the lookup did not find exactly one account; when it does not,
+  enter the account ID. The wizard says whether the token reached no account or several.
 - Still images of animated uploads (a release gate: the local Images binding decodes one frame only and ignores
-  `anim`, so tests stand in for the real output). On the verification instance, upload as the avatar, then as the
-  header, a 2-frame GIF, a 2-frame animated WebP, a 2-frame APNG and a still PNG (8 uploads, 24 transformations). For
-  each, fetch `avatar` and `avatar_static` (`header` and `header_static`) and count the frames of the served bytes
-  (WebP: the `ANMF` chunks, or 1 without the `VP8X` animation flag; PNG: `acTL`'s frame count, or 1 without it):
+  `anim`, so tests stand in for the real output). On a real account, upload as the avatar, then as the header, a
+  2-frame GIF, a 2-frame animated WebP, a 2-frame APNG and a still PNG (8 uploads, 24 transformations). For each,
+  fetch `avatar` and `avatar_static` (`header` and `header_static`) and count the frames of the served bytes (WebP: the `ANMF` chunks, or 1 without the `VP8X` animation flag; PNG: `acTL`'s frame count, or 1 without it):
   - GIF and animated WebP: `avatar` has at least 2 frames, `avatar_static` exactly 1, and the URLs differ (`/full.` and
     `/small.`).
   - Still PNG and APNG: the upload answers 200, `avatar` has exactly 1 frame, and `avatar_static` equals `avatar`.

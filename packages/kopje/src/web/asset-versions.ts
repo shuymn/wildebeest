@@ -8,5 +8,5 @@ export const STYLESHEET = '/assets/kopje.845ee4cf31.css'
 export const L1_SCRIPT = '/assets/kopje.cd2e0b8114.js'
 
 // The latest completed release's files, kept in public/assets for one release (null: that release had none).
-export const PREVIOUS_STYLESHEET = '/assets/kopje.a16b2308c4.css'
+export const PREVIOUS_STYLESHEET = '/assets/kopje.845ee4cf31.css'
 export const PREVIOUS_L1_SCRIPT = '/assets/kopje.cd2e0b8114.js'
