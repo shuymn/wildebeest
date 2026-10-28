@@ -12,7 +12,7 @@ import { STRINGS } from "../src/web/strings";
 import { sql } from "./api-helpers";
 import { NOW } from "./app-helpers";
 import { blockDomain } from "./domain-block-helpers";
-import { shownFeed, tagFrameBytes, viaRoute, walkFeed as walk } from "./profile-page-helpers";
+import { expectFullPages, shownFeed, tagFrameBytes, viaRoute, walkFeed as walk } from "./profile-page-helpers";
 import { type PlannedStatement, plannedSql, scansOf, staleStatistics } from "./read-helpers";
 import { community, post, remoteAccount, seedStatus, type SeedStatus } from "./status-helpers";
 import { attr, one, parseHtml, query, text } from "./web-dom";
@@ -317,6 +317,17 @@ describe("the hashtag page", () => {
 
 // A post of `chars` characters of content.
 const sized = (chars: number, label: string) => `<p>${label} ${"x".repeat(chars)}</p>`;
+
+describe("the hashtag page at its ends", () => {
+  it("offers a side only when a post lies there, at both ends of exact pages", async () => {
+    const h = await community(["alice"]);
+    for (let i = 0; i < 2 * TAG_PAGE_SIZE; i++) {
+      const published = NOW - (2 * TAG_PAGE_SIZE - i) * 1000;
+      await seedStatus(h.store, { accountId: h.users.alice.id, visibility: "public", tags: ["cats"], published });
+    }
+    expectFullPages(await walk(viaRoute(h), "/tags/cats"), TAG_PAGE_SIZE, 2);
+  });
+});
 
 describe("the hashtag page within a page budget", () => {
   // A budget that holds about 25 kB beside the frame: small posts (about 2 kB of JSON) fill a page before 20, so pages

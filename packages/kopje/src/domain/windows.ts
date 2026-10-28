@@ -65,16 +65,19 @@ export function windowJson(window: Window): string {
 // The page of a window: of the rows the rule passed (`passed`, keyed by candidate), the first `limit` in cursor order,
 // newest first. Its far end is the last of them when the page is full, else the window's last candidate when the
 // window was cut, so a next page starts below what this one read; its near end is the first of them, or the window's
-// first candidate when none passed. `cut`: the next link is offered whatever the page holds.
+// first candidate when none passed. `cut`: the next link is offered whatever the page holds. `more`: a row may lie past
+// the far end: a row the rule passed lies past the page in the window, or the window was cut. An uncut window holds
+// every candidate of the cursor's range, so without either no row a page would show lies past it.
 export function windowPage<R>(
   window: Window,
   passed: readonly R[],
   key: (row: R) => string,
   limit: number,
   ascending: boolean,
-): { rows: R[]; newest: string | null; oldest: string | null; cut: boolean } {
+): { rows: R[]; newest: string | null; oldest: string | null; cut: boolean; more: boolean } {
   const byKey = new Map(passed.map((row) => [key(row), row]));
-  const taken = window.candidates.flatMap(({ id }) => byKey.get(id) ?? []).slice(0, limit);
+  const ordered = window.candidates.flatMap(({ id }) => byKey.get(id) ?? []);
+  const taken = ordered.slice(0, limit);
   const full = taken.length >= limit;
   const first = taken[0];
   const last = taken.at(-1);
@@ -88,9 +91,10 @@ export function windowPage<R>(
           ? null
           : key(last);
   const cut = window.cut && !full;
+  const more = ordered.length > limit || window.cut;
   return ascending
-    ? { rows: taken.reverse(), newest: far, oldest: near, cut }
-    : { rows: taken, newest: near, oldest: far, cut };
+    ? { rows: taken.reverse(), newest: far, oldest: near, cut, more }
+    : { rows: taken, newest: near, oldest: far, cut, more };
 }
 
 function int(n: number): number {

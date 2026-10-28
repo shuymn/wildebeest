@@ -6003,6 +6003,7 @@ describe("the quotes list reads a window, however many quotes a status has (RES-
         newest: quoting(2000 - 1 - (request - 1) * 20),
         oldest: quoting(2000 - request * 20),
         candidates: 20,
+        more: true,
       });
       expect(await rowsRead({ store: many }, statusQuotes, input(cursor))).toBeLessThanOrEqual(
         (await rowsRead({ store: few }, statusQuotes, input(PAGE))) + ALLOWANCE,

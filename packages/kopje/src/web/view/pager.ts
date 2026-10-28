@@ -1,7 +1,8 @@
 import type { PageCursor, Paging } from "../../domain/web-pages/paging";
 
 // The pager of a newest-first list, from the request's cursor, the read's paging facts and the list's cursor-less URL
-// `base`. Pure: it follows only those facts, never the number of items shown.
+// `base`. Pure: it follows only those facts, never the number of items shown. `more` means a row may lie past the
+// read's far end (Paging), never only that the page is full, so an exact last page offers nothing past it.
 //
 // | Request  | Older (?max_id=)                       | Newer (?min_id=)                                          |
 // | none     | oldest when more                       | none                                                      |

@@ -963,6 +963,10 @@ A paged read whose rule hides rows reads a candidate window (`src/domain/windows
   window's last candidate (or the last item of a full page), and the next link is offered whatever the page holds
   (`Page.cut`), so paging moves on by the window and reaches what lies behind any hidden range. `min_id`, `since_id`
   and the `prev` link keep Mastodon's meaning. Mastodon paginates its quotes list before it filters, and does the same.
+- A public page's pager offers the side past its far end only where a row may lie (`Paging.more`): a row the rule
+  passed lies past the page in the window, the window was cut, or the page was cut by bytes; a full page alone offers
+  nothing, so an exact last page ends the walk. The quotes list, whose window is a page, reads one candidate past it
+  for this.
 - A merged read (home, a list, a hashtag timeline's names) reads at most `streamWindow` candidates per stream and
   merges them up to the highest end of a stream that filled, at most `readWindow`, so no candidate below a stream's end
   is passed over. A read positioned at a status (`max_id` just above it, `limit` 1) has it as its first candidate, so
@@ -1009,10 +1013,10 @@ limit, 40); statuses page by 20 and at most 40, accounts and notifications by 40
 | Featured tab's endorsements          | `readWindow` of 40 (120) of the account's endorsements; its 10 hashtags by key                                | availability                                                             |
 | status web page's replies            | `readWindow` of 20 (60) of its public and unlisted replies not withdrawn, on `statuses_public_replies`        | availability                                                             |
 | status web page's boosts, favourites | `readWindow` of 40 (120), as `favourited_by` and `reblogged_by` (`interactorsWithin`)                         | availability                                                             |
-| status web page's quotes             | a page of 20 accepted quotes within the anonymous audience, as the quotes list (`statusQuotesWithin`)         | R8                                                                       |
+| status web page's quotes             | 20 accepted quotes and one more within the anonymous audience, as the quotes list (`statusQuotesWithin`)      | R8                                                                       |
 | hashtag web page                     | `streamWindow` of 20 (40) of the hashtag's public rows, local authors only (tagTimeline)                      | as the public timeline                                                   |
 | outbox                               | `readWindow` of 21 (63), public and unlisted only                                                             | availability of a boosted original                                       |
-| quotes list (statuses.ts)            | a page of accepted quotes; for anyone but the quoted author, within the audience (stricter than Mastodon)     | R8, or R2 for the quoted author                                          |
+| quotes list (statuses.ts)            | `limit` + 1 accepted quotes; for anyone but the quoted author, within the audience (stricter than Mastodon)   | R8, or R2 for the quoted author                                          |
 
 Showing one group by its key (`GET /api/v2/notifications/:group_key`) is the one read with no cursor to resume from:
 it walks at most `GROUP_DISCOVERY` (20,000) of that group's own notifications, through `notifications_group`, to find
