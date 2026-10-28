@@ -541,13 +541,14 @@ function load(sources, acceptDeletions, baseTime, path) {
     outbox: new Map(),
     outboxByPair: new Map(),
   };
-  for (const row of /** @type {{ id: string, properties: unknown, original_actor_id: unknown }[]} */ (
+  // Legacy's TEXT PRIMARY KEY columns admit NULL; such a row is keyed by String(id), as the converter looks it up.
+  for (const row of /** @type {{ id: string | null, properties: unknown, original_actor_id: unknown }[]} */ (
     db.prepare("SELECT id, properties, original_actor_id FROM objects").all()
   )) {
-    source.objects.set(row.id, addressingOf(row.properties));
-    source.authors.set(row.id, typeof row.original_actor_id === "string" ? row.original_actor_id : null);
+    source.objects.set(String(row.id), addressingOf(row.properties));
+    source.authors.set(String(row.id), typeof row.original_actor_id === "string" ? row.original_actor_id : null);
   }
-  for (const row of /** @type {{ id: string, properties: unknown }[]} */ (
+  for (const row of /** @type {{ id: string | null, properties: unknown }[]} */ (
     db.prepare("SELECT id, properties FROM actors").all()
   )) {
     const followers = /** @type {Record<string, unknown> | null} */ (
@@ -559,7 +560,7 @@ function load(sources, acceptDeletions, baseTime, path) {
     // As legacy's actorFromRow reads it: unparsable properties fail the actor (null); a missing followers property is
     // replaced from the actor id, any other value is kept as stored.
     source.followers.set(
-      row.id,
+      String(row.id),
       followers === null ? null : { present: followers.followers !== undefined, value: followers.followers },
     );
   }
