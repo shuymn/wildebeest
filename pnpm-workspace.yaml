@@ -32,8 +32,3 @@ trustPolicy: no-downgrade
 # resolution (including Renovate's lockfile updates).
 trustPolicyExclude:
   - semver@6.3.1
-minimumReleaseAgeExclude:
-  # Renovate security update: hono@4.13.7
-  - hono@4.13.7
-  # Renovate security update: sanitize-html@2.18.1
-  - sanitize-html@2.18.1
