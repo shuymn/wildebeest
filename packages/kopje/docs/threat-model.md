@@ -181,10 +181,11 @@ against their own instance. TLS is assumed between all parties.
   `src/domain/inbox.ts`; `test/inbox.test.ts` ("ignores a Move whose target does not list the actor"). The stored
   move (`accounts.moved_to_account_id`, shown as `Account#moved`) is display-only, the source's own claim as in
   Mastodon: an actor document's `movedTo` may name any stored account, and a verified `Move` sets it when first
-  processed; followers move only on a verified `Move` (`upsertRemoteActor` in `src/domain/remote-actors.ts` and `move` in `src/domain/inbox.ts`;
-  `test/inbox.test.ts` ("account moves")). Setting it issues a new revision of the source (ID-1), so a document of the
-  source fetched before the `Move` committed never clears it, a stale-author refresh included; a target stored after
-  its revision was read answers 503, having written nothing (`test/inbox-actor-revision.test.ts`).
+  processed; followers move only on a verified `Move` (`upsertRemoteActor` in `src/domain/remote-actors.ts` and `move`
+  in `src/domain/inbox.ts`; `test/inbox.test.ts` ("account moves")). Setting it issues a new revision of the source
+  (ID-1), so a document of the source fetched before the `Move` committed never clears it, a stale-author refresh
+  included; a target stored after its revision was read answers 503, having written nothing
+  (`test/inbox-actor-revision.test.ts`).
 - **ID-5: local documents come from stored data only.** Actor ids derive from the domain fixed at setup and the stored
   username's exact spelling; public keys come from `local_accounts.pubkey`. Another spelling or host answers 404 and has
   no key pair. _Enforced (main):_ `src/federation/federation.ts`; `test/federation.test.ts` ("differently cased path",
@@ -212,18 +213,18 @@ against their own instance. TLS is assumed between all parties.
   (ID-7). A received quote is accepted only as a self-quote or by a stamp fetched from its own id that passes every check
   (the quoted author's, on that author's origin, naming exactly this quote of exactly that status); a local quoted status
   is never accepted from outside. A quoted Note embedded in a status is taken only when it is that status's author's
-  own (its `attributedTo` the author, its id on the author's origin), with one hop less of work. `revokeStamp` and `verifyQuote` in `src/domain/quotes.ts`; `test/quotes.test.ts`
-  ("is not taken from anyone but the quoted author", "leaves a quote pending when its stamp is …", "wins over a quote
-  that arrives after it"). For locally authored quotes of remote statuses, `Accept`/`Reject` must come from the quoted
-  author and name our request by id or inline it with our quoting status as instrument and their status as object.
-  An `Accept`'s `result` must share their origin; `test/quote-authoring.test.ts` ("7: Accept and Reject are each one
-  compare-and-set"). _Enforced (main)_ for `Flag` (a row of the same table): the actor is the reporter, available and
-  not covered by a domain block (the inbox gate), and a domain block with `reject_reports` refuses it; the reported
-  accounts are local ones named by exact actor id, or stored remote ones only with a named status of theirs replying
-  to a local account (Mastodon's `flag.rb:15-17`), available (R1); a named status is attached only when it is the
-  reported account's original and passes the remote reporter rule (R34, `remoteReportableSql`). Nothing is fetched.
-  `fileRemoteReports` in `src/domain/reports.ts`; `test/inbox.test.ts` ("Flag: the actor is the reporter"),
-  `test/inbox-flag.test.ts`.
+  own (its `attributedTo` the author, its id on the author's origin), with one hop less of work. `revokeStamp` and
+  `verifyQuote` in `src/domain/quotes.ts`; `test/quotes.test.ts` ("is not taken from anyone but the quoted author",
+  "leaves a quote pending when its stamp is …", "wins over a quote that arrives after it"). For locally authored quotes
+  of remote statuses, `Accept`/`Reject` must come from the quoted author and name our request by id or inline it with
+  our quoting status as instrument and their status as object. An `Accept`'s `result` must share their origin;
+  `test/quote-authoring.test.ts` ("7: Accept and Reject are each one compare-and-set"). _Enforced (main)_ for `Flag`
+  (a row of the same table): the actor is the reporter, available and not covered by a domain block (the inbox gate),
+  and a domain block with `reject_reports` refuses it; the reported accounts are local ones named by exact actor id, or
+  stored remote ones only with a named status of theirs replying to a local account (Mastodon's `flag.rb:15-17`),
+  available (R1); a named status is attached only when it is the reported account's original and passes the remote
+  reporter rule (R34, `remoteReportableSql`). Nothing is fetched. `fileRemoteReports` in `src/domain/reports.ts`;
+  `test/inbox.test.ts` ("Flag: the actor is the reporter"), `test/inbox-flag.test.ts`.
 - **ID-7: replay changes nothing twice.** A repeated activity creates no second relationship, counter change,
   notification, push or outbound intent (natural keys). A valid `Delete` or `Undo` that arrives before its target is
   recorded for 30 days and prevents the target from appearing later. Input that fails ID-1 or ID-6 reserves no key and
@@ -449,7 +450,7 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
   `limited`, remote objects and statuses of suspended accounts answer 404, whether or not the request is signed.
   The Note is built by `noteOf`, the presenter of the outbound `Create`; the outbox lists the same statuses and boosts
   of public or unlisted originals. _Enforced (main):_ `getLocalNote` and `getOutbox` in
-  `src/domain/activities.ts`, the object and outbox dispatchers in `src/federation/federation.ts`;
+  `src/domain/local-notes.ts`, the object and outbox dispatchers in `src/federation/federation.ts`;
   `test/object-endpoint.test.ts`. Legacy aliases the cutover kept answer by the same rule (DATA-15): a remote proxy
   moves to a public original, a legacy image shows only with a servable status. Boosts (`Announce` ids) answer 404; Mastodon serves them. The permalink `/@user/:id`
   shows the same set as HTML, and answers every other case (private, direct, limited, a boost, a remote status, another
@@ -563,8 +564,8 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
 - **VIS-8: a pending follow grants nothing.** A follow of a locked local account or of any remote account starts
   `pending`; only `accepted` follows count, appear in follower lists, or grant `private` access. _Enforced (main):_
   `follow` in `src/domain/account-actions.ts`; `test/accounts.test.ts` ("requests a locked or remote account", "lists
-  following without pending requests"). `GET /api/v1/accounts/familiar_followers` reads accepted follows on both sides only,
-  leaves out suspended accounts and the followers the viewer filters out of lists (VIS-5, VIS-14, VIS-15: blocks,
+  following without pending requests"). `GET /api/v1/accounts/familiar_followers` reads accepted follows on both sides
+  only, leaves out suspended accounts and the followers the viewer filters out of lists (VIS-5, VIS-14, VIS-15: blocks,
   mutes while they apply, domain blocks; `filteredForSql`), and shows no follow that the followers and following lists
   would not show the same viewer: _Enforced (main):_ `familiarFollowers` in
   `src/domain/accounts.ts`; `test/account-reads.test.ts` ("counts accepted follows only (VIS-8)", "leaves out
@@ -599,9 +600,10 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
   `suggestionSourceSql` and `suggestionCandidateSql` in `src/domain/audience.ts`, `suggestions` in
   `src/domain/suggestions.ts`; `test/suggestions.test.ts`, `test/policy-endpoints.test.ts`.
 - **VIS-9: only the followed side accepts.** A pending follow of a local account becomes `accepted` only by that
-  account's own authorize call; a pending remote follow only by an `Accept` that passes ID-6. _Enforced (main):_ `answerFollowRequest` in `src/domain/account-actions.ts` (`POST
-  /api/v1/follow_requests/:id/authorize` and `/reject`, the viewer from the credential; a remote requester gets the
-  Accept or Reject at its shared inbox, or its personal inbox without one), and the inbound `Accept`, matched first by the `follows.uri` of our Follow;
+  account's own authorize call; a pending remote follow only by an `Accept` that passes ID-6. _Enforced (main):_
+  `answerFollowRequest` in `src/domain/account-actions.ts` (`POST /api/v1/follow_requests/:id/authorize` and
+  `/reject`, the viewer from the credential; a remote requester gets the Accept or Reject at its shared inbox, or its
+  personal inbox without one), and the inbound `Accept`, matched first by the `follows.uri` of our Follow;
   `test/inbox.test.ts` ("Accept: only the target of our Follow accepts it"), `test/inbox-regressions.test.ts` ("with
   outbound delivery").
 - **VIS-10: a notification is emitted once.** It is written only if the recipient is local and may see the status, and
@@ -821,7 +823,7 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
   (`ConversationMute`) is read only by the policy module (`conversationMutedSql`, `test-node/policy-boundary.test.ts`):
   it shows in its owner's `muted` and keeps notify from writing a notification about a status of the muted conversation
   (`notifiedSql`, R15 with R31); it is never federated. A remote status's removal deletes its pins within its batches
-  (RES-6). _Enforced (main):_ `src/domain/status-actions.ts`, `getFeatured` and
+  (RES-6). _Enforced (main):_ `src/domain/status-actions.ts`, `getFeatured` in `src/domain/local-notes.ts`,
   `featuredActivity` in `src/domain/activities.ts`, `accountStatuses` in `src/domain/timelines.ts`, the presenter's
   viewer flags, `notifiedSql` and `conversationMutedSql` in `src/domain/audience.ts`, `deleteStatusWithin` in
   `src/domain/inbox.ts`, migration `0018_status_pins_and_conversation_mutes`; `test/status-actions.test.ts`,
@@ -998,8 +1000,8 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
   emails included) and only the statuses its reporter may still see (R37); every admin write, and every Access repair
   below, writes its moderation log row (`admin_actions`, actor, account and client or Access identity, newest 10,000
   kept) in its own transaction, read only through Access (`GET /admin/moderation-log`). `listAdminReports`,
-  `getAdminReport`, `updateAdminReport` and `actOnReport` in `src/domain/reports.ts`, `presentAdminAccounts` in
-  `src/domain/admin-accounts.ts`, `src/domain/moderation-log.ts`, migration `0029_admin_reports`;
+  `getAdminReport`, `updateAdminReport` and `actOnReport` in `src/domain/reports.ts`, `adminAccountStream` in
+  `src/domain/admin-account-presenter.ts`, `src/domain/moderation-log.ts`, migration `0029_admin_reports`;
   `test/admin-reports.test.ts`, `test/admin-api.test.ts`, `test/policy-bounds.test.ts`, `test/migrations.test.ts`.
   Accounts (manage_users): only the OAuth admin lists every account, local and remote, with each local account's email,
   shows one, and logs the actions that change nothing (`enable`, `unsilence`, `unsensitive`), while `approve` and
@@ -1118,9 +1120,9 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
   emojis, the default images), and an unavailable account shows `moved: null` with its target not read, as
   REST::AccountSerializer does (`test/account-moved.test.ts`). _Enforced (main)._ Implementation, for accounts:
   `src/domain/remote-suspension.ts`, `actOnAccount` and `unsuspendAdminAccount` in `src/domain/admin-accounts.ts`,
-  `availableSql` in `src/domain/audience.ts`, the gate in `receive` in `src/domain/inbox.ts`, `upsertRemoteActor` in `src/domain/remote-actors.ts`,
-  `storeRemoteStatus` in `src/domain/remote-statuses.ts`, migration `0045_remote_suspension`;
-  `test/remote-suspension.test.ts`, `test/remote-suspension-deliveries.test.ts`,
+  `availableSql` in `src/domain/audience.ts`, the gate in `receive` in `src/domain/inbox.ts`, `upsertRemoteActor` in
+  `src/domain/remote-actors.ts`, `storeRemoteStatus` in `src/domain/remote-statuses.ts`, migration
+  `0045_remote_suspension`; `test/remote-suspension.test.ts`, `test/remote-suspension-deliveries.test.ts`,
   `test/remote-suspension-inbound.test.ts`, `test/policy-oracle.test.ts` and `test/policy-writes.test.ts` (against
   `available` and `sends` in `test/policy-model.ts`). For the delivery part: `targetsOf`, `sendRefused`,
   `claimDeliveries` and `confirmDelivery` in `src/domain/deliveries.ts`, `recipientsFor` in `src/domain/audience.ts`,
@@ -1817,9 +1819,9 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
   timeout, 5xx, the fetch budget) keeps the stored address for that username. The confirmation is bound to its (username, domain, actor id):
   `accounts.confirmed_username` holds the username it was made for, and an actor whose `preferredUsername` changes
   falls back to its host until it is confirmed again. A search by an alias (any address whose WebFinger names an
-  existing actor) finds the account by its actor id and never sets or replaces its address. One helper
-  (`accountDomain` in `src/domain/remote-actors.ts`) decides the stored domain for every path. _Gap:_ inbound activities do
-  not look up WebFinger, so an account first seen inbound shows its actor's host until it is resolved, and a renamed
+  existing actor) finds the account by its actor id and never sets or replaces its address. One helper (`accountDomain`
+  in `src/domain/remote-actors.ts`) decides the stored domain for every path. _Gap:_ inbound activities do not look up
+  WebFinger, so an account first seen inbound shows its actor's host until it is resolved, and a renamed
   actor keeps its host until it is resolved again. `test/inbox-canonical-address.test.ts` ("the canonical address of a
   remote account", "the domains of WebFinger subjects and addresses, parsed one way"). `createRemoteLoaders` in
   `src/federation/federation.ts`, `src/federation/resolve.ts`; `test/inbox-statuses.test.ts` ("signed by the instance
@@ -1884,12 +1886,11 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
   contact email, only for an address of one plain local part and domain (no space, `?`, `#`, `%`, `/`, `:` or second
   `@`, so it adds no header or recipient), its local part and domain percent-encoded (RFC 6068 §6.1); anything else is
   shown as text (`src/web/pages/about.tsx`, `test/web-pages.test.ts`). _Enforced (main)_ for app websites at
-  registration: `validWebsite` in `src/mastodon/oauth.ts` (_Gap: untested_). _Enforced (main)_ for the account presenter
-  and
-  local actor documents (profile URL, avatar, header, icon, image and aliases): `httpUrl` in `src/platform/http-url.ts`,
-  used by `presentAccount` in `src/domain/accounts.ts` and `localActorObject` in `src/federation/federation.ts`;
-  `test/accounts.test.ts`, `test/federation.test.ts`. _Enforced (main)_ for attachment URLs
-  in the API and in Note attachments: `presentMedia` in `src/domain/status-presenter.ts`, `noteOf` in
+  registration: `isAppWebsite` in `src/platform/stored-bounds.ts` (_Gap: untested_). _Enforced (main)_ for the account
+  presenter and local actor documents (profile URL, avatar, header, icon, image and aliases): `httpUrl` in
+  `src/platform/http-url.ts`, used by `presentAccount` in `src/domain/accounts.ts` and `localActorObject` in
+  `src/federation/federation.ts`; `test/accounts.test.ts`, `test/federation.test.ts`. _Enforced (main)_ for attachment
+  URLs in the API and in Note attachments: `presentMedia` in `src/domain/status-presenter.ts`, `noteOf` in
   `src/domain/activities.ts` (_Gap: no test with a non-http stored attachment URL_); a remote attachment's
   `remote_url` and `preview_remote_url` are the same values as its `url` and its icon. _Enforced (main)_ for edit
   history: every URL of a recorded attachment passes `presentedMediaUrl`, the rule live media pass too: as decoded,
@@ -2239,14 +2240,15 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
   VoteValidator does"), `test/polls-federation.test.ts` ("counts once, as Mastodon counts it, and is never stored as a
   status", "takes the counts … of an Update(Question) that names no new version, but not new choices").
 - **POLL-2: a poll shows no more than its status, and never who voted (VIS).** A poll is read and voted on only by
-  whoever may see its status by itself (R3), and a vote needs R27 (`mayVoteSql`: the voter blocks neither the
-  author nor its domain); otherwise 404 (403 for a voter who blocks the author, as Mastodon). Only counts and the viewer's own votes
-  are shown; `hide_totals` hides each choice's count from everyone until the poll ends, in the API and in the
-  Question (no `totalItems`). `poll_votes` is read in `polls.ts` and `poll-presenter.ts`, and in `status-rows.ts` only
-  to count the viewer's own votes of the current generation (`test-node/policy-boundary.test.ts`, R27). A remote vote
-  passes the same rule (Mastodon checks none). _Enforced (main):_ `test/polls.test.ts` ("shows a poll only to whoever may see its status",
-  "refuses a voter who blocks the author (R27)", "hides the counts … from everyone"),
-  `test/polls-federation.test.ts` ("is refused from an account the author blocks (R27)").
+  whoever may see its status by itself (R3), and a vote needs R27 (`mayVoteSql`: the voter blocks neither the author nor
+  its domain); otherwise 404 (403 for a voter who blocks the author, as Mastodon). Only counts and the viewer's own
+  votes are shown; `hide_totals` hides each choice's count from everyone until the poll ends, in the API and in the
+  Question (no `totalItems`). `poll_votes` is read, besides the policy module, in `polls.ts` and `poll-presenter.ts`,
+  and in `status-rows.ts` only to count the viewer's own votes of the current generation
+  (`test-node/policy-boundary.test.ts`, R27). A remote vote passes the same rule (Mastodon checks none). _Enforced
+  (main):_ `test/polls.test.ts` ("shows a poll only to whoever may see its status", "refuses a voter who blocks the
+  author (R27)", "hides the counts … from everyone"), `test/polls-federation.test.ts` ("is refused from an account the
+  author blocks (R27)").
   Public pages: _Enforced (main):_ the status page, the feeds (profile tabs, hashtag page) and the embed show a post's
   poll as the presenter shows it to an anonymous viewer: each choice's share only when every choice's count is shown,
   so none while `hide_totals` holds, and never a vote form. `src/web/view/poll.ts`; `test/web-status-content.test.ts`
@@ -2842,16 +2844,17 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
   signs in with it again. Authorized apps need no cap: a code is issued only on a local user's consent behind a verified
   Access assertion (AUTH-4), so each is one user's action, and no request without a user marks an app; an app token
   (client_credentials) never does, since anyone can get one without a user and the budget could then be filled for
-  good. The budget's count, removals and sweep walk the partial index `oauth_clients_pending` and remove each app by
-  its key, so they read no authorized app (`test/apps-budget.test.ts` ("walks the pending apps by their partial index
-  and marks an app by its key")). The cron removes unused never-authorized apps after a day (Kopje's own removal, which Mastodon 4.5.11 does not make:
-  [mastodon-deviations.md](mastodon-deviations.md), Posting), and expired codes and web sessions, 500 of each per run.
-  `registerApp` and `sweepOAuth` in `src/domain/oauth.ts`, `src/mastodon/oauth.ts`; `test/apps-budget.test.ts`.
-  Avatar and header uploads, from `update_credentials` and the settings page alike, go through the media budgets below,
-  one reservation and three transformations each, at most 8 MB each. Unlocking an account: _Enforced (main):_ the update starts a cursor job (`local_accounts.accept_requests_after`)
-  instead of accepting in the request; each job round authorizes at most 20 requests, each in its own transaction
-  through the single authorize path (its delivery admission and recount included), and every step advances or clears the
-  cursor, also when its authorization throws (RES-5) (`src/domain/unlock-accepts.ts`; `test/unlock-accepts.test.ts`: 250
+  good. The budget's count, removals and sweep walk the partial index `oauth_clients_pending` and remove each app by its
+  key, so they read no authorized app (`test/apps-budget.test.ts` ("walks the pending apps by their partial index and
+  marks an app by its key")). The cron removes unused never-authorized apps after a day (Kopje's own removal, which
+  Mastodon 4.5.11 does not make: [mastodon-deviations.md](mastodon-deviations.md), Posting), and expired codes and web
+  sessions, 500 of each per run. `registerApp` and `sweepOAuth` in `src/domain/oauth.ts`, `src/mastodon/oauth.ts`;
+  `test/apps-budget.test.ts`. Avatar and header uploads, from `update_credentials` and the settings page alike, go
+  through the media budgets below, one reservation and three transformations each, at most 8 MB each. Unlocking an
+  account: _Enforced (main):_ the update starts a cursor job (`local_accounts.accept_requests_after`) instead of
+  accepting in the request; each job round authorizes at most 20 requests, each in its own transaction through the
+  single authorize path (its delivery admission and recount included), and every step advances or clears the cursor,
+  also when its authorization throws (RES-5) (`src/domain/unlock-accepts.ts`; `test/unlock-accepts.test.ts`: 250
   requests in rounds of at most 20). Profile link verification: _Enforced (main):_ a save only arms a check
   (`local_accounts.links_due_at`); the cron runs one round per tick, which claims one account (at most one claim per
   account per 5 minutes, the claim's hold, which a save during it waits out) and reads at most 64 due rows to find it
@@ -3311,7 +3314,7 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
   account search matches the exact address (always), at most 1,000 username-prefix candidates, the 5,000 newest
   accounts and the local ones, or with `following` the exact address and up to 5,000 accepted follows through a
   partial index (pending follows are never read)
-  (`src/domain/search.ts`, `findAccounts` in `src/domain/accounts.ts`); `test/search.test.ts` ("filters before
+  (`src/domain/search.ts`, `searchAccountIds` in `src/domain/accounts.ts`); `test/search.test.ts` ("filters before
   LIMIT"), `test/search-edge.test.ts` (rows read stay flat as favourites, bookmarks, accounts and tagged statuses grow
   fourfold, pending follows included; `max_id` reaches past each window; an exact address outside every window is
   found). _Enforced (main):_ the peers list seeks each next domain on the (domain,
@@ -3382,12 +3385,12 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
   cursor through the partial index `quotes_accepted` (migration `0036_quotes_list`), at most `limit` + 1: the first
   `limit` are the window, and the one past them only tells a public page's pager that a candidate lies there (never
   shown, never a cursor). It applies the rule to the window alone, whatever the count of quotes in any state; when the
-  rule hides the window, the page is empty and its next link moves on by the window, so hidden quotes cost a request
-  one window (`test/policy-bounds.test.ts` ("the quotes list reads a window")). A client that stops at an empty page sees fewer
-  quotes than exist, as on Mastodon (accepted). The stamp endpoint is one read by its id's unique index; a request's
-  cap reads at most 100 rows of its actor; a revoke's `Reject`s read at most 100 rows of the quoting author by one
-  seek of `quote_requests_instrument`, whatever other actors' requests name the same instrument; quoters' reach reads
-  the accepted quotes of the status through `quotes_accepted`, as its boosts are read.
+  rule hides the window, the page is empty and its next link moves on by the window, so hidden quotes cost a request one
+  window (`test/policy-bounds.test.ts` ("the quotes list reads a window")). A client that stops at an empty page sees
+  fewer quotes than exist, as on Mastodon (accepted). The stamp endpoint is one read by its id's unique index; a
+  request's cap reads at most 100 rows of its actor; a revoke's `Reject`s read at most 100 rows of the quoting author by
+  one seek of `quote_requests_instrument`, whatever other actors' requests name the same instrument; quoters' reach
+  reads the accepted quotes of the status through `quotes_accepted`, as its boosts are read.
   _Enforced (main)_ for inbound `Flag`s (R34): at most `MAX_FLAG_OBJECTS` (101) object entries are read, each by key;
   one remote actor may have at most `MAX_UNRESOLVED_REMOTE_REPORTS` (100) unresolved reports, counted by one bounded
   range of `reports_account_state` and checked against the Flag's new reports before any is written (per actor, not per

@@ -139,10 +139,10 @@ intent (a key a dump taken before that migration holds, or anything else) starts
 written before may get its retraction twice.
 
 Authorized apps (migration `0086_authorized_apps`): `oauth_clients.authorized` is the integer `1` for an app a user
-has authorized (a code was issued for it) and `0` otherwise (text or a real reading as one of them is stored as it, by
-the column's affinity); anything else fails with `oauth_client_authorized`. A dump carries it
-as it is, so a restored Store keeps every authorized app out of the registration budget (RES-6) whether or not it
-holds tokens. A dump taken before 0086 has no such column: it restores into a Store at its own migrations, whose
+has authorized (a code was issued for it) and `0` otherwise. Text or a real that reads as one of them is stored as
+that integer by the column's affinity; anything else fails with `oauth_client_authorized`. A dump carries it as it
+is, so a restored Store keeps every authorized app out of the registration budget (RES-6) whether or not it holds
+tokens. A dump taken before 0086 has no such column: it restores into a Store at its own migrations, whose
 upgrade marks every app that holds a user's code or token. A file built from legacy data writes `0`: legacy clients
 carry no tokens, so they are marked when a user signs in through them again.
 
