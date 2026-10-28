@@ -8,6 +8,7 @@ import { migratedStore } from './helpers'
 import { pathOf } from './media-helpers'
 import { community, post } from './status-helpers'
 import {
+	consentPageHeaders,
 	EMBED_PAGE_HEADERS,
 	ERROR_PAGE_HEADERS,
 	HANDOFF_PAGE_HEADERS,
@@ -52,6 +53,9 @@ describe('the browser job headers', () => {
 	it('equal every header the Worker sends with the OAuth pages and a browser’s error pages', async () => {
 		const h = await community(['alice'])
 		const oob = await registerApp(h, { redirectUri: 'urn:ietf:wg:oauth:2.0:oob' })
+		// The fixtures' consent pages: a web app's redirect URI, and the native app's of the custom-scheme case.
+		const web = await registerApp(h, { redirectUri: 'https://client.example/callback' })
+		const native = await registerApp(h, { redirectUri: 'kopjeclient://callback' })
 		const accept = { accept: 'text/html' }
 		const failing = (error: Error) =>
 			harness(new Proxy({} as StoreStub, { get: () => () => Promise.reject(error) })).request('/about', {
@@ -59,7 +63,8 @@ describe('the browser job headers', () => {
 			})
 		const logged = vi.spyOn(console, 'error').mockImplementation(() => {})
 		const answers: [string, Response, Readonly<Record<string, string>>, number][] = [
-			['consent', await consentPage(h, h.app), PRIVATE_PAGE_HEADERS, 200],
+			['consent', await consentPage(h, web), consentPageHeaders('https://client.example'), 200],
+			['consent (custom scheme)', await consentPage(h, native), consentPageHeaders('kopjeclient:'), 200],
 			['code', await decide(h, oob, 'approve'), PRIVATE_PAGE_HEADERS, 200],
 			['404', await h.request('/nope', { headers: accept }), PUBLIC_PAGE_HEADERS, 404],
 			['500', await failing(new Error('boom')), ERROR_PAGE_HEADERS, 500],

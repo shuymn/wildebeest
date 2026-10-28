@@ -1,6 +1,6 @@
 import { type Context, Hono } from 'hono'
 
-import { PRIVATE_HEADERS } from './web-headers'
+import { consentHeaders, PRIVATE_HEADERS } from './web-headers'
 import { type Client, type IssueCodeResult, type LoginAccount, OOB_REDIRECT_URI } from '../domain/oauth'
 import { type ApiDeps, storeCall } from '../mastodon/context'
 import { maintenanceError } from '../mastodon/errors'
@@ -21,7 +21,8 @@ import { STRINGS } from '../web/strings'
 // An identity without an account but with an invitation sees the consent page with the invited username, and its
 // approval makes the account (AUTH-9, domain/account-invitations.ts); the GET writes nothing (WEB-1).
 // `lang` (Mastodon's page locale) has no effect: the page is English only. The pages are the private pages' (WEB-2,
-// PRIVATE_HEADERS) without the site's chrome, which would add a Store read to the flow.
+// PRIVATE_HEADERS) without the site's chrome, which would add a Store read to the flow; the consent page's form-action
+// also allows the one redirect URI the request verified (consentHeaders).
 
 export type AuthorizeDeps = ApiDeps & { fetch: typeof fetch; keygen: KeyGen }
 
@@ -33,9 +34,10 @@ const MAX_STATE = 2000
 function page(
 	c: Context,
 	status: 200 | 400 | 403 | 503,
-	body: Parameters<Context['html']>[0]
+	body: Parameters<Context['html']>[0],
+	headers: Record<string, string> = PRIVATE_HEADERS
 ): Response | Promise<Response> {
-	return c.html(body, status, PRIVATE_HEADERS)
+	return c.html(body, status, headers)
 }
 
 function message(c: Context, status: 400 | 403 | 503, title: string, text: string): Response | Promise<Response> {
@@ -292,7 +294,8 @@ export function authorizeRoutes(deps: AuthorizeDeps): Hono<AuthorizeEnv> {
 				scopes={request.scopes}
 				fields={fields}
 				firstParty={firstParty}
-			/>
+			/>,
+			consentHeaders(request.redirectUri)
 		)
 	})
 

@@ -1,3 +1,5 @@
+import { OOB_REDIRECT_URI } from '../domain/oauth'
+import { REFUSED_REDIRECT_SCHEMES } from '../mastodon/oauth'
 import { L1_SCRIPT, STYLESHEET } from '../web/asset-versions'
 import { EMBED_SCRIPT } from '../web/pages/embed'
 
@@ -12,18 +14,24 @@ import { EMBED_SCRIPT } from '../web/pages/embed'
 //     Early Hints fetches it while the page is made.
 
 // The directives every policy shares, in their order: nothing by default, a page's one script (if any) right after
-// that, then the stylesheet, images, media where the page plays it, same-origin forms and no <base>. Media plays inline
-// only on the public pages and the embed, from this origin or another server's https URL, as their images load; the
-// private pages' policy has no media-src.
-const csp = (script: string | null, media: boolean, ...rest: string[]) =>
+// that, then the stylesheet, images, media where the page plays it, the forms' targets (same-origin but on the consent
+// page) and no <base>. Media plays inline only on the public pages and the embed, from this origin or another server's
+// https URL, as their images load; the private pages' policy has no media-src.
+const SAME_ORIGIN_FORMS = "form-action 'self'"
+
+const cspWith = (forms: string | null, script: string | null, media: boolean, ...rest: string[]) =>
 	[
 		"default-src 'none'",
 		...(script === null ? [] : [`script-src ${script}`]),
 		"style-src 'self'; img-src 'self' https:",
 		...(media ? ["media-src 'self' https:"] : []),
-		"form-action 'self'; base-uri 'none'",
+		...(forms === null ? [] : [forms]),
+		"base-uri 'none'",
 		...rest,
 	].join('; ')
+
+const csp = (script: string | null, media: boolean, ...rest: string[]) =>
+	cspWith(SAME_ORIGIN_FORMS, script, media, ...rest)
 
 const NO_FRAMING = "frame-ancestors 'none'"
 
@@ -88,4 +96,37 @@ export const PRIVATE_HEADERS = {
 	'referrer-policy': 'same-origin',
 	'cache-control': 'no-store',
 	link: PRELOAD,
+}
+
+// CSP3's host-source with a scheme, a host of DNS labels (no wildcard, no IP-literal) and an optional port, and its
+// scheme-source. Nothing else is ever written into the policy, so no value can end or add a directive or source.
+const HOST_SOURCE = /^https?:\/\/[a-z0-9-]+(?:\.[a-z0-9-]+)*(?::[0-9]{1,5})?$/
+const SCHEME_SOURCE = /^[a-z][a-z0-9+.-]*:$/
+
+// The consent page's form-action (WEB-2). Browsers check form-action on each redirect of a form submission too
+// (CSP3, form-action), and the decision's answer is a 302 to the redirect URI the request verified, so the page also
+// allows that one target: its origin for an http(s) URI (CSP3 matches no path after a redirect) or its scheme for a
+// native app's. The out-of-band URI and a URI no browser follows a redirect to keep 'self' alone. A verified URI that
+// no source can name (an IPv6 literal, a host CSP cannot spell) drops form-action from this one answer, as Mastodon
+// drops it from its authorization pages (OAuth::AuthorizationsController): the page runs no script and its one form
+// posts to this origin.
+function consentFormAction(redirectUri: string): string | null {
+	if (redirectUri === OOB_REDIRECT_URI || !URL.canParse(redirectUri)) {
+		return SAME_ORIGIN_FORMS
+	}
+	const url = new URL(redirectUri)
+	if (REFUSED_REDIRECT_SCHEMES.includes(url.protocol)) {
+		return SAME_ORIGIN_FORMS
+	}
+	const http = url.protocol === 'https:' || url.protocol === 'http:'
+	const source = http ? url.origin : url.protocol
+	return (http ? HOST_SOURCE : SCHEME_SOURCE).test(source) ? `${SAME_ORIGIN_FORMS} ${source}` : null
+}
+
+// The consent page: the private pages' headers, its form-action allowing the verified redirect URI.
+export function consentHeaders(redirectUri: string) {
+	return {
+		...PRIVATE_HEADERS,
+		'content-security-policy': cspWith(consentFormAction(redirectUri), null, false, NO_FRAMING),
+	}
 }

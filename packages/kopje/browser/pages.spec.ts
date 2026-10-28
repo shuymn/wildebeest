@@ -5,6 +5,7 @@ import { expect, type Locator, type Page, test } from '@playwright/test'
 
 import {
 	ASSET_HEADERS,
+	consentPageHeaders,
 	ASSET_TYPES,
 	EMBED_PAGE_HEADERS,
 	ERROR_PAGE_HEADERS,
@@ -46,6 +47,7 @@ const PAGE_HEADERS = {
 	private: PRIVATE_PAGE_HEADERS,
 	embed: EMBED_PAGE_HEADERS,
 	handoff: HANDOFF_PAGE_HEADERS,
+	consent: consentPageHeaders('https://client.example'),
 	error: ERROR_PAGE_HEADERS,
 	unavailable: UNAVAILABLE_PAGE_HEADERS,
 }
@@ -2822,5 +2824,54 @@ for (const [decision, key] of [
 			state: 's',
 			decision,
 		})
+	})
+}
+
+// The decision's answer is a 302 to the app's redirect URI, and Chromium checks form-action on a form submission's
+// redirects too (WEB-2). Approving on the consent page follows the redirect to a web app's callback on its origin, and
+// to a native app's custom scheme, with no CSP violation (afterEach). The page is served with the headers the Worker
+// sends for that app's redirect URI (test/browser-headers.test.ts); the hop is seen through CDP, since Playwright
+// routes no request a redirect makes.
+for (const [app, target, location] of [
+	['a web app’s origin', 'https://client.example', 'https://client.example/callback?code=c&state=s'],
+	['a native app’s custom scheme', 'kopjeclient:', 'kopjeclient://callback?code=c&state=s'],
+] as const) {
+	test(`consent: approving follows the redirect to ${app}`, async ({ page }) => {
+		const fixture = pageNamed('consent')
+		await open(page, fixture, (p) =>
+			p.route(`${ORIGIN}/oauth/authorize`, (route) =>
+				route.request().method() === 'POST'
+					? route.fulfill({ status: 302, headers: { location } })
+					: route.fulfill({
+							status: fixture.status,
+							headers: { ...consentPageHeaders(target) },
+							body: readFileSync(new URL(`${fixture.name}.html`, PAGES_DIR)),
+						})
+			)
+		)
+		// The URL each redirect led to, once its request has ended (in a network error: nothing serves it).
+		const followed: string[] = []
+		const redirected = new Map<string, string>()
+		const ended = ({ requestId }: { requestId: string }) => {
+			const url = redirected.get(requestId)
+			if (url !== undefined) {
+				followed.push(url)
+			}
+		}
+		const cdp = await page.context().newCDPSession(page)
+		cdp.on('Network.requestWillBeSent', (event) => {
+			if (event.redirectResponse !== undefined) {
+				redirected.set(event.requestId, event.request.url)
+			}
+		})
+		cdp.on('Network.loadingFailed', ended)
+		cdp.on('Network.loadingFinished', ended)
+		await cdp.send('Network.enable')
+		// A web app's callback replaces the page (with the network error); a custom scheme leaves it in place.
+		const left = target.endsWith(':') ? null : page.waitForEvent('framenavigated')
+		await page.locator('button[value="approve"]').click()
+		await expect.poll(() => followed).toEqual([location])
+		await left
+		await page.waitForLoadState()
 	})
 }
