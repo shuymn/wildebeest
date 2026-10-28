@@ -1,4 +1,4 @@
-# Kopje's test coverage, merged from the four test shards (the coverage job in .github/workflows/ci.yml). The report
+# Kopje's test coverage, merged from the four coverage-test shards (.github/workflows/ci.yml). The report
 # kept from main is what a pull request's comment compares with.
 coverage:
   if: true

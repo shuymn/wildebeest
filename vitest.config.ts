@@ -12,13 +12,14 @@ export default defineConfig({
       "packages/kopje/vitest.streaming.config.ts",
       "packages/kopje/vitest.node.config.ts",
     ],
-    // `--coverage` (CI's test shards) writes coverage/lcov.info, with paths from the repository root, for octocov
-    // (.octocov.yml). V8 coverage reaches workerd through @cloudflare/vitest-plugin's inspector session and adds a
-    // few percent to a shard's CPU time; istanbul instruments every module in Vite's transform, which slowed a shard
-    // more. Every file the globs match is reported, one no test loads as uncovered.
+    // `--coverage` (CI's coverage-test shards) writes coverage/lcov.info, with paths from the repository root, for
+    // octocov (.octocov.yml), also when a test failed. V8 coverage reaches workerd through @cloudflare/vitest-plugin's
+    // inspector session and counts blocks in every module the isolate runs: the globs choose what is reported, not
+    // what is slowed. Every file they match is reported, one no test loads as uncovered.
     coverage: {
       provider: "v8",
       reporter: ["lcovonly"],
+      reportOnFailure: true,
       include: [...covered, ...covered.map((glob) => `packages/kopje/${glob}`)],
       exclude: ["**/*.d.ts"],
     },
