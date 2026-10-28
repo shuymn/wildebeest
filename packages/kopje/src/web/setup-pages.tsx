@@ -7,7 +7,7 @@ import { Layout } from "./components/layout";
 // The /setup wizard's pages, in the web UI's style: server-rendered, no script, every value escaped by hono/jsx.
 // The Cloudflare API token field is never filled in (SETUP-4): a page never contains a token.
 
-export type CheckStatus = "pass" | "warn" | "fail";
+type CheckStatus = "pass" | "warn" | "fail";
 
 export type CheckResult = { status: CheckStatus; text: string; hint?: string };
 

@@ -32,6 +32,7 @@ export const DNS_CHECK_SUBREQUESTS = 2;
 export const HOP_SUBREQUESTS = DNS_CHECK_SUBREQUESTS + 1;
 export const WEB_PAGE_MAX_SUBREQUESTS = HOP_SUBREQUESTS * (WEB_PAGE_MAX_REDIRECTS + 1);
 export const WEB_PAGE_MAX_STORE_CALLS = WEB_PAGE_MAX_REDIRECTS + 1;
+/** @alias */
 export const REDIRECT_PROBE_MAX_SUBREQUESTS = HOP_SUBREQUESTS;
 export const REDIRECT_PROBE_MAX_STORE_CALLS = 1;
 // A GET and its HEAD probe together, for a caller's load-time budget check (as federation/collections.ts NETWORK_CAPS).
@@ -75,7 +76,7 @@ export type WebPageOptions = {
 
 export type RedirectProbeOptions = Pick<WebPageOptions, "timeoutMs" | "deadline" | "budget" | "signal">;
 
-export type WebPageCost = { subrequests: number; storeCalls: number; hops: number; bytes: number };
+type WebPageCost = { subrequests: number; storeCalls: number; hops: number; bytes: number };
 
 export type WebPageRefusal =
   | "invalid-url"
@@ -87,7 +88,7 @@ export type WebPageRefusal =
   | "bad-location"
   | "unexpected-redirect";
 
-export type WebPageFailureKind =
+type WebPageFailureKind =
   | "refused"
   | "blocked"
   | "redirects"

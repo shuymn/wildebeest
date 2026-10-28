@@ -20,7 +20,7 @@ const root = fileURLToPath(new URL("..", import.meta.url));
 const wrangler = join(dirname(createRequire(import.meta.url).resolve("wrangler/package.json")), "bin", "wrangler.js");
 
 export const MAINTENANCE_WORKER_LIMIT_KIB = 32;
-export const MAINTENANCE_RENDER_LIMIT_KIB = 1024;
+const MAINTENANCE_RENDER_LIMIT_KIB = 1024;
 export const MAINTENANCE_FILES = ["maintenance-worker.js", "maintenance-render.js"];
 
 /** @param {string} text */

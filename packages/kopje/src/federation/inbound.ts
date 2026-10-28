@@ -185,7 +185,7 @@ export function hasActivityStreamsContext(context: unknown): boolean {
 // The envelope every activity must have before anything reads it: the ActivityStreams context, a string id and type,
 // and an actor with an http(s) origin. Shared by the inbox and the cutover rollback's drain, so neither hands on an
 // activity the other would ignore.
-export function activityEnvelope(
+function activityEnvelope(
   json: Json,
 ): { ok: true; actor: string; id: string; type: string } | { ok: false; reason: "no-context" | "incomplete" } {
   if (!hasActivityStreamsContext(json["@context"])) {

@@ -44,7 +44,7 @@ import {
 
 type Bounded = { table: string; column: string; helpers: readonly string[] };
 
-export const BOUNDED: readonly Bounded[] = [
+const BOUNDED: readonly Bounded[] = [
   { table: "accounts", column: "username", helpers: ["usernameSql"] },
   { table: "accounts", column: "uri", helpers: ["actorUriSql"] },
   { table: "statuses", column: "uri", helpers: ["statusUriSql"] },
@@ -190,7 +190,7 @@ function readsOf(list: readonly string[], tables: Map<string, string>): string[]
 
 const WRITES = new Set(["INSERT", "UPDATE", "DELETE", "REPLACE"]);
 
-export function boundedReads(sql: string): string[] {
+function boundedReads(sql: string): string[] {
   const list = tokens(sql);
   const found: string[] = [];
   const write = list.some((t, i) => WRITES.has(t.toUpperCase()) && list[i - 1]?.toUpperCase() !== "DO");
@@ -418,7 +418,7 @@ const SAFE_INTERPOLATIONS = new Set([
 const SQL_TEXT = /\b(?:SELECT|FROM|WHERE|RETURNING|INSERT|UPDATE)\b/i;
 
 // The findings of the file header; misuses are helper calls given a column the helper does not bound.
-export function scan(all: readonly Source[]): { reads: Finding[]; misuses: Finding[] } {
+function scan(all: readonly Source[]): { reads: Finding[]; misuses: Finding[] } {
   const local = new Map<string, [string, Literal]>();
   const global = new Map<string, [string, Literal] | null>();
   for (const source of all) {

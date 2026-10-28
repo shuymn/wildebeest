@@ -8,7 +8,7 @@ import { type Link, linkTo } from "./link";
 // file is no image, so a preview equal to the url is none. `alt` is its description, or '' when it has none (the page
 // shows no marker for that). Sizes come from the small variant when it has them. `link` opens the file itself (through
 // linkTo: another host's is marked).
-export type MediaKind = "image" | "video" | "gifv" | "audio" | "unknown";
+type MediaKind = "image" | "video" | "gifv" | "audio" | "unknown";
 
 export type MediaView = {
   kind: MediaKind;

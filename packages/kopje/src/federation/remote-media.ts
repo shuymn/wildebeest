@@ -40,12 +40,12 @@ import { WEB_MEDIA_TIMEOUT_MS, WEB_PAGE_MAX_STORE_CALLS, WEB_PAGE_MAX_SUBREQUEST
 //   - a late Store call counts as given up (inTime); its effects are fenced by claim and generation.
 // A put given up still holds its buffer: no claim starts while one runs (`running`).
 
-export const ROUND_MS = 240_000;
+const ROUND_MS = 240_000;
 export const MAINTENANCE_MS = 45_000;
-export const FETCH_END_MS = 220_000;
+const FETCH_END_MS = 220_000;
 export const STORE_CALL_MS = 5_000;
 export const R2_DELETE_MS = 10_000;
-export const R2_HEAD_MS = 5_000;
+const R2_HEAD_MS = 5_000;
 export const PUT_MS = 15_000;
 export const LANE0_CONCURRENCY = 3;
 // Lane 1 (attachments' files: a buffered image up to 16 MiB with its still, or a streamed video or audio up to 40 MiB)
@@ -53,15 +53,15 @@ export const LANE0_CONCURRENCY = 3;
 export const LANE1_CONCURRENCY = 1;
 const CLAIMS = LANE0_CLAIMS + LANE1_CLAIMS;
 // A due orphan sweep's whole budget: its list, its lookup, its delete and its checkpoint.
-export const SWEEP_MS = R2_DELETE_MS + STORE_CALL_MS + R2_DELETE_MS + STORE_CALL_MS;
+const SWEEP_MS = R2_DELETE_MS + STORE_CALL_MS + R2_DELETE_MS + STORE_CALL_MS;
 // A claim's hold outlasts twice the round that holds it.
 if (REMOTE_MEDIA_HOLD_MS < 2 * ROUND_MS) {
   throw new Error("REMOTE_MEDIA_HOLD_MS must be at least twice a remote media round");
 }
 // The sink's ceilings over a round's claims: each file at most WEB_PAGE_MAX_SUBREQUESTS (4 hops of 2 DNS lookups and a
 // request) and WEB_PAGE_MAX_STORE_CALLS policy reads before DNS (and as many after, which the sink does not charge).
-export const REMOTE_MEDIA_SUBREQUESTS = CLAIMS * WEB_PAGE_MAX_SUBREQUESTS;
-export const REMOTE_MEDIA_POLICY_CALLS = CLAIMS * WEB_PAGE_MAX_STORE_CALLS;
+const REMOTE_MEDIA_SUBREQUESTS = CLAIMS * WEB_PAGE_MAX_SUBREQUESTS;
+const REMOTE_MEDIA_POLICY_CALLS = CLAIMS * WEB_PAGE_MAX_STORE_CALLS;
 // The round's own Store calls, derived from every call it makes: the maintenance, the deletion's confirmation, the
 // validation's record, the orphan sweep's lookup and checkpoint, the claim, and per claim two admissions (before the
 // full put and before the still put) and one record or release.

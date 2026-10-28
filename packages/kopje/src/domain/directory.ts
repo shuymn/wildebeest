@@ -32,7 +32,7 @@ export const DIRECTORY_MAX_LIMIT = 80;
 export const MAX_DIRECTORY_OFFSET = 400;
 export const DIRECTORY_WINDOW = 2;
 
-export type DirectoryOrder = "active" | "new";
+type DirectoryOrder = "active" | "new";
 
 export type DirectoryInput = { order: DirectoryOrder; local: boolean; offset: number; limit: number; present: Present };
 

@@ -20,7 +20,7 @@ function errorOf(run: () => unknown): ExportError {
     }
     throw error;
   }
-  throw new Error("expected a LegacyLoadError");
+  throw new Error("expected an ExportError");
 }
 
 describe("legacy migrations copy", () => {

@@ -783,7 +783,7 @@ export type MediaType =
 
 export type MediaRefusal = "type" | "heif" | "quicktime" | "ogg" | "matroska" | "moov" | "tracks" | "malformed";
 
-export type RecognizedMedia = { ok: true; type: MediaType; category: "video" | "audio" };
+type RecognizedMedia = { ok: true; type: MediaType; category: "video" | "audio" };
 
 type Recognition = RecognizedMedia | { ok: false; refusal: MediaRefusal };
 

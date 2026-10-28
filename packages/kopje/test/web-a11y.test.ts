@@ -38,7 +38,7 @@ const FOCUSABLE = new Set(["a", "button", "input", "select", "textarea", "summar
 const UNLABELLED_INPUTS = new Set(["hidden", "submit", "button", "reset"]);
 const TAB_ROLES = new Set(["tab", "tablist", "tabpanel"]);
 
-export function a11yProblems(html: string, { embed = false }: { embed?: boolean | undefined } = {}): string[] {
+function a11yProblems(html: string, { embed = false }: { embed?: boolean | undefined } = {}): string[] {
   const doc: Document = parseHtml(html);
   const problems: string[] = [];
   const all = elements(doc);

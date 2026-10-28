@@ -343,8 +343,8 @@ export const updateEmoji = writeOperation<
   return { ok: true, emoji: emojiById(db, id)! };
 });
 
-export const ADMIN_EMOJI_PAGE = 100;
-export const MAX_ADMIN_EMOJI_PAGE = 200;
+const ADMIN_EMOJI_PAGE = 100;
+const MAX_ADMIN_EMOJI_PAGE = 200;
 
 // GET /admin/emojis: every local emoji, enabled and disabled, in id order (oldest first), a primary-key range after
 // `after`; next continues it while a page is full.

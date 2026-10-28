@@ -92,9 +92,9 @@ import { TREND_LANGUAGES } from "./trend-languages";
 // them (filters.ts); a boost and its original carry the same. Nothing is left out for a filter: the client decides by
 // context.
 
-export type MediaSize = { width: number; height: number; size: string; aspect: number };
+type MediaSize = { width: number; height: number; size: string; aspect: number };
 
-export type MediaMeta = { original?: MediaSize; small?: MediaSize; focus?: { x: number; y: number } };
+type MediaMeta = { original?: MediaSize; small?: MediaSize; focus?: { x: number; y: number } };
 
 export type MediaAttachment = {
   id: string;
@@ -109,9 +109,9 @@ export type MediaAttachment = {
   blurhash: string | null;
 };
 
-export type Mention = { id: string; username: string; url: string; acct: string };
+type Mention = { id: string; username: string; url: string; acct: string };
 
-export type Tag = { name: string; url: string };
+type Tag = { name: string; url: string };
 
 // Mastodon's Quote, with the quoted status embedded, and ShallowQuote, with its id.
 export type Quote = { state: ApiQuoteState; quoted_status: Status | null };
@@ -121,7 +121,7 @@ export type ShallowQuote = { state: ApiQuoteState; quoted_status_id: string | nu
 // Mastodon's QuoteApproval (REST::StatusSerializer#quote_approval): the flags of the status's automatic and manual
 // policy, and what the policy answers the viewer. Ice Cubes decodes all three fields, and current_user only as one of
 // these four values, or drops the whole status.
-export type QuoteApproval = {
+type QuoteApproval = {
   automatic: QuotePolicyFlag[];
   manual: QuotePolicyFlag[];
   current_user: "automatic" | "manual" | "unknown" | "denied";
@@ -163,7 +163,7 @@ export type PreviewCard = {
 export const CARD_JSON_MAX = 9_899;
 
 // Mastodon's REST::StatusSerializer application (ApplicationSerializer): the app a local status was posted through.
-export type StatusApplication = { name: string; website: string | null };
+type StatusApplication = { name: string; website: string | null };
 
 export type Status = {
   id: string;
@@ -915,7 +915,7 @@ export type CardRow = {
 
 // A card image's URL as presented (HTML-3): the served file of a stored token (media-files.ts mediaUrl) on the
 // instance origin, through presentedMediaUrl, within CARD_IMAGE_URL_BYTES and that plus 2 as a JSON string; else null.
-export function presentedCardImageUrl(origin: string, token: unknown): string | null {
+function presentedCardImageUrl(origin: string, token: unknown): string | null {
   if (typeof token !== "string" || !FILE_TOKEN.test(token)) {
     return null;
   }
@@ -932,8 +932,7 @@ export function presentedCardImageUrl(origin: string, token: unknown): string | 
 // stored-bounds.ts embedSrcAttribute), a width or height omitted when the iframe had none, allowtransparency dropped
 // and the fixed sandbox added. The one html a card presents (HTML-3): an oEmbed video's iframe is rendered from the
 // same template, never from its markup.
-export const CARD_IFRAME_SANDBOX =
-  "allow-scripts allow-same-origin allow-popups allow-popups-to-escape-sandbox allow-forms";
+const CARD_IFRAME_SANDBOX = "allow-scripts allow-same-origin allow-popups allow-popups-to-escape-sandbox allow-forms";
 export function cardIframe(src: string, width: number | null, height: number | null): string {
   const size = `${width === null ? "" : ` width="${width}"`}${height === null ? "" : ` height="${height}"`}`;
   return `<iframe src="${embedSrcAttribute(src)}"${size} allowfullscreen="true" scrolling="no" frameborder="0" sandbox="${CARD_IFRAME_SANDBOX}"></iframe>`;

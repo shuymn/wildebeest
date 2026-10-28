@@ -1368,7 +1368,7 @@ function requestParams(route, checkout, cache, siblingPathParams) {
 // AccountSerializer::FieldSerializer is an entity of its own), after its superclass's fields when that is a serializer
 // of app/serializers. `<Class>#<method>` is the hash a method returns, read from its literal keys. What cannot be read
 // with certainty is `unresolved`.
-export const ENTITIES = [
+const ENTITIES = [
   "REST::AccountSerializer",
   "REST::AccountSerializer::FieldSerializer",
   "REST::CredentialAccountSerializer",

@@ -62,7 +62,7 @@ export const MAX_MENTION_REFS = 64;
 export const MAX_ANNOUNCEMENT_MENTIONS = 16;
 // Accounts of one handle (domain and lowercased username) a reference judges at most, and the longest domain looked up
 // (an actor id of ACTOR_URI_LIMIT bytes, less "https://").
-export const MENTION_CANDIDATES = 8;
+const MENTION_CANDIDATES = 8;
 export const MENTION_DOMAIN_BYTES = ACTOR_URI_LIMIT - "https://".length;
 // Row heap derived from stored column caps (RES-3), verified by test/announcement-bounds.test.ts.
 const ROW = (values: number, units: number) => ROW_OBJECT_BYTES + VALUE_BYTES * values + 2 * units;
@@ -80,12 +80,12 @@ export const MAX_ANNOUNCEMENT_TAGS = 16;
 // reads a status's).
 const ENCODER = new TextEncoder();
 
-export type AnnouncementMention = { id: string; username: string; url: string; acct: string };
+type AnnouncementMention = { id: string; username: string; url: string; acct: string };
 
 // REST::ReactionSerializer: `me` only with a viewer, `url` and `static_url` only for a custom emoji.
-export type Reaction = { name: string; count: number; me?: boolean; url?: string; static_url?: string };
+type Reaction = { name: string; count: number; me?: boolean; url?: string; static_url?: string };
 
-export type AnnouncementTag = { name: string; url: string };
+type AnnouncementTag = { name: string; url: string };
 
 // REST::AnnouncementSerializer (app/serializers/rest/announcement_serializer.rb), in its key order; `read` only with a
 // viewer. `statuses` is always empty (MD-4).
@@ -897,8 +897,8 @@ export const deleteAnnouncement = writeOperation<
   return { ok: true, deleted: id };
 });
 
-export const ADMIN_ANNOUNCEMENT_PAGE = 20;
-export const MAX_ADMIN_ANNOUNCEMENT_PAGE = 50;
+const ADMIN_ANNOUNCEMENT_PAGE = 20;
+const MAX_ADMIN_ANNOUNCEMENT_PAGE = 50;
 
 // GET /admin/announcements: every announcement, published or not, newest first by id, a primary-key range below
 // `before` (none: below ':', which sorts after every digit); next continues it while a page is full.

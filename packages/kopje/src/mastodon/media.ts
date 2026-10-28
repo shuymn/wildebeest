@@ -189,11 +189,11 @@ function budgetRefusal(scope: "account" | "instance"): Failure {
     : { status: 429, error: "This server's media processing budget for the month is used up" };
 }
 
-export type UploadOutcome = { ok: true; media: MediaAttachment } | ({ ok: false } & Failure);
+type UploadOutcome = { ok: true; media: MediaAttachment } | ({ ok: false } & Failure);
 
 // What the caller checks in the form once it is read, before any transformation is spent: a failure refuses the
 // upload (the API checks the description).
-export type FormCheck = (params: Params) => Failure | null | Promise<Failure | null>;
+type FormCheck = (params: Params) => Failure | null | Promise<Failure | null>;
 
 // A reservation (domain/media.ts reserveMedia): the row's id and file token, the writer deadline, and the budgets and
 // credential every later Store call of the upload takes.
@@ -238,7 +238,7 @@ async function reserve(
 
 // The upload pipeline of POST /api/v{1,2}/media: reserve, read the form, check it, transform, write, complete; a
 // failure abandons the reservation.
-export async function receiveImageUpload(
+async function receiveImageUpload(
   c: UploadContext,
   deps: ApiDeps,
   credential: () => UserCredential,
@@ -444,7 +444,7 @@ export async function writeFiles(
 // vanished reservation's objects are deleted here. If the Store cannot be asked, the objects stay for the sweep, which
 // deletes them with the reservation once its writer deadline has passed, or with a completed upload once its grace
 // period has (DETACHED_GRACE_MS).
-export async function discard(
+async function discard(
   c: UploadContext,
   deps: ApiDeps,
   upload: ProfileUpload,

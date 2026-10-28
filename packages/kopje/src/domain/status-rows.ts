@@ -211,14 +211,14 @@ export const POLL_COLUMN_MAP = {
   voters_count: "p.voters_count",
 } as const satisfies ColumnMap;
 
-export const POLL_FROM = `polls p INDEXED BY ${POLLS_STATUS_INDEX}
+const POLL_FROM = `polls p INDEXED BY ${POLLS_STATUS_INDEX}
 	CROSS JOIN statuses s INDEXED BY ${STATUSES_ID_INDEX} ON s.id = p.status_id`;
 
 export const OWN_VOTE_COLUMNS = fixedColumns({ poll_id: "v.poll_id", choice: "v.choice" }, { poll_id: 18, choice: 0 });
 
 // How many votes `viewer` cast in the current generation of the poll of `status`, which presentPolls reads as their
 // own: for R (statusRowBoundSql). A count of the viewer's own votes only (R27).
-export function ownVoteCountSql(status: string, viewer: string): string {
+function ownVoteCountSql(status: string, viewer: string): string {
   return `(SELECT count(*) FROM polls p INDEXED BY ${POLLS_STATUS_INDEX} CROSS JOIN poll_votes v INDEXED BY ${POLL_VOTES_KEY_INDEX}
 		ON v.poll_id = p.status_id AND v.generation = p.generation AND v.account_id = ${viewer} WHERE p.status_id = ${status})`;
 }

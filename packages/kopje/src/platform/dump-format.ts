@@ -22,7 +22,7 @@ export const END_LINE = "-- kopje-dump-end";
 // Ordering of a table's rows, which the per-table checksum depends on.
 //   rowid  : ascending rowid (for INTEGER PRIMARY KEY tables that is the key; otherwise insertion order)
 //   key    : ascending by the listed columns (BINARY collation), for WITHOUT ROWID tables and sqlite_sequence
-export type TableOrder = { by: "rowid" } | { by: "key"; columns: string[] };
+type TableOrder = { by: "rowid" } | { by: "key"; columns: string[] };
 
 export type TableSpec = {
   name: string;

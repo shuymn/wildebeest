@@ -75,7 +75,7 @@ type AccessState = {
   lateFailure?: { revision: number; at: number };
 };
 
-export type SetupDraft = { domain: string | null; access: AccessDraft | null; accessRevision: number | null };
+type SetupDraft = { domain: string | null; access: AccessDraft | null; accessRevision: number | null };
 
 type SessionRecord = SetupDraft & { expiresAt: number };
 
@@ -124,7 +124,7 @@ function accessState(db: Db): AccessState {
 
 // SETUP-3: bootstrapped once any configuration row or any local account exists, however it got there (the wizard, or
 // /admin/config and an import at a cutover).
-export function bootstrapped(db: Db): boolean {
+function bootstrapped(db: Db): boolean {
   return (
     db.first(
       `SELECT 1 AS found FROM instance_settings WHERE name IN (${CONFIG_KEYS.map(() => "?").join(",")})`,

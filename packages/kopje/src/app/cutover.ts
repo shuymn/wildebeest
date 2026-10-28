@@ -33,7 +33,7 @@ import type { StoreStub } from "../platform/store-client";
 // legacy recipient, is kept for the operator. The record is marked as being sent before the send: after a crash it is
 // sent again (at least once). One drain runs at a time (a Store lease).
 
-export type DrainRound = {
+type DrainRound = {
   sent: number;
   unverified: number;
   noRecipient: number;

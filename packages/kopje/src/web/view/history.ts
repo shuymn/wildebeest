@@ -7,7 +7,7 @@ import { type MediaView, mediaView } from "./media";
 
 // `current`: the newest version, the status as it is; `original`: the first version, shown only when no older one
 // was left out; `edited`: any other.
-export type VersionLabel = "current" | "edited" | "original";
+type VersionLabel = "current" | "edited" | "original";
 
 // One version with its own warning, sensitive flag, media and poll choices. No `lang`: a version records no language.
 export type VersionView = {

@@ -33,7 +33,7 @@ import { snapshotIn, WORKER_FILE, workerSource } from "./worker-file.js";
 
 export { WORKER_FILE };
 
-export const DEFAULT_BUNDLE_DIR = fileURLToPath(new URL("../../../dist/", import.meta.url));
+const DEFAULT_BUNDLE_DIR = fileURLToPath(new URL("../../../dist/", import.meta.url));
 
 /** @param {string} text */
 function sha256(text) {
