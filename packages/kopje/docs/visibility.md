@@ -931,6 +931,7 @@ outside the policy module:
   reporters for a suspension's reach (`reachReporters`), `report-presenter.ts`, which presents the reporter's Report
   entity, `admin-measures.ts`, which counts reports for the OAuth admin's measures (R37), and `inbox.ts`, whose actor
   purge deletes the reports of the account and by it.
+- writes `reports` outside `reports.ts` and the actor purge of `inbox.ts`, so its readers only read (R34).
 - reads or writes `quotes`, `quote_revocations` or `quote_requests` outside `quotes.ts`, which stores and verifies
   received quotes, applies the `Delete` of a stamp (ID-6), answers QuoteRequests, serves and revokes Kopje's
   authorizations (VIS-28) and reads the quotes list's window, `inbox.ts`, whose batched delete of a status detaches the

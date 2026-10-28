@@ -209,6 +209,15 @@ const RULES: readonly Rule[] = [
     },
   },
   {
+    // R34: the readers (report-presenter.ts, admin-measures.ts) never write a report.
+    name: "writes reports",
+    pattern: new RegExp(`\\b(?:INTO|UPDATE|DELETE\\s+FROM)\\s+${table(["reports"])}`, "i"),
+    allowed: {
+      "src/domain/reports.ts": "the reporter’s report and its answer, and the OAuth admin’s actions (R37)",
+      "src/domain/inbox.ts": "an actor purge deletes the reports of the account",
+    },
+  },
+  {
     // Quotes are decided in one place: only quotes.ts decides a quote's state (VerifyQuoteService, the Delete of a
     // stamp, the answer to a QuoteRequest, a revoke) and keeps the answered requests, and only the policy module reads
     // them for a client (R35: quoteReads) or for reach (reachQuoters).
@@ -385,6 +394,7 @@ const RULE_FIXTURES: readonly [name: string, flagged: string, passed: string][] 
     "db.all('SELECT 1 FROM tags')",
   ],
   ["reads or writes reports", "db.all('SELECT 1 FROM reports r')", "db.all('SELECT reports FROM x')"],
+  ["writes reports", "db.run('DELETE FROM main.reports WHERE id = ?')", "db.run('UPDATE reports_archive SET x = 1')"],
   [
     "reads or writes quotes",
     "db.run('UPDATE quote_requests SET x = 1')",
@@ -492,6 +502,20 @@ describe("policy boundary", () => {
       passed: {},
     },
     { path: "src/domain/scheduled-statuses.ts", over: SOURCES },
+  );
+  // A module allowed to read a table, but not to write it, is still refused the write.
+  guardFixtures(
+    violations,
+    {
+      flagged: {
+        "a write by a module that may only read": [
+          "db.all('SELECT 1 FROM reports r')\ndb.run('UPDATE reports SET x = 1')",
+          "src/domain/admin-measures.ts writes reports",
+        ],
+      },
+      passed: {},
+    },
+    { path: "src/domain/admin-measures.ts", over: SOURCES },
   );
 });
 
