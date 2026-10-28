@@ -8,6 +8,7 @@ import { migratedStore } from './helpers'
 import { pathOf } from './media-helpers'
 import { community, post } from './status-helpers'
 import {
+	CONSENT_PAGE_HEADERS,
 	EMBED_PAGE_HEADERS,
 	ERROR_PAGE_HEADERS,
 	HANDOFF_PAGE_HEADERS,
@@ -59,7 +60,7 @@ describe('the browser job headers', () => {
 			})
 		const logged = vi.spyOn(console, 'error').mockImplementation(() => {})
 		const answers: [string, Response, Readonly<Record<string, string>>, number][] = [
-			['consent', await consentPage(h, h.app), PRIVATE_PAGE_HEADERS, 200],
+			['consent', await consentPage(h, h.app), CONSENT_PAGE_HEADERS, 200],
 			['code', await decide(h, oob, 'approve'), PRIVATE_PAGE_HEADERS, 200],
 			['404', await h.request('/nope', { headers: accept }), PUBLIC_PAGE_HEADERS, 404],
 			['500', await failing(new Error('boom')), ERROR_PAGE_HEADERS, 500],

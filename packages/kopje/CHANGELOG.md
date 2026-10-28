@@ -41,6 +41,10 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
 
 ### Fixed
 
+- Approving or denying an app on the consent page reaches the app again in Chromium-based browsers: the page's
+  `form-action 'self'` blocked the redirect to the app's redirect URI on another origin or a custom scheme. The consent
+  page now has no `form-action`, as Mastodon's authorization pages, so the app's own redirects onward are followed too
+  (WEB-2 in [docs/threat-model.md](docs/threat-model.md)). No migration; `wrangler.jsonc`: unchanged.
 - On narrow screens, the tabs (a profile's, a status page's, Followers and Following) share the row's spare width
   equally, each label centred in its tab: the first and last sat at the row's edges with all the spare width between
   them. No migration; `wrangler.jsonc`: unchanged.

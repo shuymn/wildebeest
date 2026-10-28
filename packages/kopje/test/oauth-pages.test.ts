@@ -3,17 +3,22 @@ import { describe, expect, it } from 'vitest'
 import { consentPage, decide, registerApp, withAlice } from './api-helpers'
 import { attr, classes, one, parseHtml, query, text } from './web-dom'
 import { ICON_LINKS, iconLinksOf, startSignIn } from './web-helpers'
-import { PRIVATE_PAGE_HEADERS } from '../browser/headers'
+import { CONSENT_PAGE_HEADERS, PRIVATE_PAGE_HEADERS } from '../browser/headers'
 import { STYLESHEET } from '../src/web/asset-versions'
 import { STRINGS } from '../src/web/strings'
 
 // The pages of /oauth/authorize (app/authorize.tsx): the private pages' headers and script-free CSP (WEB-2), the
 // shared layout and stylesheet, and the catalogue's text.
 
-// The private pages' answer: their exact headers (no 'unsafe-inline', no script source), the stylesheet, no script.
-async function privatePage(response: Response, status: number) {
+// The private pages' answer: their exact headers (no 'unsafe-inline', no script source; the consent page's have no
+// form-action), the stylesheet, no script.
+async function privatePage(
+	response: Response,
+	status: number,
+	headers: Readonly<Record<string, string>> = PRIVATE_PAGE_HEADERS
+) {
 	expect(response.status).toBe(status)
-	expect(Object.fromEntries(response.headers)).toEqual(PRIVATE_PAGE_HEADERS)
+	expect(Object.fromEntries(response.headers)).toEqual(headers)
 	const html = await response.text()
 	expect(html.startsWith('<!DOCTYPE html><html lang="en">')).toBe(true)
 	expect(html).toContain(`<link rel="stylesheet" href="${STYLESHEET}"/>`)
@@ -29,7 +34,11 @@ describe('the OAuth pages', () => {
 	it('show a third-party app its name, website as text, the account and each scope, approve before deny', async () => {
 		const h = await withAlice()
 		const app = await registerApp(h)
-		const doc = await privatePage(await consentPage(h, app, { scope: 'read write:statuses follow' }), 200)
+		const doc = await privatePage(
+			await consentPage(h, app, { scope: 'read write:statuses follow' }),
+			200,
+			CONSENT_PAGE_HEADERS
+		)
 		expect(text(one(doc, 'h1'))).toBe('Authorize Test Client')
 		const terms = query(doc, 'dt').map(text)
 		const values = query(doc, 'dd').map(text)
@@ -63,7 +72,7 @@ describe('the OAuth pages', () => {
 	it('warn of admin scopes in a danger alert, in plain language', async () => {
 		const h = await withAlice()
 		const app = await registerApp(h, { scopes: 'read admin:read' })
-		const doc = await privatePage(await consentPage(h, app, { scope: 'read admin:read' }), 200)
+		const doc = await privatePage(await consentPage(h, app, { scope: 'read admin:read' }), 200, CONSENT_PAGE_HEADERS)
 		const alert = one(doc, 'div', 'alert')
 		expect(classes(alert)).toEqual(['alert', 'fail'])
 		expect(query(alert, 'p').map(text)).toEqual([
@@ -76,7 +85,7 @@ describe('the OAuth pages', () => {
 	it('word the instance’s own web UI as signing in', async () => {
 		const h = await withAlice()
 		const { consent } = await startSignIn(h)
-		const doc = await privatePage(consent, 200)
+		const doc = await privatePage(consent, 200, CONSENT_PAGE_HEADERS)
 		expect(text(one(doc, 'h1'))).toBe('Sign in')
 		expect(text(one(one(doc, 'main'), 'p'))).toBe("Sign in to this server's settings as @alice@kopje.test?")
 		expect(query(doc, 'dl')).toEqual([])
@@ -122,5 +131,29 @@ describe('the OAuth pages', () => {
 		)
 		const denied = await privatePage(await decide(h, app, 'deny', { scope: 'read' }), 403)
 		expect(query(denied, 'h1').map(text)).toEqual(['Authorization denied'])
+	})
+
+	// WEB-2: the decision's answer redirects to the app's redirect URI, which may redirect on anywhere, and browsers
+	// check form-action on every hop, so the consent page alone has none; the flow's other pages keep 'self'.
+	it('send the consent page without form-action, its form carrying the verified redirect URI', async () => {
+		const h = await withAlice()
+		const consentOf = async (redirectUri: string, chosen = redirectUri) => {
+			const app = await registerApp(h, { redirectUri })
+			const doc = await privatePage(await consentPage(h, { ...app, redirect_uri: chosen }), 200, CONSENT_PAGE_HEADERS)
+			const field = query(doc, 'input').find((input) => attr(input, 'name') === 'redirect_uri')
+			expect(field === undefined ? null : attr(field, 'value'), chosen).toBe(chosen)
+			return app
+		}
+		await consentOf('https://client.test/callback')
+		await consentOf('com.example.app://oauth/callback')
+		await consentOf('urn:ietf:wg:oauth:2.0:oob')
+		// Of several registered URIs, the one the request chose; the decision is validated again, so a URI the client
+		// did not register is refused on the page.
+		const app = await consentOf('https://one.test/cb https://two.test/cb', 'https://two.test/cb')
+		const refused = await privatePage(
+			await decide(h, { ...app, redirect_uri: 'https://three.test/cb' }, 'approve'),
+			400
+		)
+		expect(text(one(refused, 'h1'))).toBe('Invalid request')
 	})
 })

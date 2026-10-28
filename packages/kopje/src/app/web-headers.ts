@@ -12,18 +12,21 @@ import { EMBED_SCRIPT } from '../web/pages/embed'
 //     Early Hints fetches it while the page is made.
 
 // The directives every policy shares, in their order: nothing by default, a page's one script (if any) right after
-// that, then the stylesheet, images, media where the page plays it, same-origin forms and no <base>. Media plays inline
-// only on the public pages and the embed, from this origin or another server's https URL, as their images load; the
-// private pages' policy has no media-src.
-const csp = (script: string | null, media: boolean, ...rest: string[]) =>
+// that, then the stylesheet, images, media where the page plays it, same-origin forms (no form-action on the consent
+// page) and no <base>. Media plays inline only on the public pages and the embed, from this origin or another server's
+// https URL, as their images load; the private pages' policy has no media-src.
+const cspWith = (forms: boolean, script: string | null, media: boolean, ...rest: string[]) =>
 	[
 		"default-src 'none'",
 		...(script === null ? [] : [`script-src ${script}`]),
 		"style-src 'self'; img-src 'self' https:",
 		...(media ? ["media-src 'self' https:"] : []),
-		"form-action 'self'; base-uri 'none'",
+		...(forms ? ["form-action 'self'"] : []),
+		"base-uri 'none'",
 		...rest,
 	].join('; ')
+
+const csp = (script: string | null, media: boolean, ...rest: string[]) => cspWith(true, script, media, ...rest)
 
 const NO_FRAMING = "frame-ancestors 'none'"
 
@@ -88,4 +91,13 @@ export const PRIVATE_HEADERS = {
 	'referrer-policy': 'same-origin',
 	'cache-control': 'no-store',
 	link: PRELOAD,
+}
+
+// The consent page: the private pages' headers with no form-action (WEB-2), as Mastodon's authorization pages
+// (OAuth::AuthorizationsController). Browsers check form-action on every redirect of a form submission, and the
+// decision's 302 to the app's redirect URI may lead on to origins and schemes Kopje cannot know. The page has no script
+// and no user HTML, and its one form posts to this origin.
+export const CONSENT_HEADERS = {
+	...PRIVATE_HEADERS,
+	'content-security-policy': cspWith(false, null, false, NO_FRAMING),
 }

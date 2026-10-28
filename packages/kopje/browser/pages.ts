@@ -5,9 +5,9 @@
 export const DOMAIN = 'kopje.test'
 export const ORIGIN = `https://${DOMAIN}`
 
-// 'l1': a public page that loads the L1 bundle; 'handoff': a handoff page; 'error' and 'unavailable': the 500 and 503
-// pages of app.ts.
-export type PageKind = 'public' | 'l1' | 'private' | 'embed' | 'handoff' | 'error' | 'unavailable'
+// 'l1': a public page that loads the L1 bundle; 'handoff': a handoff page; 'consent': a consent page (no
+// form-action); 'error' and 'unavailable': the 500 and 503 pages of app.ts.
+export type PageKind = 'public' | 'l1' | 'private' | 'embed' | 'handoff' | 'consent' | 'error' | 'unavailable'
 
 export type FixturePage = { name: string; path: string; status: 200 | 400 | 404 | 500 | 503; kind: PageKind }
 
@@ -45,9 +45,9 @@ export const PAGES = [
 	{ name: 'setup-done', path: '/setup/done', status: 200, kind: 'private' },
 	// The OAuth pages: a third-party app's consent, one with the longest name and website and every scope, the web UI's
 	// own, and the out-of-band code (each at a path of its own).
-	{ name: 'consent', path: '/oauth/authorize', status: 200, kind: 'private' },
-	{ name: 'consent-long', path: '/oauth/authorize/long', status: 200, kind: 'private' },
-	{ name: 'consent-first-party', path: '/oauth/authorize/first-party', status: 200, kind: 'private' },
+	{ name: 'consent', path: '/oauth/authorize', status: 200, kind: 'consent' },
+	{ name: 'consent-long', path: '/oauth/authorize/long', status: 200, kind: 'consent' },
+	{ name: 'consent-first-party', path: '/oauth/authorize/first-party', status: 200, kind: 'consent' },
 	{ name: 'code', path: '/oauth/authorize/code', status: 200, kind: 'private' },
 	// The error pages of a browser's page request (app.ts).
 	{ name: 'error-404', path: '/nope', status: 404, kind: 'public' },

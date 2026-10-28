@@ -40,6 +40,14 @@ export const PRIVATE_PAGE_HEADERS: Readonly<Record<string, string>> = {
 	link: PRELOAD,
 }
 
+// The consent page: a private page's headers with no form-action (WEB-2), so the decision's redirect may lead to any
+// origin or scheme.
+export const CONSENT_PAGE_HEADERS: Readonly<Record<string, string>> = {
+	...PRIVATE_PAGE_HEADERS,
+	'content-security-policy':
+		"default-src 'none'; style-src 'self'; img-src 'self' https:; base-uri 'none'; frame-ancestors 'none'",
+}
+
 // The 500 page of a browser's page request (app.ts): a private page's headers, varying with Accept as the JSON
 // answered in its place does; the 503 page adds maintenanceError's Retry-After.
 export const ERROR_PAGE_HEADERS: Readonly<Record<string, string>> = { ...PRIVATE_PAGE_HEADERS, vary: 'Accept' }
