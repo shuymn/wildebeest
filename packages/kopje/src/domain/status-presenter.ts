@@ -352,16 +352,13 @@ function filterTextUnits(db: Db, ids: readonly string[]): Map<string, number> {
   );
 }
 
-let unitsSql: string | undefined;
-
 // The figure of each status of ?1 (a JSON list), one seek of statuses by key each: the stored measure
-// (filter_text_units), else filterTextBoundSql; coalesce evaluates the bound only for a row without one. Built on
-// first use: MAX_FILTER_TEXT comes through filters.ts, which imports this module's importers.
-export function filterTextUnitsSql(): string {
-  unitsSql ??= `SELECT j.value AS id,
+// (filter_text_units), else filterTextBoundSql; coalesce evaluates the bound only for a row without one.
+const UNITS_SQL = `SELECT j.value AS id,
 	min(COALESCE(s.filter_text_units, ${filterTextBoundSql("s")}), ${MAX_FILTER_TEXT}) AS units
 FROM json_each(?1) j CROSS JOIN statuses s INDEXED BY ${STATUSES_ID_INDEX} ON s.id = j.value`;
-  return unitsSql;
+export function filterTextUnitsSql(): string {
+  return UNITS_SQL;
 }
 
 // Whether a status `s` (a statuses row in scope) has an input to its searchable text that is not text, after
