@@ -81,10 +81,10 @@ export const UNUSED_LEGACY_TABLES = [
 	'status_edits',
 ]
 
-// The names legacy instance settings had (packages/backend/src/config/server.ts) and where Kopje keeps them. title and
-// description are what /api/v1/instance and /api/v2/instance show. Kopje has no endpoint for the extended description
-// or the privacy policy yet; they are kept under these names for one (Mastodon's /api/v1/instance/extended_description
-// and /api/v1/instance/privacy_policy). Any other name stops the conversion: it could collide with Kopje's own settings.
+// The names legacy instance settings had and where Kopje keeps them. title and description are what /api/v1/instance
+// and /api/v2/instance show. Kopje has no endpoint for the extended description or the privacy policy yet; they are
+// kept under these names for one (Mastodon's /api/v1/instance/extended_description and
+// /api/v1/instance/privacy_policy). Any other name stops the conversion: it could collide with Kopje's own settings.
 export const LEGACY_SETTINGS = /** @type {Record<string, string>} */ ({
 	'server name': 'title',
 	'server description': 'description',
@@ -167,9 +167,9 @@ function str(value) {
 }
 
 /**
- * Legacy's reference rule (packages/backend/src/activitypub/objects/index.ts, getApId): a string is parsed as a URL
- * and compared in its normalized form; an object stands for its `id`, recursively; anything else (an object with only
- * `href`, null, a number) makes legacy throw, which here is null.
+ * Legacy's reference rule (its getApId): a string is parsed as a URL and compared in its normalized form; an object
+ * stands for its `id`, recursively; anything else (an object with only `href`, null, a number) makes legacy throw,
+ * which here is null.
  * @param {unknown} value
  * @returns {string | null}
  */
@@ -213,9 +213,9 @@ export function legacyFollowers(actorId, stored) {
 }
 
 /**
- * Who could read an object in legacy Wildebeest (packages/backend/src/mastodon/status_visibility.ts, detectVisibility
- * and isVisible), from its to and cc (toArray of each) and its stored author: public with Public in to; with the
- * author's followers in to, unlisted when Public is in cc, else the author's followers; otherwise the accounts in to.
+ * Who could read an object in legacy Wildebeest (its detectVisibility and isVisible), from its to and cc (toArray of
+ * each) and its stored author: public with Public in to; with the author's followers in to, unlisted when Public is in
+ * cc, else the author's followers; otherwise the accounts in to.
  * Addresses are normalized as getApId does, but the followers value is compared as legacy spells it; where comparing it
  * normalized would decide otherwise, the answer is 'ambiguous' and the conversion stops rather than choose. Null where
  * legacy would throw, so that nobody could read the object there.

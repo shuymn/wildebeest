@@ -170,9 +170,8 @@ const hex = (bytes) =>
 		.toUpperCase()
 
 /**
- * An address the way legacy resolves one (getApId in packages/backend/src/activitypub/objects/index.ts): a URL string
- * in its normalized form, or an object's id, followed through nested objects. Anything else could not be resolved by
- * legacy, which is undefined here.
+ * An address the way legacy resolves one (its getApId): a URL string in its normalized form, or an object's id,
+ * followed through nested objects. Anything else could not be resolved by legacy, which is undefined here.
  * @param {unknown} value
  * @param {number} [hops]
  * @returns {string | undefined}

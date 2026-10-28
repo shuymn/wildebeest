@@ -15,10 +15,10 @@ the manifest, are safe to share: counts, stop codes and digests only (DATA-13, "
 
 ## Supported legacy instances
 
-| Line                                       | Version | Migration level                       |
-| ------------------------------------------ | ------- | ------------------------------------- |
-| T1: the Wildebeest line in this repository | 0.1.0   | 0010 or below, 0018, 0023, 0035, 0039 |
-| T2: cloudflare/wildebeest                  | 0.0.1   | 0010 or below                         |
+| Line                         | Version | Migration level                       |
+| ---------------------------- | ------- | ------------------------------------- |
+| T1: shuymn's Wildebeest fork | 0.1.0   | 0010 or below, 0018, 0023, 0035, 0039 |
+| T2: cloudflare/wildebeest    | 0.0.1   | 0010 or below                         |
 
 Below 0011 both lines have the same schema, so the converter reports them together as `T1 or T2`. An export whose
 `d1_migrations` is not a prefix of the canonical migrations (a fork with migrations of its own, or an alpha D1), or
@@ -73,9 +73,9 @@ legacy instance reaches.
    row of the export holds `NULL` in it (or leaves it to a `NULL` default); one that does stops the conversion
    (`null-in-not-null-column`). The manifest lists such columns (`source.nullableInExport`). A T1 instance that ran
    an earlier form of 0020 has this variance in `actors.type`: that form dropped the column and added it back as a
-   generated `NOT NULL` column, which fails on a table with an
-   actor whose properties have no type; the column then came back as a plain nullable column (`ALTER TABLE ADD
-COLUMN`), after `mastodon_id`, and the final form of 0020 fills it from the properties.
+   generated `NOT NULL` column, which fails on a table with an actor whose properties have no type; the column then
+   came back as a plain nullable column (`ALTER TABLE ADD COLUMN`), after `mastodon_id`, and the final form of 0020
+   fills it from the properties.
    The rows are always loaded by column name into the canonical schema, so the bridge starts from the canonical column
    order and constraints whatever the export's.
 2. **Bridge.** The rows are loaded into a local database with the canonical schema at that level, and the remaining
@@ -161,19 +161,18 @@ Worker stores it (`src/platform/stored-bounds.ts`, RES-2): U+0000 is removed fro
 descriptions are cut at 2,048 and 10,000 code points, and a profile, status or media URL past its bound is dropped;
 each change is counted as `stored:<table>.<column>`.
 
-**The audience never widens (DATA-15).** Who may read a status is what legacy allowed
-(`packages/backend/src/mastodon/status_visibility.ts`, `isVisible`): it reads the object's own `to` and `cc` and the
-followers collection of its stored author (`objects.original_actor_id`). All three are captured as exported, before any
-bridge migration runs: 0002 gives every outbox row Public by default, which 0016 turns into its `to`, and 0021 rewrites
-the stored author from `attributedTo`, so bridged values are never an audience. A non-public object whose author a bridge
-migration changed stops the conversion (`statuses:author-changed-audience`).
+**The audience never widens (DATA-15).** Who may read a status is what legacy allowed (its `isVisible`): it reads the
+object's own `to` and `cc` and the followers collection of its stored author (`objects.original_actor_id`). All three
+are captured as exported, before any bridge migration runs: 0002 gives every outbox row Public by default, which 0016
+turns into its `to`, and 0021 rewrites the stored author from `attributedTo`, so bridged values are never an audience. A
+non-public object whose author a bridge migration changed stops the conversion (`statuses:author-changed-audience`).
 
-- Addresses are read by legacy's rule (`getApId` in `packages/backend/src/activitypub/objects/index.ts`): a string is
-  parsed as a URL and compared in its normalized form, and an object stands for its `id`, recursively. An address legacy
-  could not read (an object with only `href`, null, a number, a relative URL), or a missing followers collection where it
-  is needed, made legacy fail on the object; such a status stops the conversion
-  (`statuses:addressing-legacy-could-not-read`) rather than being guessed. The converter is stricter than legacy in one
-  way: an unreadable address anywhere in `to` or `cc` stops it, also where legacy's search would have ended earlier.
+- Addresses are read by legacy's rule (its `getApId`): a string is parsed as a URL and compared in its normalized form,
+  and an object stands for its `id`, recursively. An address legacy could not read (an object with only `href`, null, a
+  number, a relative URL), or a missing followers collection where it is needed, made legacy fail on the object; such a
+  status stops the conversion (`statuses:addressing-legacy-could-not-read`) rather than being guessed. The converter is
+  stricter than legacy in one way: an unreadable address anywhere in `to` or `cc` stops it, also where legacy's search
+  would have ended earlier.
 - The author's followers collection is compared as legacy compares it: `actorFromRow` keeps the stored `followers`
   property as spelled (and builds `<actor id>/followers` only when it is missing), and `detectVisibility` matches that
   string literally against the normalized addresses. Where the literal and the normalized comparison would disagree (a

@@ -2,7 +2,7 @@
 // (0039), without ever touching the legacy D1:
 //
 //   1. the level is the d1_migrations prefix of the canonical legacy migrations (cli/legacy-migrations, a frozen copy
-//      of the repository's /migrations), and the export's schema must match the canonical schema at that level
+//      of legacy Wildebeest's 0000 to 0039), and the export's schema must match the canonical schema at that level
 //      (columns by name; see compareColumns for the one variance accepted);
 //   2. the rows are loaded, by column name, into a database built from the canonical migrations up to that level, so
 //      the bridge always starts from the canonical schema whatever the column order of the export;
