@@ -217,7 +217,7 @@ describe("a destination that never received the Create (VIS-3)", () => {
       ["Update", "https://ok.example/inbox", "pending"],
     ]);
     const create = JSON.parse(after[0]?.body ?? "{}") as { id: string; object: { id: string; content: string } };
-    expect(create).toMatchObject({ id: `${status.uri}/activity`, object: { id: status.uri } });
+    expect(create).toMatchObject({ id: `${String(status.uri)}/activity`, object: { id: status.uri } });
     expect(create.object.content).toContain("second version");
   });
 

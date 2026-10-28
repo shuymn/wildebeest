@@ -98,7 +98,7 @@ function field(refs: ReadonlyMap<string, EmojiRef>, allowance: EmojiAllowance): 
     for (let i = 1; i < segments.length; i++) {
       const ref = i + 1 < segments.length ? take(segments[i]!) : null;
       if (ref === null) {
-        out.push(plain(`:${segments[i]}`));
+        out.push(plain(`:${segments[i]!}`));
       } else {
         out.push(image(ref), plain(segments[i + 1]!));
         i++;

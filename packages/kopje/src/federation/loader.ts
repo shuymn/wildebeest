@@ -282,7 +282,7 @@ async function readDocument(
   const media = parseMediaType(response.headers.get("content-type") ?? "");
   if (media === null || !kind.accepts(media)) {
     await response.body?.cancel();
-    throw new RefusedFetchError(final, `${kind.refusal}: ${response.headers.get("content-type")}`);
+    throw new RefusedFetchError(final, `${kind.refusal}: ${response.headers.get("content-type") ?? "none"}`);
   }
   // Overflow is judged against the effective cap: below it, the request's bytes ran out.
   const limit = Math.min(cap, budget?.bytes ?? cap);

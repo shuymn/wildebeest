@@ -115,7 +115,6 @@
     // Off until the commits that follow fix their findings.
     "vitest/require-to-throw-message": "off",
     "typescript/require-await": "off",
-    "typescript/restrict-template-expressions": "off",
     "eslint/no-unused-vars": "off",
     "typescript/require-array-sort-compare": "off",
     "typescript/no-explicit-any": "off",
@@ -142,7 +141,7 @@
         // lint/signing-keys.js; test-node/signing-keys.test.ts pins this wiring.
         "kopje/signing-keys": "error",
         // A nullish value must not reach SQL or HTML text through `${}`.
-        "typescript/restrict-template-expressions": "off"
+        "typescript/restrict-template-expressions": ["error", { "allowNullish": false }]
       }
     },
     // Tests, test-node and the CLI may still assign, read and pass `any`; calling or returning one stays an error.

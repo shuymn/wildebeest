@@ -359,7 +359,7 @@ export function createKopjeFederation(deps: FederationDeps, state: FederationSta
   const collections = new Map<string, Promise<CollectionPage | null>>();
   // Collections exist only under the stored spelling of a username, like the actor itself.
   const collection = (kind: CollectionKind, username: string, page: number | null) =>
-    memo(collections, `${kind}/${username}/${page}`, async () =>
+    memo(collections, `${kind}/${username}/${page ?? ""}`, async () =>
       (await localActor(username))?.username === username
         ? rpc((s) => s.collection(build, { username, kind, page }))
         : null,

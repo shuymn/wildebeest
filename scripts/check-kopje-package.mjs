@@ -172,7 +172,7 @@ function checkPackage(dir) {
   const files = readdirSync(dir, { recursive: true }).map((file) => file.split("\\").join("/"));
   const shippedSources = files.filter((file) => /^(src|test|test-node|stubs|scripts)\//.test(file));
   if (shippedSources.length > 0) {
-    fail(`the package ships sources: ${shippedSources}`);
+    fail(`the package ships sources: ${shippedSources.join(",")}`);
   }
   for (const required of [
     "LICENSE",
@@ -225,7 +225,7 @@ function checkNoWasm(dir, script, what) {
     ([, file]) => file,
   );
   if (modules.length > 0 || imported.length > 0) {
-    fail(`${what} must carry no wasm module: files ${modules}, imports ${imported}`);
+    fail(`${what} must carry no wasm module: files ${modules.join(",")}, imports ${imported.join(",")}`);
   }
 }
 
@@ -468,7 +468,7 @@ function compareConfigs() {
     [...(target.queues?.producers ?? []), ...(target.queues?.consumers ?? [])].map((q) => q.queue),
   );
   if (queues.size !== 1) {
-    fail(`deploy/wrangler.jsonc must produce to and consume one queue, not ${[...queues]}`);
+    fail(`deploy/wrangler.jsonc must produce to and consume one queue, not ${[...queues].join(",")}`);
   }
   if (!target.queues?.consumers?.every((consumer) => typeof consumer.dead_letter_queue === "string")) {
     fail("deploy/wrangler.jsonc must give its Queue consumer a dead_letter_queue");
