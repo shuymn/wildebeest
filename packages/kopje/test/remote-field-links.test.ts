@@ -2,7 +2,7 @@ import { runInDurableObject } from "cloudflare:test";
 import { describe, expect, it } from "vitest";
 
 import { Db } from "../src/db/sql";
-import { MAX_REMOTE_FIELDS } from "../src/domain/accounts";
+import { MAX_REMOTE_FIELDS } from "../src/domain/account-columns";
 import {
   actorRevision,
   purgeBatch,

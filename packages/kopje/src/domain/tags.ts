@@ -2,7 +2,6 @@ import { STATUSES_ID_INDEX } from "../db/indexes";
 import type { Db } from "../db/sql";
 import { fromHex } from "../platform/dump-literals";
 import type { Page, PageQuery, Present } from "./accounts";
-import { edgeRangeSql } from "./accounts";
 import { visibleSql } from "./audience";
 import { optionalUserReadOperation, userReadOperation, userWriteOperation } from "./auth";
 import { featureTag, unfeatureTag } from "./featured-tags";
@@ -10,6 +9,7 @@ import { tagNameSql } from "./status-bounds";
 import { isHashtagName } from "./status-text";
 import { listedTagName, listedTagNameSql, TAG_NAME_TOO_LONG, withinTagNameBound } from "./tag-bounds";
 import { normalizeTag } from "./tag-name";
+import { edgeRangeSql } from "./windows";
 
 // A hashtag as Mastodon 4.5's REST::TagSerializer shows it. Kopje has no tags table: any valid name is a tag, used or
 // not, as Mastodon builds an unsaved Tag for a name it has never seen (Api::V1::TagsController#set_or_create_tag). The

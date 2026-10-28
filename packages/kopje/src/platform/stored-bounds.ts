@@ -1792,8 +1792,8 @@ export function statusCardsMigrationSql(): string {
 
 // remote_field_links (domain/remote-field-links.ts): one row per remote account with a field link to verify, holding
 // what the cron's round checks and what it found. Bounds, each in its unit:
-// - REMOTE_FIELD_INDEXES: the fields a remote account shows (accounts.ts MAX_REMOTE_FIELDS; test pins them equal),
-//   an entry's index among them from 0;
+// - REMOTE_FIELD_INDEXES: the fields a remote account shows (account-columns.ts MAX_REMOTE_FIELDS; test pins them
+//   equal), an entry's index among them from 0;
 // - REMOTE_VERIFIED_SHOWN: the entries `links` holds, the first candidates in shown order;
 // - REMOTE_FIELD_LINK_BYTES: an href, in UTF-8 bytes of printable ASCII: the longest X of Mastodon's shortest
 //   double-quoted anchor `<a href="X">X</a>` within Account::Field::MAX_CHARACTERS_COMPAT, floor((2047 - 15) / 2);

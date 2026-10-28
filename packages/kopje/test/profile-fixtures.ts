@@ -3,8 +3,8 @@ import {
   MOVED_ACCOUNT_CAPS,
   MOVED_URL_LIMIT,
   REMOTE_FIELDS_BYTES,
-  USERNAME_LIMIT,
-} from "../src/domain/accounts";
+} from "../src/domain/account-columns";
+import { USERNAME_LIMIT } from "../src/domain/accounts";
 import { DOMAIN_BYTES } from "../src/platform/identity-bounds";
 import type { StoreStub } from "../src/platform/store-client";
 import { sanitizeRemoteBio } from "../src/security/html";
