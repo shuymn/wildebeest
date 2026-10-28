@@ -1,4 +1,4 @@
-// Writes passed=true to $GITHUB_OUTPUT when the pull request checks passed on the commit as a push to main, and
+// Writes passed=true to $GITHUB_OUTPUT when CI (ci.yml) passed on the commit as a push to main, and
 // passed=false otherwise (see mainChecked() in kopje-release-lib.mjs).
 //
 //   node scripts/kopje-main-ci.mjs --repo <owner/name> --sha <commit>

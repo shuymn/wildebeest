@@ -5,7 +5,7 @@ A tag `kopje-v<version>` on a commit of `main` releases the `kopje` npm package.
 
 1. checks that the tag is `kopje-v<semver>` and points at a commit of `main`, and that `CHANGELOG.md` has a section
    `## [<version>]`, which becomes the release notes;
-2. runs the kopje lint, type checks and tests unless the pull request checks (`PRs.yml`) passed on the tagged commit
+2. runs the kopje lint, type checks and tests unless CI (`.github/workflows/ci.yml`) passed on the tagged commit
    as a push to `main` (`scripts/kopje-main-ci.mjs`). That run compares the commit with the last `main` run that
    passed and runs the checks the difference can affect, so its success covers the whole tree. The check waits up to
    20 minutes for a run still queued or in progress, and 2 minutes for one not yet listed; when the run failed, was
@@ -67,10 +67,10 @@ A pull request adds its notes under `## [Unreleased]` in `CHANGELOG.md`; a relea
 1. On a branch, move the `[Unreleased]` notes in `CHANGELOG.md` under `## [<version>] - <YYYY-MM-DD>`. Say whether the
    version adds Store migrations and whether instances must change `wrangler.jsonc`. If it adds migrations, measure
    them together in one upgrade, from the first file the previous release did not carry, and record the range and the
-   time in the notes (the budget and the store: `test/bench/migration-cost.ts`). The measure is the "Kopje migration
-   bench" workflow (`.github/workflows/kopje-bench.yml`): a GitHub-hosted runner takes the range from the newest
+   time in the notes (the budget and the store: `test/bench/migration-cost.ts`). The measure is the "Migration
+   bench" workflow (`.github/workflows/bench.yml`): a GitHub-hosted runner takes the range from the newest
    `kopje-v*` tag and reports the median of three runs, for every pull request that changes a migration and by hand
-   (`gh workflow run kopje-bench.yml --ref <branch>`). It must pass before the branch merges: the upgrade's median
+   (`gh workflow run bench.yml --ref <branch>`). It must pass before the branch merges: the upgrade's median
    must be within the budget. It also shows whether the upgrade checked foreign keys over the whole Store and an
    estimate of a marker-bearing retry's cost (which always checks the whole Store); the estimate warns past the
    budget but does not fail. A local run measures the same range, but only on an otherwise idle machine:

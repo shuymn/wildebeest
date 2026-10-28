@@ -219,14 +219,14 @@ describe('mainChecked', () => {
 		return result.then((passed) => ({ passed, calls, clock }))
 	}
 
-	it('passes a commit whose main run succeeded, asking only for push runs of PRs.yml on main', async () => {
+	it('passes a commit whose main run succeeded, asking only for push runs of ci.yml on main', async () => {
 		const { passed, calls } = await check([[run('completed', 'success')]])
 		assert.equal(passed, true)
 		assert.deepEqual(calls[0], [
 			'api',
 			'-X',
 			'GET',
-			'repos/o/r/actions/workflows/PRs.yml/runs',
+			'repos/o/r/actions/workflows/ci.yml/runs',
 			'-f',
 			`head_sha=${sha}`,
 			'-f',

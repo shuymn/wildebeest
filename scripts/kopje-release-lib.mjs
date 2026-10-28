@@ -165,7 +165,7 @@ export function createRelease({
 
 const MINUTE = 60_000
 
-// Whether the pull request checks (PRs.yml) passed on the commit as a push to main. Such a run compares the commit
+// Whether CI (ci.yml) passed on the commit as a push to main. Such a run compares the commit
 // with the last main run that passed and runs the lint, type and test checks the difference can affect, so its
 // success means the commit's whole tree passed them, through the runs before it. While a run is queued or in progress
 // it waits, up to `wait` from the start; while no run is listed, up to `appear` (a tag pushed right after the merge
@@ -183,7 +183,7 @@ export async function mainChecked({
 	interval = 30_000,
 }) {
 	const start = now()
-	const path = `repos/${repo}/actions/workflows/PRs.yml/runs`
+	const path = `repos/${repo}/actions/workflows/ci.yml/runs`
 	for (;;) {
 		let runs
 		try {
@@ -213,7 +213,7 @@ export async function mainChecked({
 			return false
 		}
 		if (runs.length === 0 && elapsed >= appear) {
-			log(`no main run of PRs.yml is listed for ${sha}`)
+			log(`no main run of ci.yml is listed for ${sha}`)
 			return false
 		}
 		if (elapsed >= wait) {
