@@ -212,8 +212,9 @@ describe("mainChecked", () => {
       repo: "o/r",
       sha,
       gh,
-      sleep: async (ms) => {
+      sleep: (ms) => {
         clock += ms;
+        return Promise.resolve();
       },
       now: () => clock,
       log: quiet,

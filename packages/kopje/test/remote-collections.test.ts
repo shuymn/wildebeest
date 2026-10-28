@@ -417,7 +417,7 @@ describe("a remote account’s purge", () => {
 
 describe("reading a remote account’s collections", () => {
   // Bob's featured and featuredTags collections as Mastodon 4.5 serves them.
-  async function servedCollections(t: Setup, bob: TestActor, items: unknown[], tags: unknown[]) {
+  function servedCollections(t: Setup, bob: TestActor, items: unknown[], tags: unknown[]) {
     t.web.serve(featuredOf(bob), {
       "@context": AS,
       id: featuredOf(bob),
@@ -443,7 +443,7 @@ describe("reading a remote account’s collections", () => {
     const mallorys = mastodonNote(mallory);
     t.web.serve(fetched.id, { "@context": AS, ...fetched });
     t.web.serve(mallorys.id, { "@context": AS, ...mallorys });
-    await servedCollections(
+    servedCollections(
       t,
       bob,
       [stored.id, fetched, mallorys.id, `${OTHER}/users/bob/statuses/1`, { type: "Hashtag", name: "#x" }],
@@ -475,7 +475,7 @@ describe("reading a remote account’s collections", () => {
 
     // He shows it again, unpins, and features other hashtags: the next sync follows.
     t.web.serve(`${bob.uri}/followers`, counted(bob, "followers", 1, true));
-    await servedCollections(t, bob, [fetched.id], [hashtag("dogs"), hashtag("Birds")]);
+    servedCollections(t, bob, [fetched.id], [hashtag("dogs"), hashtag("Birds")]);
     const updated = { "@context": AS, id: `${bob.uri}#updates/${nextId()}`, type: "Update", actor: bob.uri };
     expect(await t.post(bob, { ...updated, object: bob.document })).toBe(202);
     await sync(t);
@@ -493,7 +493,7 @@ describe("reading a remote account’s collections", () => {
     const bob = await mastodonActor(t.web, "bob");
     const old = mastodonNote(bob);
     const fresh = mastodonNote(bob);
-    await servedCollections(t, bob, [old.id], [hashtag("Old")]);
+    servedCollections(t, bob, [old.id], [hashtag("Old")]);
     const featured2 = `${bob.uri}/collections/featured2`;
     t.web.serve(featured2, { "@context": AS, id: featured2, type: "OrderedCollection", orderedItems: [fresh.id] });
     const bobId = await followed(t, bob);
@@ -525,7 +525,7 @@ describe("reading a remote account’s collections", () => {
     for (const note of notes) {
       t.web.serve(note.id, { "@context": AS, ...note });
     }
-    await servedCollections(
+    servedCollections(
       t,
       bob,
       notes.map((note) => note.id),
@@ -553,7 +553,7 @@ describe("reading a remote account’s collections", () => {
     t.web.serve(unknown.id, { "@context": AS, ...unknown });
     // An hour later the collection lists the old pin first, then one Kopje fetches later, then a stored one.
     clock.now += 3_600_000;
-    await servedCollections(t, bob, [old.id, unknown.id, stored.id], []);
+    servedCollections(t, bob, [old.id, unknown.id, stored.id], []);
     await sql(t.store, "INSERT INTO collection_syncs (account_id, due_at) VALUES (?, 0) ON CONFLICT DO NOTHING", bobId);
     await sync(t, t.web.loader, clock.now);
     expect(await pinned(t, bobId, null)).toEqual([old.id, unknown.id, stored.id]);
@@ -571,7 +571,7 @@ describe("reading a remote account’s collections", () => {
     t.web.serve(unknown.id, { "@context": AS, ...unknown });
     t.web.serve(added.id, { "@context": AS, ...added });
     // 18 stored and 2 pending: every slot is taken once the read ends.
-    await servedCollections(t, bob, [...stored.map((note) => note.id), unknown.id, added.id], []);
+    servedCollections(t, bob, [...stored.map((note) => note.id), unknown.id, added.id], []);
     const store = storeWithHook(t, "completeCollectionRead", async () => {
       expect(await rows(t, "collection_pins_pending")).toEqual([{ n: 2 }]);
       // Another stored status finds no slot; the Add of a pending one converts its slot (and is fetched for it).
@@ -594,7 +594,7 @@ describe("reading a remote account’s collections", () => {
     const t = await setup();
     const bob = await mastodonActor(t.web, "bob");
     const [before, during] = [mastodonNote(bob), mastodonNote(bob)];
-    await servedCollections(t, bob, [before.id, during.id], []);
+    servedCollections(t, bob, [before.id, during.id], []);
     const bobId = await followed(t, bob);
     // Bob removes `before` once the read left both pending, and `during` while its fetch is answered.
     t.web.serve(before.id, { "@context": AS, ...before });
@@ -627,7 +627,7 @@ describe("reading a remote account’s collections", () => {
     for (const note of notes) {
       t.web.serve(note.id, { "@context": AS, ...note });
     }
-    await servedCollections(t, bob, [...gone, ...notes.map((note) => note.id)], []);
+    servedCollections(t, bob, [...gone, ...notes.map((note) => note.id)], []);
     const bobId = await followed(t, bob);
     await sync(t);
     expect(await pinned(t, bobId, null)).toEqual(notes.map((note) => note.id));
@@ -639,7 +639,7 @@ describe("reading a remote account’s collections", () => {
   // The largest read: public network collections, a featured root with a first page, and a featuredTags root with
   // MAX_FEATURED_TAG_PAGES pages, each naming a next one; and one pinned status Kopje does not have. The documents
   // `redirected` names answer with a same-origin redirect to where they are served.
-  async function largestRead(t: Setup, bob: TestActor, redirected: (url: string) => boolean) {
+  function largestRead(t: Setup, bob: TestActor, redirected: (url: string) => boolean) {
     const serve = (url: string, body: Record<string, unknown>) => {
       if (redirected(url)) {
         t.web.redirect(url, `${url}#moved`.replace("#moved", url.includes("?") ? "&moved" : "?moved"));
@@ -679,7 +679,7 @@ describe("reading a remote account’s collections", () => {
     const t = await setup();
     const bob = await mastodonActor(t.web, "bob");
     // One redirect makes the whole read cost more than a round's budget (2 + 2 + 1 + the pages, and the hop).
-    const { note } = await largestRead(t, bob, (url) => url === `${bob.uri}/collections/tags`);
+    const { note } = largestRead(t, bob, (url) => url === `${bob.uri}/collections/tags`);
     expect(2 + 2 + 1 + MAX_FEATURED_TAG_PAGES + 1).toBeGreaterThan(REQUEST_MAX_FETCHES);
     const bobId = await followed(t, bob);
     await sync(t);
@@ -698,7 +698,7 @@ describe("reading a remote account’s collections", () => {
     const bob = await mastodonActor(t.web, "bob");
     const note = mastodonNote(bob);
     t.web.serve(note.id, { "@context": AS, ...note });
-    await servedCollections(t, bob, [note.id], []);
+    servedCollections(t, bob, [note.id], []);
     t.web.fail(`${bob.uri}/collections/tags`, 503);
     const bobId = await followed(t, bob);
     for (let round = 0; round <= MAX_SYNC_ATTEMPTS + 1; round++) {
@@ -714,7 +714,7 @@ describe("reading a remote account’s collections", () => {
     const bob = await mastodonActor(t.web, "bob");
     // The network collections redirect once each, and the following one then fails (four fetches each round, read
     // never); the featuredTags collection is the largest, each document redirected once (the whole budget).
-    await largestRead(
+    largestRead(
       t,
       bob,
       (url) =>
@@ -733,7 +733,7 @@ describe("reading a remote account’s collections", () => {
     const t = await setup();
     const bob = await mastodonActor(t.web, "bob");
     expect(Math.max(...Object.values(PART_DOCUMENTS)) * 2).toBeLessThanOrEqual(REQUEST_MAX_FETCHES);
-    const { note } = await largestRead(t, bob, (url) => url.startsWith(bob.uri) && !url.includes("/statuses/"));
+    const { note } = largestRead(t, bob, (url) => url.startsWith(bob.uri) && !url.includes("/statuses/"));
     const bobId = await followed(t, bob);
     await sync(t);
     expect(await pinned(t, bobId, null)).toEqual([note.id]);
@@ -745,7 +745,7 @@ describe("reading a remote account’s collections", () => {
     const t = await setup();
     const bob = await mastodonActor(t.web, "bob");
     const notes = Array.from({ length: MAX_REMOTE_PINS + 10 }, () => mastodonNote(bob, { to: [PUBLIC] }));
-    await servedCollections(
+    servedCollections(
       t,
       bob,
       notes.map((note) => note.id),
@@ -767,7 +767,7 @@ describe("reading a remote account’s collections", () => {
     const bob = await mastodonActor(t.web, "bob");
     const names = async () => (await featuredTags(t, bobId)).map((tag) => tag.name);
     const plain = "b".repeat(200);
-    await servedCollections(t, bob, [], [hashtag("Cats"), hashtag("a".repeat(257)), hashtag(plain)]);
+    servedCollections(t, bob, [], [hashtag("Cats"), hashtag("a".repeat(257)), hashtag(plain)]);
     const bobId = await followed(t, bob);
     await sync(t);
     expect(await names()).toEqual(["Cats", plain]);
@@ -776,7 +776,7 @@ describe("reading a remote account’s collections", () => {
     expect(await names()).toEqual(["Cats", plain]);
     // The collection respells the 200-letter one with a combining mark on each letter: its name is the same, but its
     // spelling of 400 code points is past the bound, so it is not listed, and the row goes rather than take it.
-    await servedCollections(t, bob, [], [hashtag("Cats"), hashtag("b\u0301".repeat(200))]);
+    servedCollections(t, bob, [], [hashtag("Cats"), hashtag("b\u0301".repeat(200))]);
     const updated = { "@context": AS, id: `${bob.uri}#updates/${nextId()}`, type: "Update", actor: bob.uri };
     expect(await t.post(bob, { ...updated, object: bob.document })).toBe(202);
     await sync(t);
@@ -792,7 +792,7 @@ describe("reading a remote account’s collections", () => {
     const late = mastodonNote(bob);
     t.web.serve(late.id, { "@context": AS, ...late });
     const foreign = Array.from({ length: MAX_REMOTE_PINS - 2 }, (_, i) => `${OTHER}/users/bob/statuses/${i}`);
-    await servedCollections(t, bob, [hashtag("Early"), ...foreign, own.id, late.id, hashtag("Late")], []);
+    servedCollections(t, bob, [hashtag("Early"), ...foreign, own.id, late.id, hashtag("Late")], []);
     const bobId = await followed(t, bob);
     expect(await t.post(bob, create(bob, own))).toBe(202);
     await sync(t);
@@ -805,7 +805,7 @@ describe("reading a remote account’s collections", () => {
   it("reads at most MAX_FEATURED_TAG_PAGES pages of the featuredTags collection, and never asks for the next", async () => {
     const t = await setup();
     const bob = await mastodonActor(t.web, "bob");
-    await servedCollections(t, bob, [], []);
+    servedCollections(t, bob, [], []);
     const tags = `${bob.uri}/collections/tags`;
     const pageUrl = (n: number) => `${tags}?page=${n}`;
     t.web.serve(tags, { "@context": AS, id: tags, type: "OrderedCollection", first: pageUrl(1) });
@@ -830,7 +830,7 @@ describe("reading a remote account’s collections", () => {
     const t = await setup();
     const bob = await mastodonActor(t.web, "bob");
     const note = mastodonNote(bob);
-    await servedCollections(t, bob, [note.id], [hashtag("Cats")]);
+    servedCollections(t, bob, [note.id], [hashtag("Cats")]);
     t.web.serve(`${bob.uri}/followers`, counted(bob, "followers", 1, true));
     t.web.serve(`${bob.uri}/following`, counted(bob, "following", 1, true));
     const bobId = await followed(t, bob);

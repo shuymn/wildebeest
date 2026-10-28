@@ -55,7 +55,7 @@ export class S3Mock {
   // Keys a listing leaves out, as an eventually consistent store might.
   hidden = new Set<string>();
   // Called before a request is handled; a test can hold a request here.
-  before: ((op: S3Op, key: string | null) => Promise<void>) | undefined;
+  before: ((op: S3Op, key: string | null) => void | Promise<void>) | undefined;
   #next = 1;
 
   constructor(

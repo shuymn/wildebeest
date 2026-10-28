@@ -1220,7 +1220,7 @@ describe("media_ids (PostStatusService#validate_media!, MEDIA-1)", () => {
 
   it("refuses each kind of media it cannot attach, writing nothing", async () => {
     const kinds: [string, (h: Pair) => Promise<unknown>][] = [
-      ["an unknown id", async () => undefined],
+      ["an unknown id", () => Promise.resolve(undefined)],
       ["another account’s", async (h) => insertMedia(h, h.users.bob.id)],
       [
         "attached to another status",

@@ -3161,23 +3161,23 @@ describe("filtered notifications and requests cost a read nothing (RES-7)", () =
       const below = { ...PAGE, maxId: String(FOLLOWS + 1) };
       const reads: [string, StoreOperation<never, unknown>, (store: StoreStub) => Promise<unknown>][] = [
         ...[PAGE, below].flatMap((page): [string, StoreOperation<never, unknown>, () => Promise<unknown>][] => [
-          [`notifications ${JSON.stringify(page)}`, listNotifications, async () => ({ ...list, page })],
+          [`notifications ${JSON.stringify(page)}`, listNotifications, () => Promise.resolve({ ...list, page })],
           [
             `grouped notifications ${JSON.stringify(page)}`,
             listGroupedNotifications,
-            async () => ({ ...groups, page }),
+            () => Promise.resolve({ ...groups, page }),
           ],
         ]),
-        ["unread count", unreadCount, async () => counts],
-        ["unread group count", unreadGroupCount, async () => counts],
-        ["requests", listNotificationRequests, async () => ({ credential, page: PAGE, present: PRESENT })],
+        ["unread count", unreadCount, () => Promise.resolve(counts)],
+        ["unread group count", unreadGroupCount, () => Promise.resolve(counts)],
+        ["requests", listNotificationRequests, () => Promise.resolve({ credential, page: PAGE, present: PRESENT })],
         [
           "request",
           getNotificationRequest,
           async (store) => ({ credential, id: String(await newestRequest(store)), present: PRESENT }),
         ],
-        ["policy", getNotificationPolicy, async () => ({ credential })],
-        ["merged", notificationRequestsMerged, async () => ({ credential })],
+        ["policy", getNotificationPolicy, () => Promise.resolve({ credential })],
+        ["merged", notificationRequestsMerged, () => Promise.resolve({ credential })],
       ];
       const grown: string[] = [];
       for (const [name, operation, inputOf] of reads) {

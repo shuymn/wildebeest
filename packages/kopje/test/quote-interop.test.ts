@@ -183,12 +183,12 @@ async function world() {
   // A's delivery rounds keeping, rather than sending, what goes to B: signed requests to replay in any order.
   const captureForB = async () => {
     const held: Request[] = [];
-    const fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const fetch = ((input: RequestInfo | URL, init?: RequestInit) => {
       const request = new Request(input, init);
       if (new URL(request.url).host === "kopje-b.test") {
         held.push(request.clone());
       }
-      return new Response(null, { status: 202 });
+      return Promise.resolve(new Response(null, { status: 202 }));
     }) as typeof globalThis.fetch;
     await rounds(
       a.env,

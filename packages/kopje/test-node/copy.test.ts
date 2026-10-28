@@ -246,7 +246,7 @@ describe("the copy control", () => {
     expect([a.button.state, a.status.textContent]).toEqual([null, ""]);
   });
 
-  it("leaves the controls hidden without the Clipboard API, and a control without a status element", async () => {
+  it("leaves the controls hidden without the Clipboard API, and a control without a status element", () => {
     const a = field();
     enableCopy(page([a.button]), undefined);
     expect(a.button.hidden).toBe(true);
