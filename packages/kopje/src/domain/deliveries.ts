@@ -22,6 +22,7 @@ import {
 	stagedQuoters,
 	stagedVoters,
 } from './audience'
+import { EXPANSION_STEP } from './delivery-bounds'
 import { hostCovered } from './instance-domain-blocks'
 import { readOperation, writeOperation } from './operation'
 import { RowBudget } from './row-budget'
@@ -84,7 +85,7 @@ export const RETRY_BASE_MS = 30_000
 export const RETRY_MAX_MS = 12 * 60 * 60 * 1000
 export const CLAIM_LIMIT = 16
 export const GAVE_UP_RETENTION_MS = 30 * 24 * 60 * 60 * 1000
-export const EXPANSION_STEP = 100
+export { EXPANSION_STEP }
 // A chunk is one expansion step, so a step parses one chunk; with the URL caps at ingestion a full chunk stays well
 // under TARGET_CHUNK_BYTES, which in turn is far under the 2 MB a Durable Object row or string may hold.
 export const TARGET_CHUNK_SIZE = EXPANSION_STEP
