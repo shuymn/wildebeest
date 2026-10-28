@@ -83,7 +83,7 @@
     "@fedify/vocab": "2.4.4",
     "@jsquash/webp": "1.5.0",
     "@playwright/test": "1.64.0",
-    "@types/node": "24.19.2",
+    "@types/node": "26.6.5",
     "@types/sanitize-html": "2.16.2",
     "age-encryption": "0.3.1",
     "aws4fetch": "1.0.20",
