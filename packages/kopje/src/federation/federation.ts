@@ -640,7 +640,7 @@ function withAttributionDomains<T extends { toJsonLd(options?: object): Promise<
     const context = (json as { "@context": unknown })["@context"];
     return {
       ...json,
-      "@context": [...(Array.isArray(context) ? context : [context]), ATTRIBUTION_DOMAINS_CONTEXT],
+      "@context": [...(Array.isArray(context) ? (context as unknown[]) : [context]), ATTRIBUTION_DOMAINS_CONTEXT],
       attributionDomains: domains,
     };
   };

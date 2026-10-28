@@ -10,7 +10,8 @@ export async function readBoundedBody(message: Request | Response, limit: number
   if (message.body === null) {
     return new Uint8Array(0);
   }
-  const reader = message.body.getReader();
+  // A body stream yields bytes; the Workers types leave its chunk type `any`.
+  const reader = (message.body as ReadableStream<Uint8Array>).getReader();
   const chunks: Uint8Array[] = [];
   let total = 0;
   for (;;) {

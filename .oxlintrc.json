@@ -121,9 +121,7 @@
     "typescript/no-explicit-any": "off",
     "eslint/no-unsafe-optional-chaining": "off",
     "unicorn/no-new-array": "off",
-    "typescript/no-unsafe-assignment": "off",
     "typescript/no-deprecated": "off",
-    "typescript/no-unsafe-member-access": "off",
     "eslint/preserve-caught-error": "off",
     "eslint/no-extend-native": "off",
     "typescript/no-dynamic-delete": "off",
@@ -135,7 +133,6 @@
     "unicorn/no-array-fill-with-reference-type": "off",
     "unicorn/prefer-add-event-listener": "off",
     "typescript/no-extraneous-class": "off",
-    "typescript/no-unsafe-argument": "off",
     "typescript/use-unknown-in-catch-callback-variable": "off"
   },
   "overrides": [
