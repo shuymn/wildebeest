@@ -23,7 +23,7 @@ import {
   withAlice,
 } from "./api-helpers";
 import { NOW } from "./app-helpers";
-import { runStoreJobs } from "./helpers";
+import { BUILD, runStoreJobs } from "./helpers";
 import { appToken, plannedRun, remoteAccounts, scansOf, staleStatistics } from "./read-helpers";
 import { storeWith } from "./setup-helpers";
 import { WEBSITE_REFUSED } from "./status-helpers";
@@ -611,6 +611,17 @@ describe("authorize, consent, token, API call", () => {
     const app = await registerApp(h);
     await sql(h.store, "DELETE FROM instance_settings WHERE name = 'access_aud'");
     expect((await consentPage(h, app)).status).toBe(503);
+  });
+
+  it("shows the consent page when the domain was configured by hand in another spelling (WEB-1)", async () => {
+    const h = await withAlice();
+    const app = await registerApp(h);
+    expect(await h.store.setConfig(BUILD, { kind: "import-token" }, { domain: "KOPJE.Test" })).toMatchObject({
+      ok: true,
+    });
+    const response = await consentPage(h, app);
+    expect(response.status).toBe(200);
+    expect(await response.text()).toContain("@alice@kopje.test");
   });
 
   it("answers 503 while no domain is fixed, whatever the host", async () => {
