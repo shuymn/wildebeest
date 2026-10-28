@@ -1,6 +1,8 @@
 // Unused files, dependencies and exports (`pnpm run knip`, CI's check job). Entries the plugins find (wrangler's
 // `main`, the vitest configs and their setup files, playwright's config and global setup, lefthook, oxlint) are not
-// listed again; the rest are below, each with what loads it.
+// listed again; the rest are below, each with what loads it. Tests count as users of an export. A constant exported
+// under a second name on purpose, a bound of its own that equals another (EMIT_BYTES = TARGET_CHUNK_BYTES), is
+// tagged `/** @alias */` so it is not reported as a duplicate.
 {
   "$schema": "https://unpkg.com/knip@6/schema.json",
   // `cloudflare:test` and `cloudflare:workers` are workerd's built-in modules, not packages.
@@ -40,6 +42,11 @@
         "test-node/**/*.ts",
         "*.config.ts",
       ],
+      "ignoreIssues": {
+        // Written by scripts/build-assets.mjs, which reads its PREVIOUS_* constants back as text to keep the previous
+        // release's assets; the pages import only some of them.
+        "src/web/asset-versions.ts": ["exports"],
+      },
     },
     // The operator template, outside the pnpm workspace: its entry is wrangler's `main`, and its build script copies
     // the installed package's assets.

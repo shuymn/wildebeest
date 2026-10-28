@@ -703,6 +703,7 @@ export function stagingRetraction(db: Db, signerId: string, object: string): str
 // staging anew.
 export const STAGING_READ = 500;
 export const STAGING_BYTES = 2 * TARGET_CHUNK_BYTES;
+/** @alias */
 export const EMIT_BYTES = TARGET_CHUNK_BYTES;
 // The staging's rows: its row's insert and staged set by the first call; its delete, staged cleared and the intent
 // dropped at the end (endStaging). Each call saves its row once more.
