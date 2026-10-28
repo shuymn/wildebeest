@@ -167,6 +167,7 @@ const RULES: readonly Rule[] = [
     allowed: {
       ...POLICY_ONLY,
       "src/domain/polls.ts": "votes cast through mayVoteSql (R27), the viewer’s own, and their purges",
+      "src/domain/poll-presenter.ts": "presentPolls: the viewer’s own votes, presented with the counts",
       "src/domain/status-rows.ts": "R's count of the viewer’s own votes (ownVoteCountSql), never who voted",
     },
   },
@@ -187,6 +188,8 @@ const RULES: readonly Rule[] = [
     allowed: {
       "src/domain/reports.ts":
         "the reporter’s report, written and answered once (createReport), and the OAuth admin’s reads and actions (R37)",
+      "src/domain/report-presenter.ts":
+        "reads only: the reporter’s Report entity, for reports.ts and the notifications",
       "src/domain/inbox.ts": "an actor purge deletes the reports of the account",
     },
   },

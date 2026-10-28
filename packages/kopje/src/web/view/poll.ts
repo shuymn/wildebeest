@@ -1,4 +1,4 @@
-import type { Poll } from "../../domain/polls";
+import type { Poll } from "../../domain/poll-presenter";
 import type { EmojiField, Inline } from "./emoji";
 
 // A poll as the pages show it (POLL-2): its choices, and their shares only when the presenter showed each

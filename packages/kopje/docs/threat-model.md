@@ -562,8 +562,8 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
   recipient").
 - **VIS-8: a pending follow grants nothing.** A follow of a locked local account or of any remote account starts
   `pending`; only `accepted` follows count, appear in follower lists, or grant `private` access. _Enforced (main):_
-  `follow` in `src/domain/accounts.ts`; `test/accounts.test.ts` ("requests a locked or remote account", "lists following
-  without pending requests"). `GET /api/v1/accounts/familiar_followers` reads accepted follows on both sides only,
+  `follow` in `src/domain/account-actions.ts`; `test/accounts.test.ts` ("requests a locked or remote account", "lists
+  following without pending requests"). `GET /api/v1/accounts/familiar_followers` reads accepted follows on both sides only,
   leaves out suspended accounts and the followers the viewer filters out of lists (VIS-5, VIS-14, VIS-15: blocks,
   mutes while they apply, domain blocks; `filteredForSql`), and shows no follow that the followers and following lists
   would not show the same viewer: _Enforced (main):_ `familiarFollowers` in
@@ -599,7 +599,7 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
   `suggestionSourceSql` and `suggestionCandidateSql` in `src/domain/audience.ts`, `suggestions` in
   `src/domain/suggestions.ts`; `test/suggestions.test.ts`, `test/policy-endpoints.test.ts`.
 - **VIS-9: only the followed side accepts.** A pending follow of a local account becomes `accepted` only by that
-  account's own authorize call; a pending remote follow only by an `Accept` that passes ID-6. _Enforced (main):_ `answerFollowRequest` in `src/domain/accounts.ts` (`POST
+  account's own authorize call; a pending remote follow only by an `Accept` that passes ID-6. _Enforced (main):_ `answerFollowRequest` in `src/domain/account-actions.ts` (`POST
   /api/v1/follow_requests/:id/authorize` and `/reject`, the viewer from the credential; a remote requester gets the
   Accept or Reject at its shared inbox, or its personal inbox without one), and the inbound `Accept`, matched first by the `follows.uri` of our Follow;
   `test/inbox.test.ts` ("Accept: only the target of our Follow accepts it"), `test/inbox-regressions.test.ts` ("with
@@ -2242,9 +2242,9 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
   whoever may see its status by itself (R3), and a vote needs R27 (`mayVoteSql`: the voter blocks neither the
   author nor its domain); otherwise 404 (403 for a voter who blocks the author, as Mastodon). Only counts and the viewer's own votes
   are shown; `hide_totals` hides each choice's count from everyone until the poll ends, in the API and in the
-  Question (no `totalItems`). `poll_votes` is read in `polls.ts`, and in `status-rows.ts` only to count the viewer's
-  own votes of the current generation (`test-node/policy-boundary.test.ts`, R27). A remote vote passes the same rule
-  (Mastodon checks none). _Enforced (main):_ `test/polls.test.ts` ("shows a poll only to whoever may see its status",
+  Question (no `totalItems`). `poll_votes` is read in `polls.ts` and `poll-presenter.ts`, and in `status-rows.ts` only
+  to count the viewer's own votes of the current generation (`test-node/policy-boundary.test.ts`, R27). A remote vote
+  passes the same rule (Mastodon checks none). _Enforced (main):_ `test/polls.test.ts` ("shows a poll only to whoever may see its status",
   "refuses a voter who blocks the author (R27)", "hides the counts … from everyone"),
   `test/polls-federation.test.ts` ("is refused from an account the author blocks (R27)").
   Public pages: _Enforced (main):_ the status page, the feeds (profile tabs, hashtag page) and the embed show a post's

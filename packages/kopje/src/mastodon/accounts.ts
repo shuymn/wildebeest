@@ -1,6 +1,5 @@
+import type { CredentialChanges, ProfileImages } from "../domain/account-actions";
 import {
-  type CredentialChanges,
-  type ProfileImages,
   type FieldSource,
   MAX_ACCOUNTS_BY_ID,
   MAX_ATTRIBUTION_DOMAINS,

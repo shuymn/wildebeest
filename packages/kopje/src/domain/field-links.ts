@@ -34,7 +34,7 @@ import {
 // - A candidate is a value of the bounded fields (boundedLocalFieldsSql) that fieldLinkValueSql and verifiableLink
 //   accept, not yet verified, nor checked and not verified: at most LOCAL_FIELDS, each at most FIELD_LINK_VALUE_BYTES
 //   of printable ASCII.
-// - A save (accounts.ts updateCredentials) prunes verified_links in SQL, clears unverified_links, and arms
+// - A save (account-actions.ts updateCredentials) prunes verified_links in SQL, clears unverified_links, and arms
 //   links_due_at when a candidate is left: coalesced with a pending check (Mastodon's lock until_executed), and never
 //   before the last claim's hold ends.
 // - A claim (claimFieldLinks, one per round) takes the first due account that is not held, bumps the claim token

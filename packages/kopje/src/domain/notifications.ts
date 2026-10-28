@@ -16,7 +16,7 @@ import {
 import { currentCredentialSql, type UserContext, userReadOperation, userWriteOperation } from "./auth";
 import { addToConversation } from "./conversations";
 import { jobDueSql, nextJob, NOTIFICATION_CLEARS, NOTIFICATION_DISMISSALS, runJobItem } from "./job-attempts";
-import { presentReport, type Report } from "./reports";
+import { presentReport, type Report } from "./report-presenter";
 import { presentation, type Status, statusStream } from "./status-presenter";
 import { readWindow, windowJson, windowOf, windowPage } from "./windows";
 

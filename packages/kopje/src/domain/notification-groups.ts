@@ -24,7 +24,7 @@ import {
   shownWindow,
   warningOf,
 } from "./notifications";
-import { presentReport, type Report } from "./reports";
+import { presentReport, type Report } from "./report-presenter";
 import { LARGE_ITEM_CHUNKS, presentation, type Status, statusStream } from "./status-presenter";
 import { readWindow, windowOf, windowPage } from "./windows";
 

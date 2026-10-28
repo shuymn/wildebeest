@@ -2,6 +2,7 @@ import { DurableObject } from "cloudflare:workers";
 
 import { MIGRATIONS } from "./db/migrations";
 import { Db } from "./db/sql";
+import * as accountActions from "./domain/account-actions";
 import * as invitations from "./domain/account-invitations";
 import * as accounts from "./domain/accounts";
 import * as activities from "./domain/activities";
@@ -1018,8 +1019,8 @@ export class Store extends DurableObject<Env> {
     return this.#kernel.execute(callerBuild, accounts.userinfo, input);
   }
 
-  updateCredentials(callerBuild: string, input: OperationInput<typeof accounts.updateCredentials>) {
-    return this.#kernel.execute(callerBuild, accounts.updateCredentials, input);
+  updateCredentials(callerBuild: string, input: OperationInput<typeof accountActions.updateCredentials>) {
+    return this.#kernel.execute(callerBuild, accountActions.updateCredentials, input);
   }
 
   preferences(callerBuild: string, input: OperationInput<typeof accounts.preferences>) {
@@ -1038,20 +1039,20 @@ export class Store extends DurableObject<Env> {
     return this.#kernel.execute(callerBuild, accounts.searchAccounts, input);
   }
 
-  follow(callerBuild: string, input: accounts.FollowInput & { credential: UserCredential }) {
-    return this.#kernel.execute(callerBuild, accounts.follow, input);
+  follow(callerBuild: string, input: accountActions.FollowInput & { credential: UserCredential }) {
+    return this.#kernel.execute(callerBuild, accountActions.follow, input);
   }
 
   unfollow(callerBuild: string, input: { credential: UserCredential; target: string; now: number }) {
-    return this.#kernel.execute(callerBuild, accounts.unfollow, input);
+    return this.#kernel.execute(callerBuild, accountActions.unfollow, input);
   }
 
   listFollowRequests(callerBuild: string, input: OperationInput<typeof accounts.listFollowRequests>) {
     return this.#kernel.execute(callerBuild, accounts.listFollowRequests, input);
   }
 
-  answerFollowRequest(callerBuild: string, input: OperationInput<typeof accounts.answerFollowRequest>) {
-    return this.#kernel.execute(callerBuild, accounts.answerFollowRequest, input);
+  answerFollowRequest(callerBuild: string, input: OperationInput<typeof accountActions.answerFollowRequest>) {
+    return this.#kernel.execute(callerBuild, accountActions.answerFollowRequest, input);
   }
 
   listFollows(callerBuild: string, input: OperationInput<typeof accounts.listFollows>) {
