@@ -94,7 +94,7 @@ A pull request adds its notes under `## [Unreleased]` in `CHANGELOG.md`; a relea
 3. Watch the workflow. If it fails in the check job, nothing was published: fix the cause on `main`, delete the tag
    and tag again.
 4. Update the template: bump `kopje` in `deploy/package.json` to the new version (Renovate opens this pull request as
-   soon as the version is on npm, release candidates included), and, if the release notes say so, change
+   soon as a stable version is on npm; bump it by hand for a release candidate the template should install), and, if the release notes say so, change
    `deploy/wrangler.jsonc` the same way. The template must name a published version: CI dry-runs it against the packed
    package, not against npm, so it passes even when the Deploy to Cloudflare button would fail to install. This step is
    what makes the button install the new version. To try the button from a branch before merging, open
