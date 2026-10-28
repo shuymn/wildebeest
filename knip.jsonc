@@ -9,8 +9,9 @@
   "ignoreDependencies": ["cloudflare"],
   "workspaces": {
     ".": {
-      // The release and CI scripts, run by node from the workflows and package.json.
-      "entry": ["scripts/*.mjs"],
+      // The release scripts' tests (`pnpm run test:scripts`). The scripts themselves are found from the workflows and
+      // package.json; kopje-release-lib.mjs is the module they import.
+      "entry": ["scripts/*.test.mjs"],
       "project": ["scripts/**/*.mjs"],
     },
     "packages/kopje": {
@@ -20,14 +21,16 @@
         "src/maintenance-worker.ts",
         "src/maintenance-render.ts",
         "src/client/main.ts",
-        // The `kopje-admin` bin is found from package.json; these are run by node or loaded by oxlint.
-        "scripts/*.mjs",
-        "lint/*.js",
+        // The `kopje-admin` bin and scripts/build-{assets,package}.mjs are found from package.json.
+        // build-maintenance.mjs and mastodon-scopes.mjs are run by hand too, but are not entries: the build and the
+        // tests import them, so their exports are checked.
+        // The oxlint JS plugin (.oxlintrc.json `jsPlugins`), whose default export oxlint loads.
+        "lint/signing-keys.js",
         // Loaded by a computed specifier from browser/render.ts.
         "browser/fixtures/pages.tsx",
-        // The suites of each vitest config, whose `include` is an absolute path the plugin does not read.
+        // The suites of each vitest config, whose `include` is an absolute path the plugin does not read. No module
+        // imports a suite, so these name no shared helper.
         "test/**/*.test.ts",
-        "test/bench/*.ts",
         "test-node/**/*.test.ts",
         "browser/*.spec.ts",
         "vitest*.config.ts",
@@ -51,7 +54,7 @@
     // The operator template, outside the pnpm workspace: its entry is wrangler's `main`, and its build script copies
     // the installed package's assets.
     "deploy": {
-      "entry": ["scripts/*.mjs"],
+      "entry": ["scripts/assets.mjs"],
     },
   },
 }
