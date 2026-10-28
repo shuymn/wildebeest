@@ -2833,16 +2833,21 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
   `test/remote-suspension.test.ts` ("stays within the budget as a due retry", "stays within the budget when a round
   fails after its writes")). App registration: _Enforced (main):_ `POST /api/v1/apps` is limited to 5 per minute per
   client IP by the Workers Rate Limiting binding before its body is read (429), and the Store keeps at most 500
-  never-authorized apps (no token or code of a user); when full it first removes unused apps (no token of any kind)
-  older than a day, then the oldest never-authorized apps older than an hour (app tokens and all), and otherwise refuses
-  with 429. Only a user's token or code protects an app: anyone can get an app token without a user, so app tokens
-  cannot hold a slot for good. The cron removes unused apps after a day (Kopje's own removal, which Mastodon 4.5.11 does
-  not make: [mastodon-deviations.md](mastodon-deviations.md), Posting), and expired codes and web sessions, 500 of each
-  per run. Removing an app writes no status row however many it posted (`statuses.application_id` has no foreign key;
-  its statuses then show `application: null`). `registerApp` and `sweepOAuth` in `src/domain/oauth.ts`,
-  `src/mastodon/oauth.ts`; `test/apps-budget.test.ts`. Avatar and header uploads, from `update_credentials` and the
-  settings page alike, go through the media budgets below, one reservation and three transformations each, at most 8 MB
-  each. Unlocking an account: _Enforced (main):_ the update starts a cursor job (`local_accounts.accept_requests_after`)
+  never-authorized apps; when full it first removes unused ones (no token of any kind) older than a day, then the
+  oldest never-authorized ones older than an hour (app tokens and all), and otherwise refuses with 429. An app is
+  authorized once a user's code is issued for it (`oauth_clients.authorized`, migration `0086_authorized_apps`, set in
+  the code's transaction), and stays so when its codes and tokens go (revocation, suspension, expiry): it is never
+  counted, evicted or swept, as Mastodon 4.5.11 never removes an application, so a client that kept its `client_id`
+  signs in with it again. Authorized apps need no cap: a code is issued only on a local user's consent behind a verified
+  Access assertion (AUTH-4), so each is one user's action, and no request without a user marks an app; an app token
+  (client_credentials) never does, since anyone can get one without a user and the budget could then be filled for
+  good. The budget's count, removals and sweep walk the partial index `oauth_clients_pending` and remove each app by
+  its key, so they read no authorized app (`test/apps-budget.test.ts` ("walks the pending apps by their partial index
+  and marks an app by its key")). The cron removes unused never-authorized apps after a day (Kopje's own removal, which Mastodon 4.5.11 does not make:
+  [mastodon-deviations.md](mastodon-deviations.md), Posting), and expired codes and web sessions, 500 of each per run.
+  `registerApp` and `sweepOAuth` in `src/domain/oauth.ts`, `src/mastodon/oauth.ts`; `test/apps-budget.test.ts`.
+  Avatar and header uploads, from `update_credentials` and the settings page alike, go through the media budgets below,
+  one reservation and three transformations each, at most 8 MB each. Unlocking an account: _Enforced (main):_ the update starts a cursor job (`local_accounts.accept_requests_after`)
   instead of accepting in the request; each job round authorizes at most 20 requests, each in its own transaction
   through the single authorize path (its delivery admission and recount included), and every step advances or clears the
   cursor, also when its authorization throws (RES-5) (`src/domain/unlock-accepts.ts`; `test/unlock-accepts.test.ts`: 250

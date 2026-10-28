@@ -193,6 +193,8 @@ const NOT_CONVERTED: Record<string, string> = {
 	'notifications.report_id': 'legacy never notified of a report: carried ones name none, as stored ones do in 0040',
 	'notifications.account_warning_id':
 		'legacy never warned an account: carried ones name no warning, as stored ones do in 0062',
+	'oauth_clients.authorized':
+		'legacy carries no code or token: 0, marked when a user signs in through the app, as 0086 marks none without one',
 	'status_edits.id': ASSIGNED,
 	'status_edits.emojis': 'legacy has no custom emoji',
 	'status_edits.poll_options': 'legacy has no polls',
@@ -281,6 +283,7 @@ const NOT_VERIFIED: Record<string, string> = {
 	'notifications.group_key': DEFAULT,
 	'notifications.report_id': DEFAULT,
 	'notifications.account_warning_id': DEFAULT,
+	'oauth_clients.authorized': DEFAULT,
 	'oauth_clients.created_at': TIME,
 	'status_edits.created_at': TIME,
 	'status_edits.id': DEFAULT,

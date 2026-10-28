@@ -8,6 +8,17 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
 
 ## [Unreleased]
 
+### Fixed
+
+- An app a user has authorized is no longer removed once its tokens are gone: after the user revoked it (or its tokens
+  went with a suspension), the cron removed it a day later and a registration could evict it, so a client that keeps
+  its registered `client_id` met "Unknown application" at its next sign-in. Kopje now records on the app that a user
+  authorized it, when the first code is issued, and the registration budget counts, evicts and sweeps only apps no user
+  ever authorized, as Mastodon never removes an application. The upgrade marks every app that holds a user's code or
+  token; an app whose user tokens were all revoked before it stays unmarked and is removed as before
+  ([docs/threat-model.md](docs/threat-model.md), RES-6; [docs/mastodon-deviations.md](docs/mastodon-deviations.md);
+  [docs/dump-format.md](docs/dump-format.md)). Migration `0086_authorized_apps`; `wrangler.jsonc`: unchanged.
+
 ## [0.1.0-rc.25] - 2026-10-28
 
 A twenty-fifth release candidate of the first release, published under the npm dist-tag `next`.

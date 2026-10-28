@@ -614,9 +614,10 @@ Posting (`POST` and `PUT /api/v1/statuses`):
   these are the characters that end or split an HTML attribute or a URL in common parsers. Registration trims
   surrounding whitespace before it validates, so only inner whitespace is refused there. Mastodon's UrlValidator
   (`Addressable::URI.parse`, an http(s) scheme and a host) may accept some of them.
-- Kopje removes an app itself (an unused app after a day, or one registration evicts): its statuses then show
-  `application: null`. Mastodon removes an app only when its owner deletes it. A scheduled status whose app is gone by
-  its publication is published, showing `application: null`; Mastodon drops it.
+- Kopje removes an app no user has authorized (unused after a day, or one a registration evicts: threat-model.md
+  RES-6); Mastodon removes an app only when its owner deletes it. An app a user authorized is never removed, so the
+  statuses posted through it keep showing it. A status or scheduled status whose app is gone all the same (one a dump
+  or a legacy import names) shows `application: null`, and such a scheduled status is published; Mastodon drops it.
 
 Removing a favourite or bookmark (`POST /api/v1/statuses/:id/unfavourite` and `/unbookmark`):
 
