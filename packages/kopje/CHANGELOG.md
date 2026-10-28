@@ -16,6 +16,9 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
   its `renovate.json`, which still works; the template's README says how to move. Every GitHub release's notes start
   with a line asking to read them and [docs/upgrade.md](docs/upgrade.md) before merging, which Dependabot shows in
   the pull request.
+- The header of the pages that read nothing of the site (the OAuth consent and code pages, `/setup`, and the error
+  pages answered without the Store) names the server by the host the page is on, still leading to `/`, instead of
+  "Kopje", so the consent page shows which server is being authorized.
 
 ## [0.1.0] - 2026-10-28
 

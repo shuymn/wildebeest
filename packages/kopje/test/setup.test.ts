@@ -156,13 +156,13 @@ describe("/setup sign-in with SETUP_TOKEN", () => {
       expect(csp).toContain("frame-ancestors 'none'");
       expect(csp).not.toContain("script-src");
       expect(response.headers.get("access-control-allow-origin")).toBeNull();
-      // Before setup there is no domain to show: the header names the product and nothing links /about.
+      // Without the site's chrome, the header names the host the page is on, and nothing links /about.
       const doc = parseHtml(await response.text());
       expect(
         query(doc, "a").filter((a) => attr(a, "href") === "/about"),
         path,
       ).toEqual([]);
-      expect(text(one(doc, "header")), path).toBe("Kopje");
+      expect(text(one(doc, "header")), path).toBe("kopje.test");
     }
     const preflight = await h.request("/setup/login", {
       method: "OPTIONS",
