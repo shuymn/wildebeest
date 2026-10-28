@@ -1,3 +1,7 @@
+# The hooks run the lefthook pinned in package.json, with mise's pinned node and pnpm, whatever lefthook is first on
+# PATH; the jobs call the tools mise.toml pins (`mise install`).
+lefthook: mise exec -- pnpm exec lefthook
+
 pre-commit:
   skip:
     - merge
@@ -11,9 +15,16 @@ pre-commit:
     - name: pretty
       glob: '*.{ts,tsx,js,jsx,json,css}'
       run: npx prettier --list-different {staged_files}
-    # Blocks commits that stage secrets. Install with `mise install` (betterleaks is pinned in mise.toml).
+    # Blocks commits that stage secrets; CI scans the whole history (security.yml).
     - name: secrets
-      run: betterleaks git --pre-commit --staged --redact --no-banner --verbose
+      run: mise exec -- betterleaks git --pre-commit --staged --redact --no-banner --verbose
+    # The workflow checks CI runs through the shared gha.yml.
+    - name: actionlint
+      glob: '.github/workflows/*.{yml,yaml}'
+      run: mise exec -- actionlint {staged_files}
+    - name: ghalint
+      glob: '.github/workflows/*.{yml,yaml}'
+      run: mise exec -- ghalint run
 
 pre-push:
   skip:
