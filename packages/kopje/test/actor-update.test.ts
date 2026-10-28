@@ -5,6 +5,7 @@ import { NOW } from "./app-helpers";
 import { LEGACY } from "./federation-helpers";
 import { PNG_PLAIN } from "./fixtures/images";
 import { bytes, mediaForm, TestCodec } from "./media-helpers";
+import { byText } from "./sort";
 import { community, outbound, remoteAccount, remoteFollows } from "./status-helpers";
 import { csrfOf, ORIGIN, signIn } from "./web-helpers";
 
@@ -184,7 +185,7 @@ describe("Update(Person)", () => {
       "SELECT id, state FROM deliveries WHERE activity_id = ?",
       firstId,
     );
-    expect(firstLeft.map((d) => d.id).sort()).toEqual(leased.map((d) => d.id).sort());
+    expect(firstLeft.map((d) => d.id).sort(byText)).toEqual(leased.map((d) => d.id).sort(byText));
     expect(await targetsOf(h, firstId)).toBe(firstLeft.length);
     // The status and the second Update reach every follower's server (151 each, expanded or still waiting).
     expect(await targetsOf(h, createId ?? 0)).toBe(151);

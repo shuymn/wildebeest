@@ -269,7 +269,7 @@ describe("images-export", () => {
     });
     expect(again.ok).toBe(true);
     expect(again.report).toMatchObject({ images: 8, kept: 6, downloaded: 2 });
-    expect(calls.map((c) => c.url.split("/")[4]).sort()).toEqual(["image-2", "image-3"]);
+    expect(calls.map((c) => c.url.split("/")[4]!).sort()).toEqual(["image-2", "image-3"]);
     expect(await imagesJson(first.outDir)).toEqual(before);
     expect(await readFile(join(first.outDir, "originals", "image-2"))).toEqual(Buffer.from(FILES["image-2"] ?? []));
 

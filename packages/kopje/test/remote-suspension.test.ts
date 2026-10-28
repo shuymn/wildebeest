@@ -24,6 +24,7 @@ import {
   world,
   type World,
 } from "./remote-suspension-helpers";
+import { byText } from "./sort";
 import { follow, remoteAccount, remoteFollows } from "./status-helpers";
 
 // The instance suspension of a remote account through the Mastodon admin API (R1, R38, VIS-30; Admin::AccountAction,
@@ -172,8 +173,8 @@ describe("the account job and its generation", () => {
     await settle(w.h.store);
     expect(await jobs(w.h.store)).toEqual([]);
     const uri = await uriOf(w.h.store, r);
-    expect((await rejects(w.h.store)).map((row) => [row.signer, row.follower, row.retracts]).sort()).toEqual(
-      [w.alice.id, w.bob.id, w.carol.id, w.dan.id].map((id) => [id, uri, 1]).sort(),
+    expect((await rejects(w.h.store)).map((row) => [row.signer, row.follower, row.retracts]).sort(byText)).toEqual(
+      [w.alice.id, w.bob.id, w.carol.id, w.dan.id].map((id) => [id, uri, 1]).sort(byText),
     );
     expect(await sql(w.h.store, "SELECT * FROM follows WHERE account_id = ?", r)).toEqual([]);
     // The report filed while r was available is frozen at the second suspension, and resolved too.

@@ -141,7 +141,7 @@ describe("markers", () => {
     const versions = await Promise.all(
       responses.map(async (r) => (await r.json<{ home: { version: number } }>()).home.version),
     );
-    expect(versions.toSorted()).toEqual([1, 2, 3, 4]);
+    expect(versions.toSorted((a, b) => a - b)).toEqual([1, 2, 3, 4]);
     expect((await read(h, alice, "?timeline[]=home")).body).toMatchObject({ home: { version: 4 } });
   });
 
