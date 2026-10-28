@@ -1,0 +1,18 @@
+name: Security checks
+# Scans the whole history for secrets with betterleaks and the repository's .betterleaks.toml; the pre-commit hook
+# scans only the staged change (lefthook.yml).
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+  workflow_dispatch:
+
+permissions: {}
+
+jobs:
+  security:
+    permissions:
+      contents: read
+    uses: shuymn/github-actions/.github/workflows/security.yml@ff6f722debd290fefec5482603fe74ea850ec145 # main
