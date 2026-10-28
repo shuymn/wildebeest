@@ -1704,8 +1704,8 @@ export const listFollows = optionalUserReadOperation<ListFollowsInput, Page<Acco
   (db, input, viewer) => listFollowsWithin(db, input, viewer, accountAnswerAdmission, "every")?.page ?? null,
 );
 
-// A page of a follow list, whether a continuation follows it (the page was full, or cut by its window or by bytes),
-// and whether the list is shown at all (followListsShownSql).
+// A page of a follow list, whether a continuation follows it (a row may lie past it, windowPage's `more`, or it was
+// cut by bytes), and whether the list is shown at all (followListsShownSql).
 export type FollowList = { page: Page<Account>; more: boolean; shown: boolean };
 
 // listFollows' read, its accounts admitted by `admission`. `members`: 'every' lists an unavailable member, presented
@@ -1758,7 +1758,7 @@ export function listFollowsWithin(
         );
   const shown = windowPage(window, rows, (row) => row.cursor, page.limit, ascending);
   const presented = accountPage(db, shown, ascending, (row) => row.cursor, present, admission);
-  return { page: presented, more: shown.rows.length >= page.limit || presented.cut === true, shown: true };
+  return { page: presented, more: shown.more || presented.cut === true, shown: true };
 }
 
 // Follow requests to the viewer (Mastodon's FollowRequestsController and AuthorizeFollowService/RejectFollowService).

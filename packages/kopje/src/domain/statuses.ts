@@ -2034,8 +2034,8 @@ export const interactors = optionalUserReadOperation<InteractorsInput, Viewed<Pa
   },
 );
 
-// A page of who favourited or boosted, and whether a continuation follows it (the page was full, or cut by its window
-// or by bytes).
+// A page of who favourited or boosted, and whether a continuation follows it (a row may lie past it, windowPage's
+// `more`, or it was cut by bytes).
 export type InteractorList = { page: Page<Account>; more: boolean };
 
 // interactors' read of the original `id`, which the caller found the viewer may see, its accounts admitted by
@@ -2100,7 +2100,7 @@ export function interactorsWithin(
         );
   const shown = windowPage(window, rows, (row) => row.cursor, page.limit, ascending);
   const presented = accountPage(db, shown, ascending, (row) => row.cursor, present, admission);
-  return { page: presented, more: shown.rows.length >= page.limit || presented.cut === true };
+  return { page: presented, more: shown.more || presented.cut === true };
 }
 
 // ---------------------------------------------------------------------------------------------------------------
@@ -2109,9 +2109,10 @@ export function interactorsWithin(
 
 export type StatusQuotesInput = { id: string; page: PageQuery; present: Present };
 
-// A page of the quotes list, and how many candidates its window held: the next page is offered when the window was
-// full, whatever the rule left of it.
-export type QuotesPage = Page<Status> & { candidates: number };
+// A page of the quotes list; how many candidates its window held (the API offers its next page when the window was
+// full, whatever the rule left of it); and `more`, for a public page's pager: a candidate lies past the window, or
+// the page was cut.
+export type QuotesPage = Page<Status> & { candidates: number; more: boolean };
 
 // GET /api/v1/statuses/:id/quotes (Api::V1::Statuses::QuotesController#index, R35): app tokens read as anonymous,
 // as Mastodon requires no user. R3 guards the target; statusQuotesWithin reads the page.
@@ -2133,7 +2134,8 @@ export const statusQuotes = optionalUserReadOperation<StatusQuotesInput, Viewed<
 
 // The quotes list of the status `id`, which the caller found the viewer may see; `own` when the viewer is its author.
 // Accepted quotes, newest first, paged by the quoting status's id (Kopje's quote key), not Mastodon's quote id. One
-// acceptedQuoteWindow seek reads at most `limit` candidates, then R8 applies, or R2 for the quoted author, quotes of
+// acceptedQuoteWindow seek reads at most `limit` candidates and one past them (whether one lies there, never shown),
+// then R8 applies, or R2 for the quoted author, quotes of
 // accounts they block or mute included (Mastodon skips StatusFilter for them). Bounds are the window's, so short or
 // empty pages still advance. For anyone but the quoted author, a quoting status their audience hides is never a
 // candidate, so its id is never a cursor: Kopje's rule, stricter than Mastodon's QuotesController, which paginates
@@ -2149,13 +2151,14 @@ export function statusQuotesWithin(
 ): QuotesPage {
   const { accountId } = viewer;
   const ascending = page.minId !== undefined;
-  const window = acceptedQuoteWindow(
+  const read = acceptedQuoteWindow(
     db,
     id,
     { max: statusCursor(page.maxId), min: statusCursor(page.minId ?? page.sinceId), ascending },
-    page.limit,
+    page.limit + 1,
     ...(own ? [] : [accountId]),
   );
+  const window = read.slice(0, page.limit);
   if (ascending) {
     window.reverse();
   }
@@ -2189,7 +2192,11 @@ export function statusQuotesWithin(
       ),
   );
   // A page cut by its admission offers next whatever it holds (pageResponse's count).
-  return { ...shown, candidates: shown.cut === true ? page.limit : window.length };
+  return {
+    ...shown,
+    candidates: shown.cut === true ? page.limit : window.length,
+    more: read.length > page.limit || shown.cut === true,
+  };
 }
 
 // ---------------------------------------------------------------------------------------------------------------

@@ -192,8 +192,8 @@ export function ownedAccountsPage(
 
 // One page of an owned account list (ownedAccountsPage, paged): one window of readWindow(limit) candidates from the
 // cursor (below `from` without one), `rule` applied to those outside the window's LIMIT, the accounts admitted by
-// `admission` (an API answer's by default); and whether a continuation follows it (the page was full, or cut by its
-// window or by bytes).
+// `admission` (an API answer's by default); and whether a continuation follows it (a row may lie past it,
+// windowPage's `more`, or it was cut by bytes).
 export function ownedAccountsWindow(
   db: Db,
   owner: string,
@@ -211,7 +211,7 @@ export function ownedAccountsWindow(
   const window = singleWindow(db, candidates(ascending ? "ASC" : "DESC"), size, owner, max, min, size);
   const shown = windowPage(window, windowAccountIds(db, window, rule), key, page.limit, ascending);
   const presented = accountPage(db, shown, ascending, key, present, admission);
-  return { page: presented, more: shown.rows.length >= page.limit || presented.cut === true };
+  return { page: presented, more: shown.more || presented.cut === true };
 }
 
 // GET /api/v1/lists/:id/accounts: the members, unavailable accounts left out (Account.without_suspended), by account

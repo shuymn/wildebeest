@@ -74,8 +74,8 @@ export type StatusAdmission = (entries: Iterable<Status | undefined>) => Admitte
 
 export const answerAdmission: StatusAdmission = (entries) => admit(entries, ARRAY_ANSWER_BYTES, true);
 
-// A page of statuses and whether a continuation follows it: the page was full, or it was cut by its
-// candidate window or by bytes.
+// A page of statuses and whether a continuation follows it: a row may lie past it (windowPage's `more`), or it was
+// cut by bytes.
 export type StatusList = { page: Page<Status>; more: boolean };
 
 // The page of a window of status ids: the candidates `rule` passes for the viewer, and `and` (over ?1 the viewer, ?2
@@ -128,7 +128,7 @@ function windowStatusesWithin(
     present,
     admission,
   );
-  return { page: presented, more: page.rows.length >= cursor.limit || presented.cut === true };
+  return { page: presented, more: page.more || presented.cut === true };
 }
 
 // A page of statuses (`ids`, newest first, and each one's cursor in `keys`) presented within the answer budget,

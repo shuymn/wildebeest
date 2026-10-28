@@ -18,7 +18,15 @@ import { C, nextId, pageStatus } from "./budget-helpers";
 import { blockDomain } from "./domain-block-helpers";
 import { BUILD } from "./helpers";
 import { MAX_BIO } from "./profile-fixtures";
-import { pinStatuses, profileFrameBytes, viaRoute, walkFeed as walk, walkProfile } from "./profile-page-helpers";
+import {
+  expectFullPages,
+  pinStatuses,
+  profileFrameBytes,
+  shownFeed,
+  viaRoute,
+  walkFeed as walk,
+  walkProfile,
+} from "./profile-page-helpers";
 import { type PlannedStatement, plannedSql, scansOf, staleStatistics } from "./read-helpers";
 import { community, remoteAccount, seedStatus, type SeedStatus } from "./status-helpers";
 import { accessibleName, attr, one, parseHtml, query, text } from "./web-dom";
@@ -553,7 +561,7 @@ describe("the profile tabs as pages", () => {
     };
     // No media: nothing either way.
     expect(await parts("/@alice/media")).toEqual({ empty: ["No posts yet."], cards: 0, pager: [] });
-    // The page past the oldest, reached from a full page: only its pager, back to the posts above it.
+    // Past the oldest (no pager links there): only its pager, back to the posts above it.
     expect(await parts(`/@alice?max_id=${ids[0]!}`)).toEqual({
       empty: [],
       cards: 0,
@@ -567,15 +575,46 @@ describe("the profile tabs as pages", () => {
     });
   });
 
-  it("walks back from an empty last page through every page above it", async () => {
-    // Exactly two full pages: the second offers an older page, which is empty. Its newer page starts at its own
-    // cursor, so walking back passes over nothing (the first page there would skip the second).
+  it("offers a side only when a post lies there, at both ends of exact pages", async () => {
+    // Exactly two full pages, so each end is reached by a full page, by either cursor.
     const { h, ids } = await twoFullPages();
+    const pager = async (path: string) => {
+      const page = shownFeed(await (await h.request(path)).text());
+      return { items: page.items.length, newer: page.newer, older: page.older };
+    };
+    expect(await pager("/@alice")).toEqual({ items: 20, newer: null, older: `/@alice?max_id=${ids[20]!}` });
+    // The oldest posts, below max_id: no older page.
+    expect(await pager(`/@alice?max_id=${ids[20]!}`)).toEqual({
+      items: 20,
+      newer: `/@alice?min_id=${ids[19]!}`,
+      older: null,
+    });
+    // The newest posts, above min_id: no newer page.
+    expect(await pager(`/@alice?min_id=${ids[19]!}`)).toEqual({
+      items: 20,
+      newer: null,
+      older: `/@alice?max_id=${ids[20]!}`,
+    });
     const walked = await walk(viaRoute(h), "/@alice");
-    expect(walked.sizes).toEqual([20, 20, 0]);
+    expectFullPages(walked, PROFILE_PAGE_SIZE, 2);
+    expect(walked.down).toEqual(ids.toReversed().map((id) => `/@alice/${id}`));
+  });
+
+  it("walks back from an empty page past either end through every page, to a full page at the other", async () => {
+    // Exactly two full pages. Past the oldest, the newer page starts at the page's own cursor, so walking back passes
+    // over nothing (the first page there would skip the second); past the newest, the older page is the first page.
+    const { h, ids } = await twoFullPages();
     const expected = ids.toReversed().map((id) => `/@alice/${id}`);
-    expect(walked.down).toEqual(expected);
-    expect(walked.up).toEqual(expected);
+    const pastOldest = await walk(viaRoute(h), `/@alice?max_id=${ids[0]!}`);
+    expect(pastOldest.sizes).toEqual([0]);
+    expect(pastOldest.up).toEqual(expected);
+    // The empty page, then the two full pages above it, the newest offering no newer page.
+    expect(pastOldest.pages).toHaveLength(3);
+    const pastNewest = await walk(viaRoute(h), `/@alice?min_id=${ids.at(-1)!}`);
+    expect(pastNewest.sizes).toEqual([0, 20, 20]);
+    expect(pastNewest.down).toEqual(expected);
+    expect(pastNewest.up).toEqual(expected);
+    expect(pastNewest.pages).toHaveLength(4);
   });
 });
 
