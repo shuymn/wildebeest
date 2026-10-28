@@ -14,3 +14,16 @@ it("loads the moderation and announcement bounds as numbers after the Worker ent
   expect(Number.isInteger(SEVER_ROWS), `SEVER_ROWS is ${SEVER_ROWS}`).toBe(true);
   expect(Number.isInteger(ANNOUNCEMENT_ROW_CAPS.presentation), `${ANNOUNCEMENT_ROW_CAPS.presentation}`).toBe(true);
 });
+
+// status-presenter.ts (STATUS_LINK_COLUMNS) and trends.ts (TREND_CARD_COLUMNS, COPY_CHOICE_COLUMNS) build SQL at load
+// from status-rows.ts's maps. Entered first, status-rows.ts loads its imports before itself; were one of them to lead
+// back to status-presenter.ts, that module would read the maps before they exist and fail to load.
+it("loads the status presenter and trends when status-rows.ts is loaded first", async () => {
+  vi.resetModules();
+  const { STATUS_COLUMN_MAP } = await import("../src/domain/status-rows");
+  const { presentation } = await import("../src/domain/status-presenter");
+  const { TREND_LANGUAGES } = await import("../src/domain/trends");
+  expect(STATUS_COLUMN_MAP.id).toBe("s.id");
+  expect(typeof presentation).toBe("function");
+  expect(TREND_LANGUAGES.size).toBeGreaterThan(0);
+});
