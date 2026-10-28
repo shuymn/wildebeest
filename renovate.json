@@ -51,6 +51,19 @@
 			"matchPackageNames": ["prettier", "/^@typescript-eslint//"]
 		},
 		{
+			"description": "The root TypeScript serves @typescript-eslint, whose parser accepts typescript below 6.1; Kopje's own TypeScript is packages/kopje's. Held until lint moves to oxlint",
+			"matchFileNames": ["package.json"],
+			"matchPackageNames": ["typescript"],
+			"allowedVersions": "<6.1"
+		},
+		{
+			"description": "No major ESLint updates at the root: lint moves to oxlint after 0.1.0",
+			"matchFileNames": ["package.json"],
+			"matchPackageNames": ["eslint", "@eslint/js", "@eslint/eslintrc", "/^@typescript-eslint//", "/^eslint-/"],
+			"matchUpdateTypes": ["major"],
+			"enabled": false
+		},
+		{
 			"description": "Group Vitest packages together",
 			"groupName": "vitest",
 			"matchPackageNames": ["vitest"]
