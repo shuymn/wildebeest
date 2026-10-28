@@ -1,7 +1,7 @@
 import { type JSXNode } from "hono/jsx";
 
 import type { Account } from "../src/domain/accounts";
-import type { Poll } from "../src/domain/polls";
+import type { Poll } from "../src/domain/poll-presenter";
 import type { MediaAttachment, Status } from "../src/domain/status-presenter";
 import type { Site } from "../src/domain/web-pages/site";
 

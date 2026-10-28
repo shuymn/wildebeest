@@ -3,7 +3,7 @@ import type { Child, JSXNode } from "hono/jsx";
 import { ErrorPage } from "../../src/app/error-pages";
 import type { Account, CredentialAccount } from "../../src/domain/accounts";
 import { OWNER_ROLE } from "../../src/domain/auth";
-import type { Poll } from "../../src/domain/polls";
+import type { Poll } from "../../src/domain/poll-presenter";
 import type { MediaAttachment, Status } from "../../src/domain/status-presenter";
 import type { Site } from "../../src/domain/web-pages/site";
 import type { PageHistory } from "../../src/domain/web-pages/status";

@@ -198,7 +198,7 @@ export const SHOWN_CARD_JOIN =
 // The attached card of the status `j.value`, by its key: one row at most.
 export const SHOWN_CARD_SQL = "c.status_id = j.value AND c.fetched_at IS NOT NULL";
 
-// A status's poll as presentPolls (polls.ts) reads it, and the viewer's own votes in its current generation.
+// A status's poll as presentPolls (poll-presenter.ts) reads it, and the viewer's own votes in its current generation.
 export const POLL_COLUMN_MAP = {
   status_id: "p.status_id",
   account_id: "s.account_id",

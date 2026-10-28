@@ -53,7 +53,7 @@ import {
   MAX_FILTER_TEXT,
 } from "./filters";
 import { htmlToPlainText } from "./plain-text";
-import { type Poll, presentPolls, withStatusEmojis } from "./polls";
+import { type Poll, presentPolls, withStatusEmojis } from "./poll-presenter";
 import { cachedImageUrls } from "./remote-media";
 import { MEDIA_URL_JSON_BYTES, MEDIA_URL_LIMIT } from "./status-bounds";
 import {

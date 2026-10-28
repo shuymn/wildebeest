@@ -594,7 +594,7 @@ const ALLOWED: Record<string, { count: number; reason: string }> = {
   "src/domain/web-pages/status.ts column au.username": { count: 1, reason: LOCAL },
   "src/domain/windows.ts interpolation highest": { count: 1, reason: WINDOW },
   "src/domain/windows.ts interpolation end": { count: 1, reason: WINDOW },
-  "src/domain/accounts.ts accounts.uri": { count: 4, reason: IDENTITY },
+  "src/domain/account-actions.ts accounts.uri": { count: 4, reason: IDENTITY },
   // remoteAttachmentSql's own parts: an attachment entry (cutSql's name and value) and its src, a fixed column name,
   // naming no bounded column.
   "src/domain/account-columns.ts interpolation entry": { count: 1, reason: REMOTE_ATTACHMENT },
@@ -628,10 +628,11 @@ const ALLOWED: Record<string, { count: number; reason: string }> = {
   "src/domain/status-actions.ts statuses.uri": { count: 1, reason: IDENTITY },
   "src/domain/statuses.ts accounts.uri": { count: 5, reason: IDENTITY },
   "src/domain/statuses.ts statuses.uri": { count: 7, reason: IDENTITY },
+  "src/domain/account-actions.ts accounts.username": { count: 1, reason: LOCAL },
   "src/domain/accounts.ts accounts.username": {
-    count: 3,
-    reason: `${LOCAL}; and the username an address names as stored (addressRow), bounded by the address it matched and
-			stored only as contact_username, never presented`,
+    count: 2,
+    reason: `the username an address names as stored (addressRow), bounded by the address it matched and stored only as
+			contact_username, never presented`,
   },
   "src/domain/activities.ts accounts.username": { count: 1, reason: ACTIVITYPUB },
   "src/domain/actor-update.ts accounts.username": { count: 1, reason: ACTIVITYPUB },

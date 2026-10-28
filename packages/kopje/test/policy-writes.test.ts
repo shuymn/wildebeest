@@ -3,7 +3,7 @@ import fc from "fast-check";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import { Db, type Savepoint } from "../src/db/sql";
-import { updateCredentials } from "../src/domain/accounts";
+import { updateCredentials } from "../src/domain/account-actions";
 import { API_VISIBILITIES, type ApiVisibility } from "../src/domain/audience";
 import { backfillConversations } from "../src/domain/conversation-rows";
 import {

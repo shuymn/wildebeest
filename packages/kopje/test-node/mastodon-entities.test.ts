@@ -40,7 +40,7 @@ const MAPPING: Record<string, Mapping> = {
   },
   "REST::StatusSerializer": { file: "src/domain/status-presenter.ts", typeName: "Status" },
   "REST::MediaAttachmentSerializer": { file: "src/domain/status-presenter.ts", typeName: "MediaAttachment" },
-  "REST::PollSerializer": { file: "src/domain/polls.ts", typeName: "Poll" },
+  "REST::PollSerializer": { file: "src/domain/poll-presenter.ts", typeName: "Poll" },
   "REST::PreviewCardSerializer": { file: "src/domain/status-presenter.ts", typeName: "PreviewCard" },
   "REST::TagSerializer": { file: "src/domain/tags.ts", typeName: "Tag" },
   "REST::NotificationSerializer": { file: "src/domain/notifications.ts", typeName: "Notification" },
