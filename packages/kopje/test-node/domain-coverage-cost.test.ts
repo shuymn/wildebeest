@@ -59,7 +59,7 @@ function walked(labels: number, blocks: [string, "suspend" | "noop"][]): { joine
   return counted;
 }
 
-describe("domain coverage in a result column (R38)", { timeout: 30_000 }, () => {
+describe("domain coverage in a result column (R38)", () => {
   it("walks no host while no suspend block exists, however deep, and walks each once one exists", () => {
     const none = { joined: 0, single: 0 };
     expect(walked(2, [])).toEqual(none);
