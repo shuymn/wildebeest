@@ -24,6 +24,11 @@
       "groupName": "pre-1.0 dependencies"
     },
     {
+      "description": "Group Vitest and its packages, whose versions must match exactly",
+      "groupName": "vitest",
+      "matchPackageNames": ["vitest", "@vitest/**"]
+    },
+    {
       "description": "Group the oxc tools, which change what lint and format report together",
       "groupName": "oxc",
       "matchPackageNames": ["oxlint", "oxlint-tsgolint", "oxfmt", "@oxlint/**"]

@@ -30,10 +30,12 @@ catalog:
   "@cloudflare/workers-types": 5.20261025.1
   wrangler: 4.150.0
 
-  # Tests: the runner and its vite, property tests, the browser job, image fixtures, the HTML and source scans.
+  # Tests: the runner, its coverage provider and its vite, property tests, the browser job, image fixtures, the HTML
+  # and source scans.
   "@axe-core/playwright": 4.14.0
   "@jsquash/webp": 1.5.0
   "@playwright/test": 1.64.1
+  "@vitest/coverage-v8": 5.0.5
   fast-check: 4.10.2
   oxc-parser: 0.154.0
   parse5: 8.0.1

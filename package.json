@@ -13,6 +13,7 @@
     "prepare": "lefthook install"
   },
   "devDependencies": {
+    "@vitest/coverage-v8": "catalog:",
     "lefthook": "catalog:",
     "oxfmt": "catalog:",
     "oxlint": "catalog:",
