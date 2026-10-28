@@ -3,17 +3,7 @@ on:
   push:
     branches:
       - main
-    paths-ignore:
-      - ".github/workflows/**"
-      - "!.github/workflows/PRs.yml"
-      - "*.md"
-      - "renovate.json"
   pull_request:
-    paths-ignore:
-      - ".github/workflows/**"
-      - "!.github/workflows/PRs.yml"
-      - "*.md"
-      - "renovate.json"
 
 # This allows a subsequently queued workflow run to interrupt previous runs. A main run interrupted this way leaves
 # nothing unchecked: the next one compares with the last main run that passed (the changes job).
