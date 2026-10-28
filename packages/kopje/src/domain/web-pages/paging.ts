@@ -20,7 +20,8 @@ export function pageCursor(maxId: string | null | undefined, minId: string | nul
 }
 
 // What a page tells its pager: the ends of what it read, each only as an id a page URL
-// takes, and whether more lies past its far end in its direction of travel (the window or page was full, or cut).
+// takes, and whether more may lie past its far end in its direction of travel: a row the read passed past the page,
+// or a window or answer cut before the range ended (windowPage's `more`), never only a full page.
 export type Paging = { newest: string | null; oldest: string | null; more: boolean };
 
 // The longest paging facts: what a page's frame reserves.

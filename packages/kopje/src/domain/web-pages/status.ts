@@ -179,8 +179,7 @@ function tabList(
       const read = statusQuotesWithin(db, { id, page, present: options }, options.viewer, false, list.admission);
       return {
         list: { kind, statuses: read.items, stub: list.stub(), parents: listParents(db, budget, read.items) },
-        // For quotes, more when the window held `limit` candidates or the page was cut.
-        paging: pagingOf({ newest: read.newest, oldest: read.oldest, more: read.candidates >= page.limit }),
+        paging: pagingOf({ newest: read.newest, oldest: read.oldest, more: read.more }),
       };
     }
     case "reblogs":

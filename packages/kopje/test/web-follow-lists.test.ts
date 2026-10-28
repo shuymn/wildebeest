@@ -21,7 +21,7 @@ import { C, maximalAccounts } from "./budget-helpers";
 import { blockDomain } from "./domain-block-helpers";
 import { BUILD } from "./helpers";
 import { MAX_BIO, movedAtCaps } from "./profile-fixtures";
-import { shownAccounts, viaRoute, walkPages } from "./profile-page-helpers";
+import { expectFullPages, shownAccounts, viaRoute, walkPages } from "./profile-page-helpers";
 import { type PlannedStatement, plannedSql, scansOf, staleStatistics } from "./read-helpers";
 import { community } from "./status-helpers";
 import { accessibleName, attr, elements, one, parseHtml, query, text } from "./web-dom";
@@ -314,6 +314,28 @@ async function settingsForm(h: Harness, browser: Browser, changes: Record<string
   }
   return { fields, boxes, page };
 }
+
+describe("the follow lists at their ends", () => {
+  it("offer a side only when a member lies there, at both ends of exact pages", async () => {
+    const h = await community(["alice"]);
+    await sql(
+      h.store,
+      `WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < ?2)
+			INSERT INTO accounts (id, uri, username, domain, display_name)
+			SELECT printf('%d', CAST(?1 AS INTEGER) + i), 'https://exact.example/users/u' || i, 'u' || i, 'exact.example', '' FROM n`,
+      String(nextAccount),
+      2 * FOLLOWS_PAGE_SIZE,
+    );
+    nextAccount += BigInt(2 * FOLLOWS_PAGE_SIZE + 1);
+    await sql(
+      h.store,
+      `INSERT INTO follows (account_id, target_account_id, state)
+			SELECT id, ?1, 'accepted' FROM accounts WHERE domain = 'exact.example' ORDER BY id`,
+      h.users.alice.id,
+    );
+    expectFullPages(await walk(viaRoute(h), "/@alice/followers"), FOLLOWS_PAGE_SIZE, 2);
+  });
+});
 
 describe("hide_collections (R13)", () => {
   it("is set from the settings page, with its anti-forgery token, and then the lists show only their counts", async () => {

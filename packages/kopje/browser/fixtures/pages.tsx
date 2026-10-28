@@ -10,7 +10,7 @@ import type { PageHistory } from "../../src/domain/web-pages/status";
 import { embedHtml } from "../../src/mastodon/oembed";
 import { APP_NAME_LIMIT, APP_WEBSITE_LIMIT, LOCAL_USERNAME_BYTES } from "../../src/platform/stored-bounds";
 import { SCOPES } from "../../src/security/scopes";
-import { L1Context } from "../../src/web/components/layout";
+import { HostContext, L1Context } from "../../src/web/components/layout";
 import { AboutPage } from "../../src/web/pages/about";
 import { DocumentPage } from "../../src/web/pages/document";
 import { EmbedPage } from "../../src/web/pages/embed";
@@ -608,13 +608,15 @@ const ELEMENTS: Record<PageName, Child> = {
 };
 
 // The bytes the Worker sends for each page: c.html writes the rendered element as it is, inside L1Context on the
-// pages that load the L1 bundle (l1Page in src/app/public-pages.tsx).
+// pages that load the L1 bundle (l1Page in src/app/public-pages.tsx), and in HostContext with the request's host, which
+// the routes of the pages without the site's chrome set (onHost) and no other page reads.
 export async function renderPages(): Promise<Record<PageName, string>> {
   const html = {} as Record<PageName, string>;
   for (const [name, element] of Object.entries(ELEMENTS) as [PageName, Child][]) {
-    const page =
+    const l1 =
       pageNamed(name).kind === "l1" ? <L1Context.Provider value={true}>{element}</L1Context.Provider> : element;
-    html[name] = String(await (page as JSXNode).toString());
+    const page = <HostContext.Provider value={DOMAIN}>{l1}</HostContext.Provider>;
+    html[name] = String(await (page as Child as JSXNode).toString());
   }
   return html;
 }

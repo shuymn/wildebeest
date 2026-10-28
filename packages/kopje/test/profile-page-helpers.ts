@@ -214,6 +214,20 @@ export async function walkPages<P extends ShownPage>(
   return { down, up: upPages.toReversed().flat(), sizes, first, pages };
 }
 
+// A walk (walkPages) of a list of exactly `pages` full pages of `size`, nothing left out: each side a pager offers
+// leads to a full page, so the walk opens every page going down and all but the last again going up, never an empty
+// one past either end.
+export function expectFullPages(
+  walked: { sizes: number[]; pages: string[]; down: string[]; up: string[] },
+  size: number,
+  pages: number,
+) {
+  expect(walked.sizes).toEqual(Array.from({ length: pages }, () => size));
+  expect(walked.pages).toHaveLength(2 * pages - 1);
+  expect(new Set(walked.down).size).toBe(size * pages);
+  expect(walked.up).toEqual(walked.down);
+}
+
 // A feed page walked both ways (walkPages), with the first page's pins: pins lead only the first page.
 export async function walkFeed(get: (url: string) => Promise<string>, base: string) {
   const walked = await walkPages(get, base, shownFeed, (url, page) => {
