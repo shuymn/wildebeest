@@ -53,9 +53,9 @@ export function resolve(from: string, specifier: string): string {
 
 // A string or template literal: its text parts and interpolated expressions in order, its ancestors (nearest first),
 // and the name of the constant it initializes (`const NAME = '...'`, with or without `as const` or a type; never a
-// `let` or `var`, which may be reassigned). An expression's source is its canonical() key, so a guard keyed by it reads the same
-// under any formatter style.
-export type Part = { text: string } | { expression: Node; source: string }
+// `let` or `var`, which may be reassigned). An interpolated expression has its source (whitespace runs as one space), to
+// show, and its keyOf(), to compare: the same under any formatter style.
+export type Part = { text: string } | { expression: Node; source: string; key: string }
 export type Literal = { node: Node; parts: Part[]; parents: Node[]; constant: string | null }
 
 export type Parsed = {
@@ -97,7 +97,11 @@ export function parse(source: Source): Parsed {
 				parts.push({ text: quasi.value.cooked ?? quasi.value.raw })
 				const expression = node.expressions[i]
 				if (expression !== undefined) {
-					parts.push({ expression, source: canonical(expression) })
+					parts.push({
+						expression,
+						source: source.text.slice(expression.start, expression.end).replace(/\s+/g, ' ').trim(),
+						key: keyOf(expression),
+					})
 				}
 			})
 			literals.push({ node, parts, parents, constant: constantOf(node, parents) })
@@ -108,108 +112,61 @@ export function parse(source: Source): Parsed {
 	return value
 }
 
-// The key of an expression, printed from its syntax tree and never from its text, so formatting (quotes, whitespace,
-// line breaks, semicolons, trailing commas, redundant parentheses) cannot change it and two different trees never
-// share one. Identifiers, member access, calls, spreads, arrays (a hole printed as an empty slot), templates (their raw
-// text), string literals (their value, see quoted()), numbers (their value), regular expressions (pattern and flags),
-// unary, binary, logical and conditional expressions (a compound operand in parentheses) print as JavaScript that
-// parses back to the same tree. Any other node prints as its type and every property but its position, in key order,
-// inside `Type{…}`, which no printed JavaScript above produces outside a literal.
-function canonical(node: Node): string {
+// The structural key of a node: its type and every property but its position and raw text, children by their keys, so
+// two different trees never share one. Only what a formatter may change is normalised, here and nowhere else:
+// - a string literal is its value (any quote, any escape);
+// - a number is its value, tagged (`Num(1)`, `Num(Infinity)`), and a bigint its digits, tagged apart;
+// - a static property key, an identifier or a string, is `Key(name)` either way;
+// - parentheses are not nodes (ParenthesizedExpression is unwrapped; parse() keeps none).
+// Line breaks, semicolons and trailing commas are not in the tree.
+export function keyOf(node: Node): string {
 	const n = node as Node & Record<string, unknown>
-	const sub = (child: unknown) => canonical(child as Node)
-	const operand = (child: unknown) => {
-		const type = (child as Node).type
-		return COMPOUND.has(type) ? `(${sub(child)})` : sub(child)
+	if (n.type === 'ParenthesizedExpression') {
+		return keyOf(n.expression as Node)
 	}
-	switch (n.type) {
-		case 'Identifier':
-		case 'PrivateIdentifier':
-			return `${n.type === 'PrivateIdentifier' ? '#' : ''}${String(n.name)}`
-		case 'ThisExpression':
-			return 'this'
-		case 'Literal':
-			if (typeof n.value === 'string') {
-				return quoted(n.value)
-			}
-			if (typeof n.bigint === 'string') {
-				return `${n.bigint}n`
-			}
-			if (n.regex !== undefined && n.regex !== null) {
-				const { pattern, flags } = n.regex as { pattern: string; flags: string }
-				return `/${pattern}/${flags}`
-			}
-			return String(n.value)
-		case 'TemplateLiteral': {
-			const quasis = n.quasis as { value: { raw: string } }[]
-			const expressions = n.expressions as Node[]
-			return `\`${quasis.map((q, i) => q.value.raw + (i < expressions.length ? `\${${sub(expressions[i])}}` : '')).join('')}\``
+	if (n.type === 'Literal') {
+		if (typeof n.value === 'string') {
+			return `Str(${JSON.stringify(n.value)})`
 		}
-		case 'ChainExpression':
-			return sub(n.expression)
-		case 'MemberExpression': {
-			const object = operand(n.object)
-			const dot = n.optional === true ? '?.' : n.computed === true ? '' : '.'
-			return n.computed === true ? `${object}${dot}[${sub(n.property)}]` : `${object}${dot}${sub(n.property)}`
+		if (typeof n.bigint === 'string') {
+			return `BigInt(${BigInt(n.bigint).toString()})`
 		}
-		case 'CallExpression':
-			return `${operand(n.callee)}${n.optional === true ? '?.' : ''}(${(n.arguments as Node[]).map(sub).join(', ')})`
-		case 'SpreadElement':
-			return `...${operand(n.argument)}`
-		case 'ArrayExpression': {
-			const elements = n.elements as (Node | null)[]
-			const printed = elements.map((e) => (e === null ? '' : sub(e))).join(', ')
-			return `[${printed}${elements.at(-1) === null ? ',' : ''}]`
+		if (typeof n.value === 'number') {
+			return `Num(${String(n.value)})`
 		}
-		case 'UnaryExpression': {
-			const word = /^[a-z]/.test(String(n.operator)) ? ' ' : ''
-			const argument = n.argument as Node
-			return `${String(n.operator)}${word}${argument.type === 'UnaryExpression' ? `(${sub(argument)})` : operand(argument)}`
-		}
-		case 'BinaryExpression':
-		case 'LogicalExpression':
-			return `${operand(n.left)} ${String(n.operator)} ${operand(n.right)}`
-		case 'ConditionalExpression':
-			return `${operand(n.test)} ? ${operand(n.consequent)} : ${operand(n.alternate)}`
-		default:
-			return generic(n)
 	}
-}
-
-const COMPOUND = new Set(['UnaryExpression', 'BinaryExpression', 'LogicalExpression', 'ConditionalExpression'])
-const POSITION = new Set(['type', 'start', 'end', 'range', 'loc'])
-
-function generic(node: Record<string, unknown>): string {
-	const value = (v: unknown): string => {
-		if (v === null) {
-			return '<null>'
-		}
+	const value = (v: unknown, owner?: string): string => {
 		if (Array.isArray(v)) {
-			return `[${v.map(value).join(' ')}]`
+			return `[${v.map((e) => value(e)).join(' ')}]`
 		}
-		if (typeof v === 'object' && typeof (v as Node).type === 'string') {
-			return canonical(v as Node)
+		if (typeof v === 'object' && v !== null && typeof (v as Node).type === 'string') {
+			const child = v as Node & Record<string, unknown>
+			const staticKey =
+				owner === 'key' &&
+				n.computed !== true &&
+				(child.type === 'Identifier' || (child.type === 'Literal' && typeof child.value === 'string'))
+			return staticKey ? `Key(${JSON.stringify(child.type === 'Identifier' ? child.name : child.value)})` : keyOf(child)
 		}
-		return JSON.stringify(v) ?? '<undefined>'
+		return v === undefined ? 'undefined' : JSON.stringify(v)
 	}
-	const fields = Object.keys(node)
-		.filter((k) => !POSITION.has(k))
+	const fields = Object.keys(n)
+		.filter((k) => !UNKEYED.has(k))
 		.sort()
-		.map((k) => `${k}=${value(node[k])}`)
-	return `${String(node.type)}{${fields.join(' ')}}`
+		.map((k) => `${k}=${value(n[k], k)}`)
+	return `${n.type}{${fields.join(' ')}}`
 }
 
-function quoted(value: string): string {
-	const quote = [...value].filter((c) => c === "'").length > [...value].filter((c) => c === '"').length ? '"' : "'"
-	const escaped = [...value]
-		.map((c) => {
-			if (c === quote || c === '\\') {
-				return `\\${c}`
-			}
-			return c === ' ' || /^[\p{L}\p{M}\p{N}\p{P}\p{S}]$/u.test(c) ? c : `\\u{${c.codePointAt(0)!.toString(16)}}`
-		})
-		.join('')
-	return `${quote}${escaped}${quote}`
+const UNKEYED = new Set(['type', 'start', 'end', 'range', 'loc', 'raw'])
+
+// The structural key of `snippet`, one expression, parsed as TypeScript. It throws unless the snippet is exactly one
+// expression, so a key written by hand (an allowlist entry) cannot silently name nothing.
+export function expressionKey(snippet: string): string {
+	const result = parseSync('snippet.ts', `(${snippet}\n)`, { preserveParens: false })
+	const [statement, ...rest] = result.program.body
+	if (result.errors.length > 0 || rest.length > 0 || statement?.type !== 'ExpressionStatement') {
+		throw new Error(`not one expression: ${snippet}`)
+	}
+	return keyOf(statement.expression)
 }
 
 function constantOf(node: Node, parents: readonly Node[]): string | null {

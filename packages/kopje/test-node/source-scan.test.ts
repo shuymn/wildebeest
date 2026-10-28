@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { lineOf, parse, sources } from './source-scan.js'
+import { expressionKey, lineOf, parse, sources } from './source-scan.js'
 
 describe('the source scan', () => {
 	it('reads the package by its relative paths, declaration files left out', () => {
@@ -32,60 +32,83 @@ describe('the source scan', () => {
 		expect(parse({ path: 'src/probe.ts', text }).code).toBe("a       \n      \n         b('//', /\\/\\//)")
 	})
 
-	// An interpolation's source is a key (bounded-columns' ALLOWED): the same under either formatter style, and never the
-	// same for two different string values.
+	// An interpolation's key (bounded-columns matches ALLOWED by it): the same however the expression is formatted, and
+	// never the same for two different trees.
 	const key = (expression: string) => {
 		const [literal] = parse({ path: 'src/probe.ts', text: `const A = \`x\${${expression}}y\`` }).literals
 		const part = literal?.parts[1]
-		return part !== undefined && 'source' in part ? part.source : undefined
+		const found = part !== undefined && 'key' in part ? part.key : undefined
+		expect(found).toBe(expressionKey(expression))
+		return found
 	}
 
-	it('keys an interpolation the same under either quote, semicolon and trailing-comma style', () => {
-		expect(key("f(kind, '?3', \"it's\")")).toBe("f(kind, '?3', \"it's\")")
-		expect(key('f(kind, "?3", "it\'s")')).toBe("f(kind, '?3', \"it's\")")
-		expect(key("f(\n\t\tkind,\n\t\t'?3',\n\t\t\"it's\",\n\t)")).toBe("f(kind, '?3', \"it's\")")
-		expect(key('g(`a  ${b}  c`)')).toBe('g(`a  ${b}  c`)')
-	})
-
-	it('keys two different string values differently', () => {
-		const values = [' ', '\t', '  ', '\n', ' ', '\\t', "'", '"', '\\', '\\\\', 'a b', 'a  b', 'a\tb']
-		const keys = values.map((v) => key(`f(${JSON.stringify(v)})`))
-		expect(new Set(keys).size).toBe(values.length)
-		expect(key("f('\\t')")).toBe(key('f("\\u0009")'))
-		expect(key("projected.join(' ')")).not.toBe(key("projected.join('\\t')"))
-	})
-
-	it('keys a tree the same however it is laid out', () => {
+	it('keys a tree the same however it is formatted', () => {
 		const same: [string, string][] = [
+			// Quotes and escapes.
+			["f(kind, '?3', \"it's\")", 'f(kind, "?3", "it\'s")'],
+			["f('\\t')", 'f("\\u0009")'],
+			// Semicolons and line breaks.
+			['() => {\n\ta;\n\tb;\n}', '() => { a\nb }'],
+			// Trailing commas.
 			['f([a,])', 'f([a])'],
+			["f(\n\t\tkind,\n\t\t'?3',\n\t)", "f(kind, '?3')"],
+			// Parentheses.
 			['f((a))', 'f(a)'],
 			['f(\n\t(a - b) - c,\n)', 'f(a - b - c)'],
-			['() => {\n\ta;\n\tb;\n}', '() => { a\nb }'],
+			['a ?. b ?. (c)', 'a?.b?.(c)'],
+			// Arrow parameter parentheses.
 			['(x) => x', 'x => x'],
-			['a?.b?.(c)', 'a ?. b ?. (c)'],
+			// Property-name quotes.
+			['{ "foo": bar }', '{ foo: bar }'],
+			["class { 'm'() {} }", 'class { m() {} }'],
+			// Number spelling.
+			['f(1.0, 0x10)', 'f(1, 16)'],
 		]
 		for (const [a, b] of same) {
-			expect(key(a), a).toBe(key(b))
+			expect(key(a), `${a} | ${b}`).toBe(key(b))
 		}
 	})
 
 	it('keys two different trees differently', () => {
 		const different: [string, string][] = [
+			// String values.
+			["projected.join(' ')", "projected.join('\\t')"],
+			["f(' ')", "f('  ')"],
+			["f('\\\\t')", "f('\\t')"],
+			["f('a b')", "f('a\\tb')"],
+			// Array holes.
 			['f([])', 'f([,])'],
 			['f([a])', 'f([a,,])'],
+			// Regular expressions.
 			['f(/[ ]/)', 'f(/[]/)'],
 			['f(/a/g)', 'f(/a/)'],
+			// A line break that ends a statement.
 			['() => {\n\treturn\n\t1\n}', '() => {\n\treturn 1\n}'],
+			// Grouping, chains and members.
 			['a - (b - c)', 'a - b - c'],
-			['f(null)', 'f(Null)'],
+			['(a?.b).c', 'a?.b.c'],
 			['a.b', "a['b']"],
-			['`a ${b}`', '`a  ${b}`'],
-			['x as A', 'x as B'],
+			['{ [foo]: bar }', '{ foo: bar }'],
 			['- -a', '--a'],
+			// Numbers and names.
+			['f(1e400)', 'f(Infinity)'],
+			['f(1n)', 'f(1)'],
+			['f(null)', 'f(Null)'],
+			// Templates.
+			['`a ${b}`', '`a  ${b}`'],
+			// Types.
+			['x as A', 'x as B'],
+			['f<A>()', 'f<B>()'],
+			['(x: A) => x', '(x: B) => x'],
 		]
 		for (const [a, b] of different) {
 			expect(key(a), `${a} | ${b}`).not.toBe(key(b))
 		}
+	})
+
+	it('refuses an allowlist snippet that is not one expression', () => {
+		expect(() => expressionKey('f(')).toThrow('not one expression')
+		expect(() => expressionKey('a); (b')).toThrow('not one expression')
 	})
 
 	it('throws on a parse error rather than skip the file', () => {

@@ -1,7 +1,17 @@
 import type { Node } from 'oxc-parser'
 import { describe, expect, it } from 'vitest'
 
-import { guardFixtures, lineOf, parse, sources, walk, type Literal, type Part, type Source } from './source-scan.js'
+import {
+	expressionKey,
+	guardFixtures,
+	lineOf,
+	parse,
+	sources,
+	walk,
+	type Literal,
+	type Part,
+	type Source,
+} from './source-scan.js'
 
 // RES-2: a column a remote server controls that keeps a read-time projection (an identity, a hashtag name, a poll's
 // choices, an edit's media snapshot; the other columns are bounded as stored, STORED_COLUMNS in
@@ -320,7 +330,8 @@ function render(
 		.join('')
 }
 
-type Finding = { path: string; line: number; read: string }
+// read is what a finding shows; key, when set, is what ALLOWED is matched by (an interpolation's keyOf()).
+type Finding = { path: string; line: number; read: string; key?: string }
 
 // Builders an interpolation in a result list may name without a finding: each yields a predicate, a number, ids, or a
 // value it bounds itself (cutSql); none passes a bounded column through. Any other interpolation there is a finding,
@@ -464,8 +475,16 @@ export function scan(all: readonly Source[]): { reads: Finding[]; misuses: Findi
 					if (part !== null && part !== undefined && SAFE_INTERPOLATIONS.has(singleCall(part.expression) ?? '')) {
 						continue
 					}
-					const expression = part === null ? null : (part?.source ?? '')
-					reads.push({ path, line, read: expression === null ? read : `interpolation ${expression}` })
+					if (part === null) {
+						reads.push({ path, line, read })
+					} else {
+						reads.push({
+							path,
+							line,
+							read: `interpolation ${part?.source ?? ''}`,
+							key: `interpolation ${part?.key ?? ''}`,
+						})
+					}
 				}
 			}
 		}
@@ -646,6 +665,28 @@ const ALLOWED: Record<string, { count: number; reason: string }> = {
 	},
 }
 
+// ALLOWED by the key a finding is matched with: an `interpolation <snippet>` entry by its snippet's keyOf(), so the
+// table keeps readable source while the match ignores formatting. A snippet that is not one expression throws.
+function allowedByKey(): Map<string, { count: number; entry: string }> {
+	const allowed = new Map<string, { count: number; entry: string }>()
+	for (const [entry, { count }] of Object.entries(ALLOWED)) {
+		const interpolation = /^(\S+) interpolation (.+)$/s.exec(entry)
+		const key = interpolation === null ? entry : `${interpolation[1]} interpolation ${expressionKey(interpolation[2]!)}`
+		if (allowed.has(key)) {
+			throw new Error(`${entry} names the same expression as ${allowed.get(key)!.entry}`)
+		}
+		allowed.set(key, { count, entry })
+	}
+	return allowed
+}
+
+describe('the bounded-read allowlist', () => {
+	it('parses every interpolation entry as one expression, each named once', () => {
+		expect(() => allowedByKey()).not.toThrow()
+		expect(allowedByKey().size).toBe(Object.keys(ALLOWED).length)
+	})
+})
+
 describe('the bounded-read matcher', () => {
 	it.each([
 		['SELECT s.uri FROM statuses s', ['statuses.uri']],
@@ -742,15 +783,18 @@ describe('bounded columns in src/domain', () => {
 	const { reads, misuses } = scan(sources('src/domain'))
 
 	it('are read only through their helpers', () => {
+		const allowed = allowedByKey()
 		const counts = new Map<string, Finding[]>()
 		for (const finding of reads) {
-			const key = `${finding.path} ${finding.read}`
+			const key = `${finding.path} ${finding.key ?? finding.read}`
 			counts.set(key, [...(counts.get(key) ?? []), finding])
 		}
 		const unexpected = [...counts].flatMap(([key, found]) =>
-			ALLOWED[key]?.count === found.length ? [] : [`${key}: ${found.map((f) => f.line).join(', ')}`]
+			allowed.get(key)?.count === found.length
+				? []
+				: [`${found[0]!.path} ${found[0]!.read}: ${found.map((f) => f.line).join(', ')}`]
 		)
-		const stale = Object.keys(ALLOWED).filter((key) => !counts.has(key))
+		const stale = [...allowed].filter(([key]) => !counts.has(key)).map(([, entry]) => entry.entry)
 		expect({ unexpected, stale }).toEqual({ unexpected: [], stale: [] })
 	})
 
