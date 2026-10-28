@@ -55,7 +55,7 @@ On GitHub, in the repository settings:
 2. Rules, Rulesets: add a tag ruleset for `kopje-v*` that restricts creation, update and deletion to you, so only you
    can start a release and a released tag cannot move.
 3. Actions, General: the allowed actions must include `actions/checkout`, `actions/setup-node`,
-   `actions/upload-artifact`, `actions/download-artifact` and `pnpm/action-setup` (they are already used by the other
+   `actions/upload-artifact`, `actions/download-artifact` and `jdx/mise-action` (they are already used by the other
    workflows).
 
 ## Changelog entries
