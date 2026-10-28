@@ -189,7 +189,7 @@ describe("the export against the conversion manifest", () => {
     const { db, take } = await live();
     const final = await take();
     const { manifest } = await convert(space.dir, final.path);
-    return { db, final, manifest: manifest as Record<string, unknown> };
+    return { db, final, manifest };
   }
 
   it("passes when the converted export is the fingerprinted one", async () => {

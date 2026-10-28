@@ -41,7 +41,7 @@ function patch(h: H, token: string, body: BodyInit, headers: Record<string, stri
 }
 
 async function answer(response: Response) {
-  return { status: response.status, body: (await response.json()) as Record<string, unknown> };
+  return { status: response.status, body: await response.json<Record<string, unknown>>() };
 }
 
 async function profile(store: StoreStub) {

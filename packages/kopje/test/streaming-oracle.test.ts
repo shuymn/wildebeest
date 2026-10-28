@@ -160,16 +160,14 @@ function check(sql: SqlStorage, c: Case): string[] {
     }
     // Every list of the world, the viewer's or another owner's, by its read positioned at each status.
     const listPositioned = (l: number, id: string) =>
-      (
-        ok<Page<Status> | null>(
-          run(listTimeline, {
-            credential,
-            id: listId(l),
-            page: { limit: 1, maxId: String(BigInt(id) + 1n) },
-            present: PRESENT,
-          }),
-          "list",
-        ) as Page<Status> | null
+      ok<Page<Status> | null>(
+        run(listTimeline, {
+          credential,
+          id: listId(l),
+          page: { limit: 1, maxId: String(BigInt(id) + 1n) },
+          present: PRESENT,
+        }),
+        "list",
       )?.items[0]?.id === id;
     world.statuses.forEach((_, s) => {
       const id = statusId(s);

@@ -1,4 +1,4 @@
-import { DEFAULT_UNREAD_LIMIT, type ExpandAccounts, MAX_UNREAD_LIMIT } from "../domain/notification-groups";
+import { DEFAULT_UNREAD_LIMIT, MAX_UNREAD_LIMIT } from "../domain/notification-groups";
 import {
   type ApiHandler,
   authorized,
@@ -66,7 +66,7 @@ export const listGroupedNotifications: ApiHandler = async (c, deps) => {
         excludeTypes: types(p, "exclude_types"),
         groupedTypes: groupedTypes(p),
         includeFiltered: includeFiltered(p),
-        expandAccounts: (expand ?? "full") as ExpandAccounts,
+        expandAccounts: expand ?? "full",
         present: present(c),
       }),
     ),

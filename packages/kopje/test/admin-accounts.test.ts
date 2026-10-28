@@ -73,7 +73,7 @@ async function userToken(h: ApiHarness, email: string, scope: string): Promise<s
 
 async function call(h: ApiHarness, path: string, token: string | null, method = "GET") {
   const response = await h.request(path, token === null ? { method } : bearer(token, { method }));
-  return { status: response.status, link: response.headers.get("Link"), body: (await response.json()) as unknown };
+  return { status: response.status, link: response.headers.get("Link"), body: await response.json<unknown>() };
 }
 
 // The owner (the OAuth admin), alice and bob (local, holding admin scopes too), zed (local, suspended); carol and erin

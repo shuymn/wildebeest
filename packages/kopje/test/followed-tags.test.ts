@@ -38,7 +38,7 @@ describe("followed hashtags", () => {
     const { alice } = h.users;
     const followed = await followTag(h, alice, "Cats");
     expect(followed.status).toBe(200);
-    const tag = (await followed.json()) as Tag;
+    const tag = await followed.json<Tag>();
     expect(tag).toMatchObject({
       name: "cats",
       url: "https://kopje.test/tags/cats",
@@ -48,11 +48,11 @@ describe("followed hashtags", () => {
     expect(tag.history).toHaveLength(7);
     expect((await getJson<Tag>(h, "/api/v1/tags/cats", alice.token)).body.following).toBe(true);
     // Following again changes nothing.
-    expect(((await (await followTag(h, alice, "cats")).json()) as Tag).following).toBe(true);
+    expect((await (await followTag(h, alice, "cats")).json<Tag>()).following).toBe(true);
     expect(await sql(h.store, "SELECT name FROM tag_follows")).toEqual([{ name: "cats" }]);
 
     const unfollowed = await act(h, alice, "/api/v1/tags/cats/unfollow");
-    expect(((await unfollowed.json()) as Tag).following).toBe(false);
+    expect((await unfollowed.json<Tag>()).following).toBe(false);
     // Unfollowing a hashtag not followed answers the Tag too.
     expect((await act(h, alice, "/api/v1/tags/dogs/unfollow")).status).toBe(200);
     expect(await sql(h.store, "SELECT name FROM tag_follows")).toEqual([]);
@@ -79,11 +79,11 @@ describe("followed hashtags", () => {
     expect(body.every((tag) => tag.following === true && tag.featuring === false)).toBe(true);
 
     const first = await h.request("/api/v1/followed_tags?limit=2", bearer(alice.token));
-    expect(((await first.json()) as Tag[]).map((tag) => tag.name)).toEqual(["a3", "a2"]);
+    expect((await first.json<Tag[]>()).map((tag) => tag.name)).toEqual(["a3", "a2"]);
     const next = /<([^>]+)>; rel="next"/.exec(first.headers.get("link") ?? "")?.[1];
     expect(next).toBeDefined();
     const second = await h.request(new URL(next ?? "").pathname + new URL(next ?? "").search, bearer(alice.token));
-    expect(((await second.json()) as Tag[]).map((tag) => tag.name)).toEqual(["a1"]);
+    expect((await second.json<Tag[]>()).map((tag) => tag.name)).toEqual(["a1"]);
     expect((await getJson<Tag[]>(h, "/api/v1/followed_tags", bob.token)).body.map((tag) => tag.name)).toEqual(["b1"]);
   });
 
@@ -99,7 +99,7 @@ describe("followed hashtags", () => {
       const link = response.headers.get("link") ?? "";
       const cursor = (rel: string, key: string) => new RegExp(`[?&]${key}=(\\d+)[^>]*>; rel="${rel}"`).exec(link)?.[1];
       return {
-        names: ((await response.json()) as Tag[]).map((tag) => tag.name),
+        names: (await response.json<Tag[]>()).map((tag) => tag.name),
         next: cursor("next", "max_id"),
         prev: cursor("prev", "min_id"),
       };
@@ -256,9 +256,11 @@ describe("home and followed hashtags", () => {
     const h = await community(["alice", "bob"]);
     const { alice, bob } = h.users;
     await follow(h, alice, bob.id);
-    const list = (await (await act(h, alice, "/api/v1/lists", { title: "x", exclusive: true })).json()) as {
+    const list = await (
+      await act(h, alice, "/api/v1/lists", { title: "x", exclusive: true })
+    ).json<{
       id: string;
-    };
+    }>();
     await act(h, alice, `/api/v1/lists/${list.id}/accounts`, { account_ids: [bob.id] });
     const tagged = await post(h, bob, { status: "#cats", visibility: "public" });
     await post(h, bob, { status: "plain", visibility: "public" });

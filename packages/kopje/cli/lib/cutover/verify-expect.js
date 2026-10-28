@@ -55,7 +55,7 @@ const SETTING_NAMES = new Map([
 function parse(text) {
   try {
     const value = /** @type {unknown} */ (JSON.parse(String(text)));
-    return typeof value === "object" && value !== null ? /** @type {Json} */ (value) : {};
+    return typeof value === "object" && value !== null ? value : {};
   } catch {
     return {};
   }
@@ -181,7 +181,7 @@ function address(value, hops = 0) {
     return URL.canParse(value) ? new URL(value).toString() : undefined;
   }
   if (value !== null && typeof value === "object" && !Array.isArray(value) && "id" in value && hops < 16) {
-    return address(/** @type {{ id: unknown }} */ (value).id, hops + 1);
+    return address(value.id, hops + 1);
   }
   return undefined;
 }

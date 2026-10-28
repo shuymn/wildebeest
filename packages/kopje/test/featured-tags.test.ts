@@ -39,7 +39,7 @@ describe("featured hashtags", () => {
     await post(h, bob, { status: "#cats elsewhere", visibility: "public" });
     const response = await feature(h, alice, "#Cats ");
     expect(response.status).toBe(200);
-    const created = (await response.json()) as FeaturedTag;
+    const created = await response.json<FeaturedTag>();
     expect(created).toEqual({
       id: expect.stringMatching(/^\d{18}$/),
       name: "Cats",
@@ -90,7 +90,7 @@ describe("featured hashtags", () => {
   it("deletes the viewer’s own featured hashtag only", async () => {
     const h = await community(["alice", "bob"]);
     const { alice, bob } = h.users;
-    const created = (await (await feature(h, alice, "cats")).json()) as FeaturedTag;
+    const created = await (await feature(h, alice, "cats")).json<FeaturedTag>();
     expect((await send(h, bob, "DELETE", `/api/v1/featured_tags/${created.id}`)).status).toBe(404);
     const deleted = await send(h, alice, "DELETE", `/api/v1/featured_tags/${created.id}`);
     expect([deleted.status, await deleted.json()]).toEqual([200, {}]);
@@ -101,12 +101,12 @@ describe("featured hashtags", () => {
   it("features and unfeatures through the hashtag, answering with the Tag", async () => {
     const h = await community(["alice"]);
     const { alice } = h.users;
-    const tag = (await (await act(h, alice, "/api/v1/tags/Cats/feature")).json()) as Tag;
+    const tag = await (await act(h, alice, "/api/v1/tags/Cats/feature")).json<Tag>();
     expect(tag).toMatchObject({ name: "cats", following: false, featuring: true });
     expect(await featured(h, alice)).toMatchObject([{ name: "cats" }]);
     expect((await getJson<Tag>(h, "/api/v1/tags/cats", alice.token)).body.featuring).toBe(true);
-    expect(((await (await act(h, alice, "/api/v1/tags/cats/feature")).json()) as Tag).featuring).toBe(true);
-    expect(((await (await act(h, alice, "/api/v1/tags/cats/unfeature")).json()) as Tag).featuring).toBe(false);
+    expect((await (await act(h, alice, "/api/v1/tags/cats/feature")).json<Tag>()).featuring).toBe(true);
+    expect((await (await act(h, alice, "/api/v1/tags/cats/unfeature")).json<Tag>()).featuring).toBe(false);
     expect(await featured(h, alice)).toEqual([]);
     expect((await act(h, alice, "/api/v1/tags/cats/unfeature")).status).toBe(200);
     expect((await act(h, alice, "/api/v1/tags/a-b/feature")).status).toBe(404);
@@ -271,7 +271,7 @@ describe("featured hashtags", () => {
   it("shows an account’s featured hashtags to anyone, none of an unavailable account, and 404 for no account", async () => {
     const h = await community(["alice"]);
     const { alice } = h.users;
-    const created = (await (await feature(h, alice, "cats")).json()) as FeaturedTag;
+    const created = await (await feature(h, alice, "cats")).json<FeaturedTag>();
     expect(await getJson(h, `/api/v1/accounts/${alice.id}/featured_tags`)).toEqual({ status: 200, body: [created] });
     const remote = await remoteAccount(h.store, "carol");
     expect(await getJson(h, `/api/v1/accounts/${remote}/featured_tags`)).toEqual({ status: 200, body: [] });

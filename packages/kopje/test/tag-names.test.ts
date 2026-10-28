@@ -122,7 +122,7 @@ describe("refusing a follow or a feature past the list bound", () => {
     expect((await getJson<FeaturedTag[]>(h, "/api/v1/featured_tags", alice.token)).body).toEqual([]);
     expect((await getJson(h, `/api/v1/accounts/${alice.id}/featured_tags`)).body).toEqual([]);
     const unfollowed = await act(h, alice, `/api/v1/tags/${long}/unfollow`);
-    expect([unfollowed.status, ((await unfollowed.json()) as Tag).following]).toEqual([200, false]);
+    expect([unfollowed.status, (await unfollowed.json<Tag>()).following]).toEqual([200, false]);
     expect((await act(h, alice, `/api/v1/tags/${long}/unfeature`)).status).toBe(200);
     expect(await counts(h)).toMatchObject({ follows: 0, featured: 0 });
     await importFeatured(h, alice, long, long, "990000000000000002");
@@ -209,7 +209,7 @@ describe("paging followed hashtags past names a list leaves out", () => {
     let url: string | undefined = `/api/v1/followed_tags?limit=${limit}`;
     for (let i = 0; i < 20 && url !== undefined; i++) {
       const response = await h.request(url, bearer(user.token));
-      pages.push(((await response.json()) as Tag[]).map((tag) => tag.name));
+      pages.push((await response.json<Tag[]>()).map((tag) => tag.name));
       const next = /<([^>]+)>; rel="next"/.exec(response.headers.get("link") ?? "")?.[1];
       url = next === undefined ? undefined : new URL(next).pathname + new URL(next).search;
     }
@@ -232,7 +232,7 @@ describe("paging followed hashtags past names a list leaves out", () => {
     let cursor = "0";
     for (let i = 0; i < 10; i++) {
       const response = await h.request(`/api/v1/followed_tags?limit=2&min_id=${cursor}`, bearer(alice.token));
-      const names = ((await response.json()) as Tag[]).map((tag) => tag.name);
+      const names = (await response.json<Tag[]>()).map((tag) => tag.name);
       const prev = /[?&]min_id=(\d+)[^>]*>; rel="prev"/.exec(response.headers.get("link") ?? "")?.[1];
       if (prev === undefined || prev === cursor) {
         break;

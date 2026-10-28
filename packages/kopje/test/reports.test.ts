@@ -35,7 +35,7 @@ async function report(
   body: Record<string, unknown>,
 ) {
   const response = await h.request("/api/v1/reports", bearer(user.token, json(body)));
-  return { status: response.status, body: (await response.json()) as ReportBody & { error?: string } };
+  return { status: response.status, body: await response.json<ReportBody & { error?: string }>() };
 }
 
 // The instance actor's document as a receiver fetches it, with the given public key.

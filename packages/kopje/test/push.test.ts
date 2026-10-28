@@ -29,7 +29,7 @@ async function call(h: ApiHarness, user: User | string, method: string, body?: R
   const token = typeof user === "string" ? user : user.token;
   const init = body === undefined ? { method } : json(body, { method });
   const response = await h.request(PATH, bearer(token, init));
-  return { status: response.status, body: (await response.json()) as Record<string, unknown> };
+  return { status: response.status, body: await response.json<Record<string, unknown>>() };
 }
 
 describe("push subscription endpoints", () => {
@@ -90,7 +90,7 @@ describe("push subscription endpoints", () => {
         }),
       ),
     );
-    const first = (await response.json()) as Record<string, unknown>;
+    const first = await response.json<Record<string, unknown>>();
     expect(first).toMatchObject({ standard: false, alerts: { follow: true }, policy: "all" });
     expect(
       await sql(h.store, "SELECT key_p256dh, key_auth FROM push_subscriptions WHERE id = ?", Number(first.id)),
@@ -183,7 +183,7 @@ describe("push subscription endpoints", () => {
     expect(await call(h, alice, "PUT", { data: {} })).toEqual(notFound);
     expect(await call(h, alice, "DELETE")).toEqual({ status: 200, body: {} });
     expect(await call(h, "nope", "POST", {})).toEqual({ status: 401, body: { error: "The access token is invalid" } });
-    expect((await h.request("/api/v2/instance").then((r) => r.json())) as unknown).toMatchObject({
+    expect(await h.request("/api/v2/instance").then((r) => r.json<unknown>())).toMatchObject({
       configuration: { vapid: { public_key: "" } },
     });
     expect(await sql(h.store, "SELECT id FROM push_subscriptions")).toEqual([]);

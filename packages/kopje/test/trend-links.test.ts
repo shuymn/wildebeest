@@ -265,7 +265,7 @@ describe("the language a link pages by", () => {
       await reviewLink(h.store, "link", url(1), true);
       await h.store.trendsRound(BUILD, { now: NOW });
       const ja = await h.request("/api/v1/trends/links?limit=1", { headers: { "accept-language": "ja" } });
-      const body = (await ja.json()) as { url: string; title: string; language: string }[];
+      const body = await ja.json<{ url: string; title: string; language: string }[]>();
       expect(
         body.map((l) => [l.url, l.title, l.language]),
         `malformed: ${malformed}`,

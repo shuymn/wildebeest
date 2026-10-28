@@ -97,7 +97,7 @@ describe("the presented emoji", () => {
       body: "choices[]=0",
     });
     expect(voted.status).toBe(200);
-    expect(((await voted.json()) as { emojis: Shown[] }).emojis).toEqual(status.poll.emojis);
+    expect((await voted.json<{ emojis: Shown[] }>()).emojis).toEqual(status.poll.emojis);
   });
 
   it("admits entries by the presented local URL, within the snapshot’s byte bound", () => {

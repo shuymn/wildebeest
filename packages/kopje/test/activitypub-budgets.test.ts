@@ -22,7 +22,7 @@ describe("outbox pages within their byte bound (RES-3)", () => {
     const pages: string[][] = [];
     for (let before: string | null = "999999999999999999"; before !== null;) {
       const page: OutboxPage = await runInDurableObject(h.store, (_instance, state) => {
-        let output = getOutbox.run(state.storage.sql, { username: "alice", before: before! } as never) as Record<
+        let output = getOutbox.run(state.storage.sql, { username: "alice", before: before! }) as Record<
           string,
           unknown
         >;
