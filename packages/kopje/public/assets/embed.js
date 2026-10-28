@@ -44,7 +44,7 @@
     var url;
     try {
       url = new URL(container.getAttribute("data-embed-url") || "");
-    } catch (e) {
+    } catch (_e) {
       return;
     }
     if (!permitted(url)) {

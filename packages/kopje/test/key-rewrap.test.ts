@@ -86,13 +86,6 @@ async function setup(overrides: Record<string, unknown> = { USER_KEK: NEW_KEK })
   return { ...adminHarness(store, team, overrides), store };
 }
 
-type Step = {
-  counts: { rewrapped: number; current: number; failed: number };
-  failures: { owner: string; reason: string }[];
-  done: boolean;
-  next: string | null;
-};
-
 const PROBE = new TextEncoder().encode("signed before the rewrap");
 
 describe("the Store side of the rewrap", () => {

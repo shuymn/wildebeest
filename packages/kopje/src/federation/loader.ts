@@ -232,7 +232,7 @@ async function load(deps: LoaderDeps, kind: Kind, sign: RequestSigner | undefine
     let response: Response;
     try {
       response = await deps.fetch(request);
-    } catch (error) {
+    } catch {
       throw signal.aborted ? (signal.reason as Error) : new TransientFetchError(current, "Network error");
     }
     if (response.status >= 300 && response.status < 400 && response.headers.has("location")) {

@@ -83,7 +83,6 @@ const UNIT_WORST: Charge = { checks: 35, presentations: 1, bytes: STREAM_LIMITS.
 // Journal events read per scan of a turn.
 const SCAN = 64;
 
-const TURN_URL = "https://store.internal/stream/turn";
 const TURN_HEADER = "x-kopje-turn";
 
 // A socket's state. since: the journal head when it opened (it receives later events only); convSeq: the

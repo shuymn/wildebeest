@@ -288,7 +288,6 @@ export const endWebSession = sessionOperation<{ tokenHash: string; now: number }
   if (familyId === null) {
     return;
   }
-  const familyName = `${FAMILY}${familyId}`;
   endFamily(db, clientId, familyId, now);
 });
 
