@@ -86,7 +86,9 @@ exception for frame, landmarks and chrome, and still uses the tokens. Where a ru
   literal: no rule is left for markup that is gone, a stray or joined string keeps none alive, and no class is built
   from a value.
 - A paged list is `PagedList`: the empty line, the list, then `Pager`, built on `LinkButton`, showing only the sides
-  offered (`rel="prev"` and `rel="next"`), the older one at the row's end. Newest-first lists read "Newer posts" /
+  offered (`rel="prev"` and `rel="next"`), the older one at the row's end. `src/web/view/pager.ts` decides them; the
+  side past a read's far end is offered only where a row may lie, never for a full page alone
+  ([visibility.md](visibility.md), "Read bounds"). Newest-first lists read "Newer posts" /
   "Older posts" and "Newer accounts" / "Older accounts", oldest-first replies "Earlier replies" / "Later replies";
   under 30rem they shorten to "Newer" / "Older" ("Earlier" / "Later"), the full label staying the link's name
   (browser job).

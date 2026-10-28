@@ -14,7 +14,16 @@ import { repliesPager } from "../src/web/view/pager";
 import { sql } from "./api-helpers";
 import { NOW } from "./app-helpers";
 import { blockDomain } from "./domain-block-helpers";
-import { cardLink, cursorOf, cursorsOf, expectCursors, pagerLinks, viaRoute, walkPages } from "./profile-page-helpers";
+import {
+  cardLink,
+  cursorOf,
+  cursorsOf,
+  expectCursors,
+  expectFullPages,
+  pagerLinks,
+  viaRoute,
+  walkPages,
+} from "./profile-page-helpers";
 import { type PlannedStatement, plannedSql, scansOf, staleStatistics } from "./read-helpers";
 import { community, remoteAccount, seedStatus, type SeedStatus } from "./status-helpers";
 import { attr, one, parseHtml, query, text } from "./web-dom";
@@ -242,13 +251,14 @@ describe("a status page’s replies", () => {
     expect(rows.n).toBe(210);
   }, 300_000);
 
-  // Replies whose ids end at the largest a status takes (18 nines): the walk back from the empty page past them starts
-  // above every id, so it reaches the last reply too.
-  it("walks back from past the largest id to every reply", async () => {
+  // Exactly two full pages of replies whose ids end at the largest a status takes (18 nines): each side is offered
+  // only where a reply lies, and the walk back from the empty page past them starts above every id, so it reaches the
+  // last reply too.
+  it("offers a side only where a reply lies, and walks back from past the largest id to every reply", async () => {
     const { h, alice, bob } = await people();
     const focal = await seedStatus(h.store, { accountId: alice.id, visibility: "public" });
     const ids: string[] = [];
-    for (let i = REPLIES_PAGE_SIZE - 1; i >= 0; i--) {
+    for (let i = 2 * REPLIES_PAGE_SIZE - 1; i >= 0; i--) {
       const id = String(10n ** 18n - 1n - BigInt(i));
       await sql(
         h.store,
@@ -263,10 +273,13 @@ describe("a status page’s replies", () => {
     }
     const walked = await walkPages(viaRoute(h), `/@alice/${focal}`, shownThread);
     expect(walked.down).toEqual(ids);
-    expect(walked.up).toEqual(ids);
-    // The full first page links on to the empty page above it, whose earlier link starts above every id.
-    expect(walked.sizes).toEqual([REPLIES_PAGE_SIZE, 0]);
-    expect(shownThread(walked.pages[1]!).newer).toBe(`/@alice/${focal}?max_id=1000000000000000000`);
+    expectFullPages(walked, REPLIES_PAGE_SIZE, 2);
+    const last = ids.at(-1)!.split("/").at(-1)!;
+    const past = await walkPages(viaRoute(h), `/@alice/${focal}?min_id=${last}`, shownThread);
+    expect(shownThread(past.pages[0]!).newer).toBe(`/@alice/${focal}?max_id=1000000000000000000`);
+    expect(past.sizes).toEqual([0]);
+    expect(past.up).toEqual(ids);
+    expect(past.pages).toHaveLength(3);
   });
 
   it("shows the tab with its count, marks a cursor page noindex and names the first page canonical", async () => {

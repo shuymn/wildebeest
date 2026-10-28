@@ -3379,10 +3379,11 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
   second, each over the response's ids, and embeds one level only, so a page reads the same rows however many quotes
   its quoted statuses have and however long the chain they start (`test/policy-bounds.test.ts` ("statuses with quotes
   are presented from their quote rows")). The quotes list reads one window of the status's accepted quotes from its
-  cursor through the partial index `quotes_accepted` (migration `0036_quotes_list`), at most `limit`, and applies the
-  rule to that window alone, whatever the count of quotes in any state; when the rule hides the window, the page is
-  empty and its next link moves on by the window, so hidden quotes cost a request one window
-  (`test/policy-bounds.test.ts` ("the quotes list reads a window")). A client that stops at an empty page sees fewer
+  cursor through the partial index `quotes_accepted` (migration `0036_quotes_list`), at most `limit` + 1: the first
+  `limit` are the window, and the one past them only tells a public page's pager that a candidate lies there (never
+  shown, never a cursor). It applies the rule to the window alone, whatever the count of quotes in any state; when the
+  rule hides the window, the page is empty and its next link moves on by the window, so hidden quotes cost a request
+  one window (`test/policy-bounds.test.ts` ("the quotes list reads a window")). A client that stops at an empty page sees fewer
   quotes than exist, as on Mastodon (accepted). The stamp endpoint is one read by its id's unique index; a request's
   cap reads at most 100 rows of its actor; a revoke's `Reject`s read at most 100 rows of the quoting author by one
   seek of `quote_requests_instrument`, whatever other actors' requests name the same instrument; quoters' reach reads
