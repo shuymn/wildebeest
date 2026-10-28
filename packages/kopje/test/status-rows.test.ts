@@ -4,16 +4,11 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { selectSql } from "../src/db/columns";
 import { Db, rowHeapBytes, RowMeter } from "../src/db/sql";
-import {
-  ACCOUNT_COLUMN_MAP,
-  MOVED_ACCOUNT_CAPS,
-  MOVED_ACCOUNT_COLUMNS,
-  PROFILE_URL_LIMIT,
-} from "../src/domain/accounts";
+import { ACCOUNT_COLUMN_MAP, MOVED_ACCOUNT_CAPS, MOVED_ACCOUNT_COLUMNS } from "../src/domain/account-columns";
+import { PROFILE_URL_LIMIT } from "../src/domain/accounts";
 import { ADMIN_EMAIL_COLUMNS, LOCAL_EMAIL_COLUMNS } from "../src/domain/admin-authority";
 import { type VisibleStatusId, visibleSql } from "../src/domain/audience";
 import { listGroupedNotifications } from "../src/domain/notification-groups";
-import { OWN_VOTE_COLUMNS, POLL_COLUMN_MAP } from "../src/domain/polls";
 import { MAX_REMOTE_OPTIONS, MAX_STATUS_MEDIA, MAX_STATUS_MENTION_ROWS } from "../src/domain/status-bounds";
 import {
   type ChunkPlan,
@@ -22,7 +17,14 @@ import {
   presentStatusesWithin,
   type Quote,
 } from "../src/domain/status-presenter";
-import { hydrateQueries, PER_ROW_SORTS, STATUS_FROM, statusRowBoundSql } from "../src/domain/status-rows";
+import {
+  hydrateQueries,
+  OWN_VOTE_COLUMNS,
+  PER_ROW_SORTS,
+  POLL_COLUMN_MAP,
+  STATUS_FROM,
+  statusRowBoundSql,
+} from "../src/domain/status-rows";
 import { statusContext } from "../src/domain/statuses";
 import type { StoreStub } from "../src/platform/store-client";
 import { sha256Hex } from "../src/security/tokens";
