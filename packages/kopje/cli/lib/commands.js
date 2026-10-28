@@ -13,6 +13,12 @@ import {
 /**
  * @typedef {import('./client.js').AdminClient} AdminClient
  * @typedef {import('./client.js').Json} Json
+ * @typedef {import('./client.js').DumpCursor} DumpCursor
+ * @typedef {import('./client.js').ImportProgress} ImportProgress
+ * A dump's saved state (<file>.state.json): before its start was saved, and after.
+ * @typedef {{ opId: string, cursor?: undefined, offset?: number, trailerText?: string, tables?: number }} NewDump
+ * @typedef {{ opId: string, cursor: DumpCursor, offset: number, trailerText?: string, tables: number }} RunningDump
+ * @typedef {NewDump | RunningDump} DumpState
  * @typedef {import('./format.js').FileIO} FileIO
  * @typedef {{ progress(text: string): void, info(text: string): void, secret?(value: string): void }} Output
  * @typedef {{ bytes: number, statements: number }} ChunkLimits
@@ -79,14 +85,13 @@ export async function dumpToFile({
     // Release the freeze of the dump being discarded first; it cannot be found once the state file is gone.
     const previous = await io.readText(statePath);
     if (previous !== null) {
-      await abandonDump(client, out, JSON.parse(previous), start);
+      await abandonDump(client, out, /** @type {DumpState} */ (JSON.parse(previous)), start);
     }
     await io.remove(statePath);
     await io.remove(path);
   }
   const saved = await io.readText(statePath);
-  /** @type {{ opId: string, cursor?: any, offset?: number, trailerText?: string, tables?: number }} */
-  let state = saved === null ? { opId: crypto.randomUUID() } : JSON.parse(saved);
+  let state = /** @type {DumpState} */ (saved === null ? { opId: crypto.randomUUID() } : JSON.parse(saved));
   if (saved === null) {
     if ((await io.size(path)) !== null) {
       throw new Error(`${path} already exists; choose another file or pass --restart`);
@@ -147,14 +152,18 @@ export async function dumpToFile({
 
   if (state.trailerText === undefined) {
     const finished = await client.post("/admin/dump/finish", { cursor: state.cursor });
+    if (finished.aborted) {
+      throw new Error("the Store aborted the dump instead of finishing it; rerun with --restart");
+    }
     state = { ...state, trailerText: finished.trailerText };
     await io.writeTextAtomic(statePath, JSON.stringify(state));
   }
   await io.truncate(path, offset);
   await io.append(path, utf8.encode(state.trailerText ?? ""));
   await io.remove(statePath);
-  /** @type {Json} */
-  const trailer = JSON.parse((state.trailerText ?? "").split("\n")[0]?.replace(/^-- kopje-dump-trailer /, "") ?? "{}");
+  const trailer = /** @type {Json & { body: { statements: number } }} */ (
+    JSON.parse((state.trailerText ?? "").split("\n")[0]?.replace(/^-- kopje-dump-trailer /, "") ?? "{}")
+  );
   out.info(`dump complete: ${trailer.body.statements} statements, ${formatBytes(offset)} of statements and header`);
   return trailer;
 }
@@ -164,8 +173,8 @@ export async function dumpToFile({
  * start again with the same op id (which returns that dump while it runs) and aborting that.
  * @param {AdminClient} client
  * @param {Output} out
- * @param {{ opId?: string, cursor?: any, trailerText?: string }} state
- * @param {(opId: string) => Promise<Json>} start
+ * @param {DumpState} state
+ * @param {(opId: string) => Promise<import('./client.js').Responses["/admin/dump/start"]>} start
  */
 async function abandonDump(client, out, state, start) {
   if (state.trailerText !== undefined) {
@@ -209,9 +218,10 @@ export async function importFromFile({
   const file = await readDumpFile(io, path);
   const statePath = `${path}.import.json`;
   const saved = await io.readText(statePath);
-  /** @type {{ id: string, chunkBytes: number, chunkStatements?: number, session?: string } | null} */
-  const local = saved === null ? null : JSON.parse(saved);
-  /** @type {Json} */
+  const local = /** @type {{ id: string, chunkBytes: number, chunkStatements?: number, session?: string } | null} */ (
+    saved === null ? null : JSON.parse(saved)
+  );
+  /** @type {ImportProgress | null} */
   let progress;
   let client = baseClient;
   if (local !== null) {
@@ -283,9 +293,7 @@ export async function importFromFile({
     if (progress.state === "verified") {
       await io.remove(statePath);
     }
-    /** @type {Json} */
-    const report = progress.report;
-    return report;
+    return decided(progress.report, progress.id);
   }
   if (progress.state === "receiving") {
     await sendChunks({ client, io, out, path, file, progress, chunks, now, sleep });
@@ -295,24 +303,37 @@ export async function importFromFile({
   for (;;) {
     const result = await client.post("/admin/import/verify", { id: progress.id });
     if (result.done) {
+      if (result.progress === null) {
+        throw new Error(`import ${progress.id} is no longer on the Store`);
+      }
       // The file may have changed while the Store verified: read it again before taking the outcome as its own.
       const current = await readDumpFile(io, path);
       await checkIdentity({ io, path, file: current, progress: result.progress, chunks, whole: true });
       if (result.progress?.state === "verified") {
         await io.remove(statePath);
       }
-      /** @type {Json} */
-      const report = result.report;
-      return report;
+      return decided(result.report, progress.id);
     }
     out.progress(`verifying: ${result.progress?.state ?? ""}`);
   }
 }
 
 /**
+ * A decided import's report, which the Store sends with every verified or failed outcome.
+ * @param {import('./client.js').VerifyReport | null} report
+ * @param {string} id
+ */
+function decided(report, id) {
+  if (report === null) {
+    throw new Error(`import ${id} was decided without a verification report`);
+  }
+  return report;
+}
+
+/**
  * Checks that the file is the dump the Store's import received: the same header and trailer, and with `whole`, the
  * same chunks (count and chain digest), which binds the body as well.
- * @param {{ io: FileIO, path: string, file: import('./format.js').DumpFile, progress: Json, chunks: ChunkLimits,
+ * @param {{ io: FileIO, path: string, file: import('./format.js').DumpFile, progress: ImportProgress, chunks: ChunkLimits,
  *   whole: boolean }} options
  */
 async function checkIdentity({ io, path, file, progress, chunks, whole }) {
@@ -345,7 +366,7 @@ async function checkIdentity({ io, path, file, progress, chunks, whole }) {
 /**
  * Sends the chunks after the Store's last one, checking that the chunks before it match what the Store recorded.
  * @param {{ client: AdminClient, io: FileIO, out: Output, path: string, file: import('./format.js').DumpFile,
- *   progress: Json, chunks: ChunkLimits, now: () => number, sleep: (ms: number) => Promise<void> }} options
+ *   progress: ImportProgress, chunks: ChunkLimits, now: () => number, sleep: (ms: number) => Promise<void> }} options
  */
 async function sendChunks({ client, io, out, path, file, progress, chunks, now, sleep }) {
   const total = file.bodyEnd - file.bodyStart;
@@ -424,7 +445,7 @@ async function sendChunk({ client, out, id, seq, bytes, digest, sleep }) {
  * @param {AdminClient} client
  * @param {string} id
  * @param {(ms: number) => Promise<void>} sleep
- * @returns {Promise<Json>}
+ * @returns {Promise<import('./client.js').Responses["/admin/import/progress"]>}
  */
 async function readProgress(client, id, sleep) {
   for (let attempt = 0; ; attempt++) {
@@ -451,6 +472,18 @@ function escapeRegExp(text) {
 class VerifyError extends Error {}
 
 /**
+ * A backup's manifest and media index as the backup writes them (docs/backup.md); verifyBackup checks the fields it
+ * relies on before using them.
+ * @typedef {{ size: number, sha256: string }} FileDigest
+ * @typedef {{ format?: unknown, version?: unknown, id: string,
+ *   dump: FileDigest & { key?: unknown, plaintext: FileDigest }, mediaIndex: { plaintext: FileDigest },
+ *   schema: { version: number }, kopje: { version: string }, media: { required: number } }} BackupManifest
+ * @typedef {{ source?: unknown, state?: unknown, key?: unknown, run?: unknown, plaintext: FileDigest } | null}
+ *   IndexEntry
+ * @typedef {{ format?: unknown, run?: unknown, objects?: unknown }} MediaIndex
+ */
+
+/**
  * Checks decrypted backup files against their decrypted manifest (docs/backup.md), in order, and stops at the first
  * mismatch: the dump (and the encrypted dump), then the media index, then each original the index marks copied,
  * decrypted under mediaDir at its key (<dir>/originals/<id>). Every index entry is validated before any is used: its
@@ -462,8 +495,7 @@ class VerifyError extends Error {}
  *   mediaDir?: string | undefined }} options
  */
 export async function verifyBackup({ io, manifestPath, dumpPath, encryptedPath, indexPath, mediaDir }) {
-  /** @type {any} */
-  const manifest = await readJson(io, manifestPath);
+  const manifest = /** @type {BackupManifest | null} */ (await readJson(io, manifestPath));
   if (manifest?.format !== "kopje-backup" || manifest.version !== 1 || typeof manifest.id !== "string") {
     throw new Error(`${manifestPath} is not a version 1 Kopje backup manifest`);
   }
@@ -502,16 +534,15 @@ export async function verifyBackup({ io, manifestPath, dumpPath, encryptedPath, 
     }
     if (indexPath !== undefined) {
       await check("media index", indexPath, manifest.mediaIndex.plaintext);
-      /** @type {any} */
-      const index = await readJson(io, indexPath);
+      const index = /** @type {MediaIndex | null} */ (await readJson(io, indexPath));
       if (index?.format !== "kopje-backup-media-index" || index.run !== manifest.id || !Array.isArray(index.objects)) {
         throw new VerifyError(`media index: ${indexPath} is not the index of backup ${manifest.id}`);
       }
       /** @type {{ source: string, plaintext: { size: number, sha256: string } }[]} */
       const copied = [];
-      for (const entry of index.objects) {
+      for (const entry of /** @type {IndexEntry[]} */ (index.objects)) {
         const source = entry?.source;
-        if (typeof source !== "string" || !SOURCE.test(source)) {
+        if (entry === null || typeof source !== "string" || !SOURCE.test(source)) {
           throw new VerifyError("media index: an entry names something other than originals/<18-digit id>");
         }
         if (entry.state === "copied") {

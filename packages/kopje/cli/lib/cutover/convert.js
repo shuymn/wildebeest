@@ -93,7 +93,8 @@ const LEGACY_SETTINGS = /** @type {Record<string, string>} */ ({
 });
 
 /** @typedef {import('node:sqlite').DatabaseSync} DatabaseSync */
-/** @typedef {Record<string, any>} Json */
+/** @typedef {Record<string, unknown>} Json */
+/** @typedef {Record<string, import('node:sqlite').SQLOutputValue>} Row a row as node:sqlite reads it */
 
 /**
  * 'YYYY-MM-DD HH:MM:SS[.fff]' (UTC, legacy cdate) or ISO 8601 to 'YYYY-MM-DDTHH:MM:SS.sssZ'; null when unparsable.
@@ -115,7 +116,7 @@ function json(value) {
     return null;
   }
   try {
-    const parsed = JSON.parse(value);
+    const parsed = /** @type {unknown} */ (JSON.parse(value));
     return typeof parsed === "object" && parsed !== null && !Array.isArray(parsed)
       ? /** @type {Json} */ (parsed)
       : null;
@@ -487,7 +488,7 @@ export function convertLegacy(
   /** @param {string} table @param {string | null} time @param {string} key */
   const remoteId = (table, time, key) => ids.remote(table, time, key);
   /** @param {string} sql @param {...import('node:sqlite').SQLInputValue} params */
-  const rows = (sql, ...params) => /** @type {Json[]} */ (legacy.prepare(sql).all(...params));
+  const rows = (sql, ...params) => legacy.prepare(sql).all(...params);
   /** @param {string} sql */
   const insert = (sql) => kopje.prepare(sql);
 
@@ -616,7 +617,9 @@ export function convertLegacy(
     }
     const displayName = stored("accounts.display_name", carried(properties.name), storedDisplayName);
     const endpoints =
-      typeof properties.endpoints === "object" && properties.endpoints !== null ? properties.endpoints : {};
+      typeof properties.endpoints === "object" && properties.endpoints !== null
+        ? /** @type {Json} */ (properties.endpoints)
+        : {};
     accountInsert.run(
       id,
       uri,
@@ -1004,9 +1007,9 @@ export function convertLegacy(
       local &&
         typeof properties.source === "object" &&
         properties.source !== null &&
-        typeof properties.source.content === "string"
+        typeof (/** @type {Json} */ (properties.source).content) === "string"
         ? bounded(
-            stored("statuses.source_text", carried(properties.source.content), storedText),
+            stored("statuses.source_text", carried(/** @type {Json} */ (properties.source).content), storedText),
             STATUS_CONTENT_BYTES,
             "text:source-longer-than-bound",
           )
@@ -1027,6 +1030,7 @@ export function convertLegacy(
     for (const [account, silent] of mentions) {
       mentionInsert.run(plan.id, account, silent, requiresMention(visibility), author.id);
     }
+    /** @type {Set<string>} */
     const tags = new Set();
     for (const tag of list(properties.tag)) {
       if (typeof tag === "object" && tag !== null && /** @type {Json} */ (tag).type === "Hashtag") {
@@ -1430,7 +1434,7 @@ export function convertLegacy(
       remote_url: null,
       preview_remote_url: null,
       text_url: null,
-      meta: meta === null ? null : JSON.parse(meta),
+      meta: meta === null ? null : /** @type {unknown} */ (JSON.parse(meta)),
       description: description === "" ? null : description,
       blurhash: null,
     };
@@ -1538,7 +1542,8 @@ export function convertLegacy(
         isoTime(properties.updated) ?? isoTime(properties.published) ?? isoTime(revision.cdate) ?? plan.published,
       );
     }
-    const status = /** @type {Json} */ (
+    const status = /** @type {{ content: string, spoiler_text: string, sensitive: number, edited_at: string | null,
+      published_at: string }} */ (
       kopje
         .prepare("SELECT content, spoiler_text, sensitive, edited_at, published_at FROM statuses WHERE id = ?")
         .get(plan.id)
@@ -1561,7 +1566,7 @@ export function convertLegacy(
     if (body === null || typeof body.id !== "string" || (body.type !== "Follow" && body.type !== "Like")) {
       continue;
     }
-    const key = `${String(body.type)}\n${String(activity.actor_id)}\n${idOf(body.object) ?? ""}`;
+    const key = `${body.type}\n${String(activity.actor_id)}\n${idOf(body.object) ?? ""}`;
     activities.set(key, [...(activities.get(key) ?? []), body.id]);
   }
   /** @param {string} type @param {unknown} actor @param {string[]} objects */
@@ -1866,11 +1871,11 @@ export function convertLegacy(
       count(normalized, `settings:${name}-blank`);
       return;
     }
-    const written = storedInstanceSetting(/** @type {any} */ (name), text);
+    const written = storedInstanceSetting(/** @type {Parameters<typeof storedInstanceSetting>[0]} */ (name), text);
     if (written !== text) {
       count(acceptTruncation ? normalized : problems, `settings:${name}-longer-than-bound`);
     } else if (
-      INSTANCE_DOCUMENTS.includes(/** @type {any} */ (name)) &&
+      INSTANCE_DOCUMENTS.includes(/** @type {(typeof INSTANCE_DOCUMENTS)[number]} */ (name)) &&
       isBlank(remoteHtmlText(sanitizeRemoteHtml(text)))
     ) {
       count(normalized, `settings:${name}-no-text`);

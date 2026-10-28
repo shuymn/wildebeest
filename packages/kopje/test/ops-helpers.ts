@@ -203,7 +203,7 @@ export function dumpViaRpc(store: StoreStub, maxBytes?: number): Promise<{ text:
 
 export function splitDump(text: string): { header: unknown; body: string; trailer: unknown } {
   const lines = text.split("\n");
-  const header = JSON.parse((lines[0] ?? "").replace(/^-- kopje-dump-header /, ""));
+  const header: unknown = JSON.parse((lines[0] ?? "").replace(/^-- kopje-dump-header /, ""));
   const trailerLine = text.lastIndexOf("\n-- kopje-dump-trailer ");
   const bodyStart = (lines[0] ?? "").length + 1;
   const body = text.slice(bodyStart, trailerLine + 1);

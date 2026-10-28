@@ -8,13 +8,16 @@ import { parseArgs } from "node:util";
 import { mainChecked } from "./kopje-release-lib.mjs";
 
 const { values } = parseArgs({ options: { repo: { type: "string" }, sha: { type: "string" } } });
-for (const name of ["repo", "sha"]) {
-  if (values[name] === undefined) {
+/** @param {"repo" | "sha"} name */
+const required = (name) => {
+  const value = values[name];
+  if (value === undefined) {
     console.error(`missing --${name}`);
     process.exit(2);
   }
-}
-const passed = await mainChecked({ repo: values.repo, sha: values.sha });
+  return value;
+};
+const passed = await mainChecked({ repo: required("repo"), sha: required("sha") });
 const line = `passed=${passed}\n`;
 if (process.env.GITHUB_OUTPUT) {
   appendFileSync(process.env.GITHUB_OUTPUT, line);

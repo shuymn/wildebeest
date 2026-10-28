@@ -19,14 +19,20 @@ const GIT = [
   "tag.gpgsign=false",
 ];
 
+/** @type {string} */
 let work;
 
+/**
+ * @param {string} dir
+ * @param {string[]} args
+ */
 function git(dir, ...args) {
   const result = spawnSync("git", ["-C", dir, ...GIT, ...args], { encoding: "utf8" });
   assert.equal(result.status, 0, result.stderr);
 }
 
 // A checkout whose newest release tag carries 0001_a and whose HEAD adds 0002_b, and whose pnpm prints `line`.
+/** @param {string} name */
 function checkout(name) {
   const dir = join(work, name);
   mkdirSync(join(dir, "packages/kopje/migrations"), { recursive: true });
@@ -65,17 +71,28 @@ before(() => {
 
 after(() => rmSync(work, { recursive: true, force: true }));
 
-const LEGACY = (ms) => `{"migrations":["0002_b"],"scale":1,"seeded":{"accounts":1},"ms":${ms},"budgetMs":20000}`;
+const LEGACY = (/** @type {number} */ ms) =>
+  `{"migrations":["0002_b"],"scale":1,"seeded":{"accounts":1},"ms":${ms},"budgetMs":20000}`;
+/**
+ * @param {number} ms
+ * @param {string} check
+ * @param {number} retry
+ */
 const CURRENT = (ms, check, retry) =>
   `{"migrations":["0002_b"],"scale":1,"seeded":{"accounts":1},"ms":${ms},"budgetMs":20000,` +
   `"foreignKeyCheck":"${check}","retryEstimateMs":${retry}}`;
 
 // Runs the script over both checkouts: head and base are one bench line each, or one per run.
+/**
+ * @param {string | string[]} head
+ * @param {string | string[]} base
+ * @param {number} [runs]
+ */
 function run(head, base, runs = 1) {
-  for (const [name, lines] of [
+  for (const [name, lines] of /** @type {[string, string | string[]][]} */ ([
     ["head", head],
     ["base", base],
-  ]) {
+  ])) {
     writeFileSync(join(work, name, "bench.out"), `${[lines].flat().join("\n")}\n`);
     writeFileSync(join(work, name, "bench.runs"), "0");
   }

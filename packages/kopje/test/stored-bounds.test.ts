@@ -993,7 +993,7 @@ describe("media blurhash (0065_media_blurhash)", () => {
         expect(storedBlurhash(value)).toBeNull();
       }
       // Malformed UTF-8 an import may hold, past the alphabet whatever it decodes to.
-      const malformed = new Uint8Array([0x4c, ...Array(11).fill(0xff)]);
+      const malformed = new Uint8Array([0x4c, ...Array.from({ length: 11 }, () => 0xff)]);
       expect(
         sql.exec<{ v: number }>(`SELECT ${blurhashPastBoundSql("CAST(?1 AS TEXT)")} AS v`, malformed).one().v,
       ).toBe(1);

@@ -50,7 +50,10 @@ const MESSAGES = /** @type {Record<string, string>} */ ({
 });
 
 export function packageVersion() {
-  return String(JSON.parse(readFileSync(new URL("../../../package.json", import.meta.url), "utf8")).version);
+  const manifest = /** @type {{ version: unknown }} */ (
+    JSON.parse(readFileSync(new URL("../../../package.json", import.meta.url), "utf8"))
+  );
+  return String(manifest.version);
 }
 
 /** @param {string} text */
@@ -233,7 +236,7 @@ export async function convertExport(options) {
     });
     manifest.source = report;
 
-    const users = /** @type {any[]} */ (
+    const users = /** @type {import("./kek.js").LegacyUser[]} */ (
       legacy.prepare("SELECT actor_id, privkey, privkey_salt, pubkey FROM users ORDER BY rowid").all()
     ).map((u) => ({ uri: String(u.actor_id), privkey: u.privkey, salt: u.privkey_salt, pubkey: String(u.pubkey) }));
     const kek = await checkKeks(users, env);
@@ -296,7 +299,9 @@ export async function convertExport(options) {
     let catalog = readCatalog(kopje);
     const migrations = migrationRecords();
     if (catalogPath !== undefined) {
-      const target = JSON.parse(readFileSync(catalogPath, "utf8"));
+      const target = /** @type {{ migrations: unknown, tables: typeof catalog }} */ (
+        JSON.parse(readFileSync(catalogPath, "utf8"))
+      );
       if (JSON.stringify(target.migrations) !== JSON.stringify(migrations)) {
         kopje.close();
         throw new ExportError("catalog-migrations-differ");

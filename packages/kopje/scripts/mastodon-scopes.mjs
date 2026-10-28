@@ -199,9 +199,9 @@ const VERBS = new Set(["get", "post", "put", "patch", "delete", "match"]);
  *   path: string,
  *   module: string,
  *   defaults?: Record<string, unknown>,
- *   controller?: string,
+ *   controller?: string | undefined,
  *   param?: string,
- *   unknown?: string,
+ *   unknown?: string | undefined,
  *   pendingDefaults?: RawRoute[],
  * }} Frame
  */

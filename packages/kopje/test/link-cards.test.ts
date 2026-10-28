@@ -554,7 +554,7 @@ describe("presentation", () => {
     expect(presentedCardText("\u{1f600}".repeat(astral), title)).toHaveLength(2 * astral);
     expect(presentedCardText("\u{1f600}".repeat(astral + 1), title)).toBe("");
     // Malformed UTF-8 within the raw bytes decodes to U+FFFD, three bytes each: past the bound once decoded.
-    expect(presentedCardText(bytes(Array(title - 2).fill(0x80)), title)).toBe("");
+    expect(presentedCardText(bytes(Array.from({ length: title - 2 }, () => 0x80)), title)).toBe("");
     expect(presentedCardText("a\u0000", title)).toBe("");
     expect(presentedCardText("\ud800", title)).toBe("");
     expect(presentedCardText(7, title)).toBe("");
