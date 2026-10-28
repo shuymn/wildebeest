@@ -141,7 +141,7 @@ describe("a blocked domain's cleanups are verified with stored keys only", () =>
         id: `${bob.uri}#quote-requests/1`,
         type: "QuoteRequest",
         actor: bob.uri,
-        object: `${"https://kopje.test"}/ap/users/alice/statuses/1`,
+        object: `https://kopje.test/ap/users/alice/statuses/1`,
         instrument: mastodonNote(bob).id,
       }),
     ).toBe(202);

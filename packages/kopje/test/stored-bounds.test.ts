@@ -813,7 +813,7 @@ describe("contact_username (0059_contact_and_activity)", () => {
             expect(idempotent(sql, projection, input)).toBe(true);
             expect(writer(input)).toBe(valueOf(sql, projection("?1"), input));
             // The migration's CASE-free predicate is P(x) IS NOT x.
-            expect(valueOf(sql, `${contactUsernamePastBoundSql("?1")}`, input)).toBe(
+            expect(valueOf(sql, contactUsernamePastBoundSql("?1"), input)).toBe(
               valueOf(sql, `(${projection("?1")}) IS NOT ?1`, input),
             );
             const written = writer(input);
@@ -938,7 +938,7 @@ describe("media blurhash (0065_media_blurhash)", () => {
   // Every size flag with its exact length, every character of the alphabet, and the cases around the bound.
   const witnesses = [
     ...[...BASE83].map((flag) => `${flag}${"0".repeat(5)}`),
-    ...[...BASE83].map((c) => `${blurhashOf(2, 2)}`.slice(0, -1) + c),
+    ...[...BASE83].map((c) => blurhashOf(2, 2).slice(0, -1) + c),
     `U${"0".repeat(34)}\n`,
     `${blurhashOf(1, 1)}\u0000`,
     `${blurhashOf(5, 5)}0`,

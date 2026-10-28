@@ -5357,13 +5357,13 @@ describe("0049_instance_bounds", () => {
   // 50,000 UTF-8 bytes exactly, of three-byte characters and two ASCII ones.
   const documentAt = `${"日".repeat(16_666)}aa`;
   const emailAt = `${"a".repeat(254 - "@example.com".length)}@example.com`;
-  const rulesAt = JSON.stringify([`${"r".repeat(65_536 - 4)}`]);
+  const rulesAt = JSON.stringify(["r".repeat(65_536 - 4)]);
   // Each covered name at its bound (kept), and one past it in its unit (refused, and rewritten by the migration).
   const BOUNDS: Record<InstanceSettingName, { at: string; past: string[] }> = {
     title: { at: astral.repeat(1024), past: [astral.repeat(1025), `${"t".repeat(1024)}\u3000`] },
     description: { at: astral.repeat(200), past: [astral.repeat(201)] },
     contact_email: { at: emailAt, past: [`a${emailAt}`] },
-    rules: { at: rulesAt, past: [JSON.stringify([`${"r".repeat(65_536 - 3)}`]), '{"a":1}', "[1,", ""] },
+    rules: { at: rulesAt, past: [JSON.stringify(["r".repeat(65_536 - 3)]), '{"a":1}', "[1,", ""] },
     extended_description: { at: documentAt, past: [`${documentAt}a`, " \t\n\v\f\r"] },
     privacy_policy: { at: documentAt, past: [`${documentAt}a`, ""] },
     terms_of_service: { at: documentAt, past: [`${documentAt}a`, "\v"] },

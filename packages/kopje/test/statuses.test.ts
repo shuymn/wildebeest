@@ -1316,7 +1316,7 @@ describe("media_ids (PostStatusService#validate_media!, MEDIA-1)", () => {
     expect(await posting(h, token, { status: "x", media_ids: ["", "abc", " 12", "1_0"] })).toEqual(
       mediaNotFound("0", "12", "10"),
     );
-    expect(await posting(h, token, { status: "x", media_ids: ["0012", "abc", "0012", `${ID}`] })).toEqual(
+    expect(await posting(h, token, { status: "x", media_ids: ["0012", "abc", "0012", ID] })).toEqual(
       mediaNotFound("12", "0", "12"),
     );
     expect(await posting(h, token, { status: "x", media_ids: ["9007199254740993"] })).toEqual(

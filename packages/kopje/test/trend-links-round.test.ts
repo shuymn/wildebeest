@@ -239,7 +239,7 @@ describe("allowance and the pools", () => {
     await round(store);
     const listed = readOperation<void, { links: number; tags: number }>((db) => ({
       links: db.first<{ n: number }>(
-        `SELECT count(*) AS n FROM trend_links t WHERE ${"coalesce((SELECT r.trendable FROM link_trend_reviews r WHERE r.url = t.url), 0) = 1"}`,
+        `SELECT count(*) AS n FROM trend_links t WHERE coalesce((SELECT r.trendable FROM link_trend_reviews r WHERE r.url = t.url), 0) = 1`,
       )!.n,
       tags: db.first<{ n: number }>("SELECT count(*) AS n FROM trend_tags")!.n,
     }));

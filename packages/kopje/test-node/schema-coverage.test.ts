@@ -610,6 +610,7 @@ describe("the source scanners", () => {
 describe("the dump catalogs", () => {
   // The Store's catalog code, loaded by a computed path: test-node's tsconfig lacks the Workers types it is checked
   // with (the package's own tsc run checks it). Its SqlStorage is a thin adapter over the node database.
+  // oxlint-disable-next-line typescript/no-unnecessary-template-expression -- a literal path would be type-checked
   const store = import(`../src/platform/${"dump-catalog"}.ts`) as Promise<{
     readCatalog: (sql: {
       exec: (query: string, ...bindings: SQLInputValue[]) => { toArray: () => unknown[] };
