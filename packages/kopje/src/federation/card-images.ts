@@ -249,7 +249,7 @@ export async function processCardImage(
 // ---- The round
 
 export const CARD_IMAGE_ROUND_MS = 60_000;
-export const CARD_IMAGE_FINISH_MS = 10_000;
+const CARD_IMAGE_FINISH_MS = 10_000;
 export const CARD_IMAGE_FETCHES_MS = CARD_IMAGE_ROUND_MS - CARD_IMAGE_FINISH_MS;
 export const CARD_IMAGE_CLAIM_MS = 16_000;
 // Each claim's work fits the fetches' window, and a claim's hold outlasts twice the round that holds it.

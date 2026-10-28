@@ -38,7 +38,7 @@ export type AuthorSignature = { activity: Record<string, unknown>; keyId: string
 
 // The bearer token's digest and the scope the route declares, set by the access middleware (mastodon/access.ts) on
 // every API route: null on a public route. It is not validated there; the Store validates it in the operation.
-export type RequestCredential = { tokenHash: string; scope: RequiredScope | null };
+type RequestCredential = { tokenHash: string; scope: RequiredScope | null };
 
 export type ApiEnv = { Bindings: Env; Variables: { credential: RequestCredential | null } };
 

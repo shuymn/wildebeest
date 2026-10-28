@@ -3,7 +3,7 @@
 // The legacy consumer drops a message whose activity actor is not its signer, so signerId is the verified key owner,
 // which is the activity actor.
 
-export const LEGACY_INBOX_MESSAGE_TYPE = 1;
+const LEGACY_INBOX_MESSAGE_TYPE = 1;
 
 export type LegacyInboxMessage = {
   type: typeof LEGACY_INBOX_MESSAGE_TYPE;
@@ -70,7 +70,7 @@ export function legacyRecipient(
   return fallback !== null && accounts.has(fallback) ? actor(fallback) : null;
 }
 
-export function isLocalActor(uri: string, origin: string): boolean {
+function isLocalActor(uri: string, origin: string): boolean {
   try {
     const url = new URL(uri);
     return url.origin === origin && LOCAL_ACTOR.test(url.pathname) && url.search === "" && url.hash === "";

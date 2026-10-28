@@ -136,7 +136,7 @@ export function linkAcct(acct: string): string | null {
   return jsonBytes(acct) > LINK_ACCT_JSON_BYTES ? null : acct;
 }
 
-export function linkTime(value: string): string | null {
+function linkTime(value: string): string | null {
   if (value.length > TIME_INPUT_LIMIT) {
     return null;
   }
@@ -149,7 +149,7 @@ export function linkTime(value: string): string | null {
 // see it; the id stays the boost's, the list's cursor.
 export type StatusStub = { id: string; url: string | null; acct: string | null; created_at: string | null };
 
-export function statusStub(status: Status): StatusStub {
+function statusStub(status: Status): StatusStub {
   const target = status.reblog ?? status;
   return {
     id: status.id,

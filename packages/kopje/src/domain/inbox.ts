@@ -178,7 +178,7 @@ export const KEY_REFRESH_MS = 24 * 60 * 60 * 1000;
 export const JOB_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
 // Bounds of one batch of a Move (RES-6): local followers moved, and local blocks and mutes carried over to the target.
 export const MOVE_BATCH = 100;
-export const MOVE_MAX_CARRIED = 100;
+const MOVE_MAX_CARRIED = 100;
 // Rows one batch of a deleted actor's purge, or of a deleted status's removal, writes at most (RES-6).
 export const PURGE_BATCH = 500;
 // A remote author's proven Delete of its public or unlisted original is forwarded by at most this many local
@@ -259,7 +259,7 @@ export type InboundActivity =
     };
 
 // What an Add or Remove names: a status by its id, or a Hashtag by its name.
-export type CollectionItem = { status: string } | { hashtag: string };
+type CollectionItem = { status: string } | { hashtag: string };
 
 // Documents the Worker fetched because the Store asked for them (ReceiveResult.need), by the uri asked for: a parsed
 // status or actor, or null when it could not be fetched or used; 'gone': the actor's document answered 404 or 410.
@@ -433,7 +433,7 @@ function recordable(actorUri: string, targetUri: string): boolean {
 
 // Whether every one of targetUris can be recorded as retracted by actorUri now: those not recorded yet fit under the
 // cap. A change whose generation could not be recorded is not made (ID-7: it could come back).
-export function canRetract(db: Db, actorUri: string, targetUris: readonly string[], now: number): boolean {
+function canRetract(db: Db, actorUri: string, targetUris: readonly string[], now: number): boolean {
   const missing = new Set(targetUris.filter((uri) => recordable(actorUri, uri) && !isRetracted(db, actorUri, uri, now)))
     .size;
   if (missing === 0) {
@@ -451,7 +451,7 @@ export function canRetract(db: Db, actorUri: string, targetUris: readonly string
 // Records that actorUri retracted targetUri, and reports whether it is recorded. Only an id of the actor's own origin
 // is recorded (another origin's activity could never be the actor's to retract), and at most
 // MAX_RETRACTIONS_PER_ACTOR live ones per actor.
-export function retract(db: Db, actorUri: string, targetUri: string, now: number): boolean {
+function retract(db: Db, actorUri: string, targetUri: string, now: number): boolean {
   if (!recordable(actorUri, targetUri) || !canRetract(db, actorUri, [targetUri], now)) {
     return false;
   }
@@ -783,7 +783,7 @@ function quoteAnswerRef(ref: ActivityRef): QuoteAnswerRef {
 
 // Misskey's Undo of a Follow names the follow by its pair (ApRendererService#renderFollow without a request id:
 // <origin>/follows/<follower id>/<followee id>), not by the id of the Follow it sent.
-export function isMisskeyPairId(id: string): boolean {
+function isMisskeyPairId(id: string): boolean {
   try {
     return /^\/follows\/[^/]+\/[^/]+$/.test(new URL(id).pathname);
   } catch {
@@ -3347,7 +3347,7 @@ export type FetchPreparation = { signer: FetchSigner; ticket: PolicyTicket | nul
 // need. Null for a target of this instance's own origin: the handling paths it serves never fetch one
 // (federation/inbound.ts fetchNeeded and prepare), so no key leaves the Store for it; a signature key at this origin,
 // which Fedify may still fetch, then costs the Worker its own signer and policy reads.
-export function fetchPreparation(db: Db, by: string | FollowerSigner | null, target: string): FetchPreparation | null {
+function fetchPreparation(db: Db, by: string | FollowerSigner | null, target: string): FetchPreparation | null {
   const domain = instanceDomainOf(db);
   if (domain !== null && originOf(target) === `https://${domain}`) {
     return null;

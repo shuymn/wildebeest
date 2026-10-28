@@ -311,7 +311,7 @@ const PART_READS: [
 // network, featuredTags, starting from the one the round's attempt names. A round after one without progress starts
 // with the next unread part, so each gets a round where it goes first with the whole budget (a part that keeps failing
 // does not spend every round's budget before a healthy one) before MAX_SYNC_ATTEMPTS gives the read up.
-export async function readCollections(sync: CollectionSync, loaders: ReadLoaders): Promise<ReadOut> {
+async function readCollections(sync: CollectionSync, loaders: ReadLoaders): Promise<ReadOut> {
   const origin = originOf(sync.accountUri);
   const out: ReadOut = {
     parts: 0,

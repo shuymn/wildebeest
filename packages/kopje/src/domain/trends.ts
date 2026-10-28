@@ -91,13 +91,13 @@ export const TREND_TAGS_MAX_LIMIT = 20;
 export const TREND_STATUSES_LIMIT = 20;
 export const TREND_STATUSES_MAX_LIMIT = 40;
 // Trends::Tags and Trends::Statuses default_options (app/models/trends/tags.rb:8-14, statuses.rb:8-13).
-export const TAG_THRESHOLD = 5;
-export const TAG_COOLDOWN_MS = 2 * DAY_MS;
-export const TAG_HALFLIFE_MS = 4 * HOUR_MS;
-export const TAG_DECAY_THRESHOLD = 1;
-export const STATUS_THRESHOLD = 5;
-export const STATUS_HALFLIFE_MS = HOUR_MS;
-export const STATUS_DECAY_THRESHOLD = 0.3;
+const TAG_THRESHOLD = 5;
+const TAG_COOLDOWN_MS = 2 * DAY_MS;
+const TAG_HALFLIFE_MS = 4 * HOUR_MS;
+const TAG_DECAY_THRESHOLD = 1;
+const STATUS_THRESHOLD = 5;
+const STATUS_HALFLIFE_MS = HOUR_MS;
+const STATUS_DECAY_THRESHOLD = 0.3;
 // The round's windows (RES-7, MD-5): the newest TREND_WINDOW public originals with ids from yesterday 00:00 UTC; at
 // most MAX_STATUS_TAGS hashtag rows of each and TREND_TAG_ROWS in all, cut raw before any rule; the
 // TREND_TAG_CANDIDATES hashtags with the most accounts today; the TREND_STATUS_CANDIDATES statuses with the most boosts
@@ -108,13 +108,13 @@ export const TREND_TAG_ROWS = 8000;
 export const TREND_TAG_CANDIDATES = 400;
 export const TREND_TAG_GROUPS = TREND_TAG_ROWS / TAG_THRESHOLD;
 export const TREND_STATUS_CANDIDATES = 400;
-export const TREND_OBSERVED_MAX = 10_000_000;
+const TREND_OBSERVED_MAX = 10_000_000;
 
 // Trends::Links default_options (links.rb:8-14); review_threshold is unused (no e-mail, MD-5).
 export const LINK_THRESHOLD = 5;
-export const LINK_COOLDOWN_MS = 2 * DAY_MS;
-export const LINK_HALFLIFE_MS = 8 * HOUR_MS;
-export const LINK_DECAY_THRESHOLD = 1;
+const LINK_COOLDOWN_MS = 2 * DAY_MS;
+const LINK_HALFLIFE_MS = 8 * HOUR_MS;
+const LINK_DECAY_THRESHOLD = 1;
 // The round's link windows (RES-7, MD-5): the public boosts read (TREND_LINK_BOOSTS, TREND_LINK_BOOSTS_PER_STATUS of
 // each original), the TREND_LINK_CANDIDATES links with the most accounts today, and the TREND_LINK_COPIES newest
 // public copies of a link its qualifying copy is chosen among. At most TREND_WINDOW + TREND_LINK_BOOSTS contributions
@@ -168,12 +168,12 @@ export function tagReviewedSql(name: string): string {
 }
 
 // Whether the trend_tags row `t` is allowed: its review, else `byDefault` (an expression, 0 or 1).
-export function trendAllowedTagSql(t: string, byDefault: string): string {
+function trendAllowedTagSql(t: string, byDefault: string): string {
   return `coalesce((SELECT r.trendable FROM tag_trend_reviews r WHERE r.name = ${t}.name), ${byDefault}) = 1`;
 }
 
 // Whether the trend_statuses row `t` is allowed: the status's review, else its author's, else `byDefault`.
-export function trendAllowedStatusSql(t: string, byDefault: string): string {
+function trendAllowedStatusSql(t: string, byDefault: string): string {
   return `coalesce((SELECT r.trendable FROM status_trend_reviews r WHERE r.status_id = ${t}.status_id),
 		(SELECT r.trendable FROM account_trend_reviews r WHERE r.account_id = ${t}.account_id), ${byDefault}) = 1`;
 }

@@ -19,7 +19,7 @@ import { type DeliveryDeps, handleDoorbells } from "./deliver";
 // Delay before a spooled request is offered again while maintenance lasts.
 export const SPOOL_REQUEUE_DELAY_SECONDS = 1800;
 // Delay before a message that failed to process is retried. Retries count against max_retries (wrangler.jsonc).
-export const QUEUE_RETRY_DELAY_SECONDS = 60;
+const QUEUE_RETRY_DELAY_SECONDS = 60;
 
 // Replays spooled inbox requests. While maintenance lasts (env or Store), each one is sent again as a fresh message
 // and the original is acked: message.retry() would count against max_retries and drop the request after a long

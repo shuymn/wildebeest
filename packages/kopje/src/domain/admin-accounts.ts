@@ -28,12 +28,12 @@ import { suspendLocal, unsuspendLocal } from "./suspension";
 // account by id and the actions that change nothing; and the Access admin's repair of the OAuth admin's match.
 
 // One admin entity, a unit (RES-2); undefined for an id with no account.
-export function presentAdminAccount(db: Db, id: string, adminId: string, present: Present): AdminAccount | undefined {
+function presentAdminAccount(db: Db, id: string, adminId: string, present: Present): AdminAccount | undefined {
   return adminAccountStream(db, [id], adminId, present, 1).next().value;
 }
 
 // The longest email set-email takes (RFC 5321's path limit).
-export const MAX_EMAIL_LENGTH = 254;
+const MAX_EMAIL_LENGTH = 254;
 
 export type SetEmailResult =
   | { ok: true; username: string; email: string }
@@ -162,7 +162,7 @@ const CANDIDATE_COLUMNS = `a.id, a.domain IS NULL AS local, NOT ${availableJoine
 
 // The least string above every string that starts with `prefix`, in SQLite's BINARY order (UTF-8 bytes, which is code
 // point order): the prefix with its last code point incremented, null when every code point is the highest.
-export function prefixEnd(prefix: string): string | null {
+function prefixEnd(prefix: string): string | null {
   const points = [...prefix].map((point) => point.codePointAt(0)!);
   while (points.length > 0) {
     const last = points.pop()!;

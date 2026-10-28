@@ -30,7 +30,7 @@ const CLOCK_SKEW_S = 60;
 const keySets = new Map<string, ReturnType<typeof createRemoteJWKSet>>();
 
 // Accepts "team.cloudflareaccess.com" or "https://team.cloudflareaccess.com/".
-export function teamHost(teamDomain: string): string {
+function teamHost(teamDomain: string): string {
   return teamDomain
     .trim()
     .replace(/^https?:\/\//, "")

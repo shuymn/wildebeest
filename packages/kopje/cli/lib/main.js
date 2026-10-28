@@ -2,7 +2,7 @@
 import { AdminError, createClient } from "./client.js";
 import { dumpToFile, formatBytes, importFromFile, verifyBackup } from "./commands.js";
 
-export const USAGE = `Usage: kopje-admin <command> [options]
+const USAGE = `Usage: kopje-admin <command> [options]
 
 Commands
   health                        detailed health report

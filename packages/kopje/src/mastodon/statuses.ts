@@ -37,8 +37,8 @@ const REPLY_NOT_FOUND = () => mastodonError(404, "The post you are trying to rep
 // StatusesController#set_quoted_status: any failure, a status R36 refuses included.
 const QUOTE_NOT_FOUND = () => mastodonError(404, "The post you are trying to quote does not appear to exist.");
 
-export const MAX_CHARACTERS = 500;
-export const MAX_MEDIA_ATTACHMENTS = 4;
+const MAX_CHARACTERS = 500;
+const MAX_MEDIA_ATTACHMENTS = 4;
 const TOO_LONG = `Validation failed: Text character limit of ${MAX_CHARACTERS} exceeded`;
 
 // ISO 639 codes, optionally with a region or script (zh-TW, zh-Hant). Anything else is ignored, as Mastodon does.

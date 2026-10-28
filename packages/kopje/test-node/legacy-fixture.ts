@@ -14,7 +14,7 @@ import { fileURLToPath } from "node:url";
 
 import { canonicalLegacyDatabase, legacyMigrations } from "../cli/lib/cutover/legacy-load.js";
 
-export const DOMAIN = "kopje.test";
+const DOMAIN = "kopje.test";
 const ORIGIN = `https://${DOMAIN}`;
 const PUBLIC = "https://www.w3.org/ns/activitystreams#Public";
 const IMAGES = "https://images.example/media";

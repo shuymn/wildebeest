@@ -20,7 +20,7 @@ import { quoteIdentifier } from "./dump-format";
 const HEX = Array.from({ length: 256 }, (_, i) => i.toString(16).toUpperCase().padStart(2, "0"));
 const utf8 = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true });
 
-export function toHex(bytes: Uint8Array): string {
+function toHex(bytes: Uint8Array): string {
   return Array.from(bytes, (byte) => HEX[byte] ?? "00").join("");
 }
 
@@ -32,7 +32,7 @@ export function fromHex(hex: string): ArrayBuffer {
   return bytes.buffer;
 }
 
-export function realLiteral(value: number): string {
+function realLiteral(value: number): string {
   if (value === Infinity) {
     return "9e999";
   }
@@ -96,7 +96,7 @@ export class LiteralError extends Error {}
 // A literal as an SQL expression with bound parameters, so statement text stays short (the platform limits a
 // statement to 100 KB) and every storage class is kept: integers go in as text and are cast, since a JS number always
 // binds as REAL.
-export function bindLiteral(literal: string): { expr: string; params: SqlStorageValue[] } {
+function bindLiteral(literal: string): { expr: string; params: SqlStorageValue[] } {
   if (literal === "NULL") {
     return { expr: "NULL", params: [] };
   }

@@ -70,9 +70,9 @@ export const MAX_BUILDS_PER_CALL = 10;
 
 // What a row leaves of its renewed lease unused, against clock differences between the Worker and the Store.
 const LEASE_MARGIN_MS = 60_000;
-export const REBUILD_HEARTBEAT_MS = 60_000;
+const REBUILD_HEARTBEAT_MS = 60_000;
 
-export type RebuildOutcome =
+type RebuildOutcome =
   | "built"
   | "would-build"
   | "skipped-existing"
@@ -82,7 +82,7 @@ export type RebuildOutcome =
   | "gone";
 
 // Rows an operator has to look at: the original is missing, its type does not match the row, or re-encoding failed.
-export type RebuildProblem = { id: string; outcome: "original-missing" | "type-mismatch" | "failed"; detail?: string };
+type RebuildProblem = { id: string; outcome: "original-missing" | "type-mismatch" | "failed"; detail?: string };
 
 export type RebuildStep =
   | {

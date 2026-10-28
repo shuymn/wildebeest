@@ -26,13 +26,13 @@ import { ABOVE_EVERY_ID, BELOW_EVERY_ID, readWindow, singleWindow, statusCursor,
 
 // List::PER_ACCOUNT_LIMIT and List::TITLE_LENGTH_LIMIT.
 export const MAX_LISTS = 50;
-export const MAX_LIST_TITLE = 256;
+const MAX_LIST_TITLE = 256;
 
 // GET /api/v1/lists/:id/accounts with limit=0 answers every member (Lists::AccountsController#unlimited?). Kopje stops
 // at this many, the newest by account id, and at ANSWER_BYTES (RES-3).
 export const MAX_LIST_MEMBERS_ANSWERED = 1_000;
 
-export const REPLIES_POLICIES = ["followed", "list", "none"] as const;
+const REPLIES_POLICIES = ["followed", "list", "none"] as const;
 
 export type RepliesPolicy = (typeof REPLIES_POLICIES)[number];
 

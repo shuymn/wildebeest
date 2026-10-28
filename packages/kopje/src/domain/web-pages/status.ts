@@ -45,7 +45,7 @@ export type StatusTabKind = "replies" | "reblogs" | "favourites" | "quotes";
 
 // What the page shows beside the status: one tab at the request's cursor, or nothing (the embed, and the ActivityPub
 // form of the status page, which forwards to the object endpoint).
-export type StatusTab = { kind: StatusTabKind; cursor: PageCursor };
+type StatusTab = { kind: StatusTabKind; cursor: PageCursor };
 
 export type StatusInput = { handle: string; id: string; now: number; tab: StatusTab | null };
 

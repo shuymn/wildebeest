@@ -22,7 +22,7 @@ import { checkKey } from "../security/keyring";
 // unwrap-failed: neither KEK unwraps it; pubkey-mismatch: a KEK unwraps it, but its signature does not verify against
 // the stored public key; changed: the stored key changed after it was read (run the rewrap again); recheck-failed: the
 // rewrapped key did not pass the check, so it was not written.
-export type RewrapFailure = {
+type RewrapFailure = {
   owner: string;
   reason: "unwrap-failed" | "pubkey-mismatch" | "changed" | "recheck-failed";
 };
@@ -47,7 +47,7 @@ export type RewrapDeps = {
   previous: string;
 };
 
-export const INSTANCE_ACTOR_OWNER = "(instance actor)";
+const INSTANCE_ACTOR_OWNER = "(instance actor)";
 
 export async function rewrapKeys(deps: RewrapDeps, input: { after: string | null }): Promise<RewrapStep> {
   const { build, store, authority, kek, previous } = deps;

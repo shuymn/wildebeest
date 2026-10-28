@@ -54,8 +54,8 @@ export const REACH_ROUND = 500;
 // Reporters a staging round reads at most: a seek and an account read each, REACH_ROUND rows.
 export const REPORTER_ROUND = REACH_ROUND / 2;
 // AccountReachFinder's limits.
-export const STATUS_LIMIT = 200;
-export const RECENT_LIMIT = 2_000;
+const STATUS_LIMIT = 200;
+const RECENT_LIMIT = 2_000;
 export const RECENT_MS = 2 * 24 * 60 * 60 * 1000;
 // Rounds one runModerationJobs call runs at most.
 export const MODERATION_ROUNDS = 4;

@@ -109,7 +109,7 @@ export type Account = {
 };
 
 // A role as REST::AccountSerializer::RoleSerializer presents it.
-export type AccountRole = Pick<Role, "id" | "name" | "color">;
+type AccountRole = Pick<Role, "id" | "name" | "color">;
 
 // Mastodon shows only a highlighted role (UserRole#highlighted?): OWNER_ROLE is, EVERYONE_ROLE is not.
 const OWNER_BADGE: AccountRole = { id: OWNER_ROLE.id, name: OWNER_ROLE.name, color: OWNER_ROLE.color };
@@ -254,7 +254,7 @@ function relatedOf(db: Db, rows: readonly AccountRow[]): Related {
   return { moved, cached: cachedImagesOf(db, [...rows.map((row) => row.id), ...moved.keys()]) };
 }
 
-export { DISPLAY_NAME_LIMIT, PROFILE_URL_LIMIT, USERNAME_LIMIT, usernameSql };
+export { DISPLAY_NAME_LIMIT, PROFILE_URL_LIMIT, USERNAME_LIMIT };
 
 export const ACCOUNT_FROM = "accounts a LEFT JOIN local_accounts l ON l.account_id = a.id";
 // ACCOUNT_FROM for a membership of ids: each account sought by its key (RES-7).
@@ -272,7 +272,7 @@ export const ANSWER_CHUNK = 50;
 // The presented accounts of `ids` (accounts' ids), in order, `chunk` at a time, each with its serialized size (and a
 // separator), an id with no account skipped: only the profiles asked for so far are read, so the attachment projection
 // runs for those alone.
-export function accountStream(
+function accountStream(
   db: Db,
   ids: readonly string[],
   present: Present,
@@ -952,7 +952,7 @@ type RelationshipRow = {
 // read through its pair key, each account sought by id from the requested ids (RES-7). With `availableOnly`, an
 // unavailable account (R1) has no entry, read from the account's row and its local_accounts row by key
 // (availableJoinedSql).
-export function relationshipsOf(
+function relationshipsOf(
   db: Db,
   viewerId: string,
   accountIds: string[],
@@ -1171,7 +1171,7 @@ export const ACCOUNT_RECENT_LIMIT = 5000;
 const PREFIX_END = "\u{10FFFF}";
 
 // The ids of the accounts the search finds, in its order.
-export function findAccountIds(db: Db, input: SearchInput, viewerId: string): string[] {
+function findAccountIds(db: Db, input: SearchInput, viewerId: string): string[] {
   // An address is read with the shared parser, so a Unicode domain finds the account stored under its punycode.
   const address = parseAddress(input.query.trim());
   const query = (address === null ? input.query : `${address.username}@${address.domain}`)
@@ -1241,7 +1241,7 @@ export type RelationshipResult =
 // follow up to FOLLOW_LIMIT accounts, and past that up to FOLLOW_LIMIT_RATIO times its followers. Like Mastodon it
 // counts accepted follows only (following_count), not pending requests.
 export const FOLLOW_LIMIT = 7_500;
-export const FOLLOW_LIMIT_RATIO = 1.1;
+const FOLLOW_LIMIT_RATIO = 1.1;
 
 export function followLimit(counts: { following_count: number; followers_count: number }): number {
   return counts.following_count < FOLLOW_LIMIT
@@ -1322,7 +1322,7 @@ export function windowAccountIds(db: Db, window: Window, rule: string): { id: st
 
 // The account rows of `ids`, in their order, each by its key: the profiles an answer presents, built for its own
 // accounts only.
-export function accountRowsOf(db: Db, ids: readonly string[]): AccountRow[] {
+function accountRowsOf(db: Db, ids: readonly string[]): AccountRow[] {
   if (ids.length === 0) {
     return [];
   }

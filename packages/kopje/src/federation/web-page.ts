@@ -75,7 +75,7 @@ export type WebPageOptions = {
 
 export type RedirectProbeOptions = Pick<WebPageOptions, "timeoutMs" | "deadline" | "budget" | "signal">;
 
-export type WebPageCost = { subrequests: number; storeCalls: number; hops: number; bytes: number };
+type WebPageCost = { subrequests: number; storeCalls: number; hops: number; bytes: number };
 
 export type WebPageRefusal =
   | "invalid-url"
@@ -87,7 +87,7 @@ export type WebPageRefusal =
   | "bad-location"
   | "unexpected-redirect";
 
-export type WebPageFailureKind =
+type WebPageFailureKind =
   | "refused"
   | "blocked"
   | "redirects"

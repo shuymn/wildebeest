@@ -33,7 +33,7 @@ type Current = "about";
 const MARK_SIZE = 20;
 const SiteMark: FC = () => <img src={FAVICON_48} width={MARK_SIZE} height={MARK_SIZE} alt="" />;
 
-export const SiteHeader: FC<{ chrome: Chrome | null; current?: Current }> = ({ chrome, current }) => {
+const SiteHeader: FC<{ chrome: Chrome | null; current?: Current }> = ({ chrome, current }) => {
   const { m } = useUi();
   const host = useContext(HostContext);
   return (
@@ -55,7 +55,7 @@ export const SiteHeader: FC<{ chrome: Chrome | null; current?: Current }> = ({ c
   );
 };
 
-export const SiteFooter: FC<{ chrome: Chrome | null; current?: Current }> = ({ chrome, current }) => {
+const SiteFooter: FC<{ chrome: Chrome | null; current?: Current }> = ({ chrome, current }) => {
   const { m } = useUi();
   return (
     <footer class="foot">

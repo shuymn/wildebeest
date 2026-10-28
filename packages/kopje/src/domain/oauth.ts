@@ -13,7 +13,7 @@ import { sweepWebState } from "./web-state";
 
 export const OOB_REDIRECT_URI = "urn:ietf:wg:oauth:2.0:oob";
 
-export const CODE_LIFETIME_MS = 10 * 60 * 1000;
+const CODE_LIFETIME_MS = 10 * 60 * 1000;
 
 export type Client = { id: string; name: string; website: string | null; redirectUris: string[]; scopes: string[] };
 
@@ -270,7 +270,7 @@ export const sweepOAuth = writeOperation<{ now: number }, { apps: number; tokens
 
 // instance_settings names written by /setup step 3.
 export const ACCESS_TEAM_DOMAIN = "access_team_domain";
-export const ACCESS_AUD = "access_aud";
+const ACCESS_AUD = "access_aud";
 
 // What /oauth/authorize needs before it can verify the Access assertion: the Access settings and the client.
 export const authorizeContext = readOperation<
@@ -325,7 +325,7 @@ export function loginAccount(db: Db, email: string): LoginAccount {
     : { status: "suspended" };
 }
 
-export type AuthorizationRequest = {
+type AuthorizationRequest = {
   clientId: string;
   redirectUri: string;
   scopes: string[];

@@ -58,7 +58,7 @@ import { edgeRangeSql } from "./windows";
 export const MAX_REPORT_STATUSES = 100;
 export const MAX_FORWARD_DOMAINS = 100;
 // Report::COMMENT_SIZE_LIMIT (app/models/report.rb:30).
-export const MAX_REPORT_COMMENT = 1_000;
+const MAX_REPORT_COMMENT = 1_000;
 
 // Report's category enum (app/models/report.rb:62-67).
 const CATEGORIES = new Set(["other", "spam", "legal", "violation"]);

@@ -47,12 +47,12 @@ export const LAST_LEGACY_LEVEL = 39;
 // (0.1.0), T2 the cloudflare/wildebeest line (0.0.1, at most 0010). Below 0011 both lines have the same schema, so they are reported
 // together.
 /** @param {number} level */
-export function supportedLevel(level) {
+function supportedLevel(level) {
   return level <= 10 || level === 18 || level === 23 || level === 35 || level === 39;
 }
 
 /** @param {number} level */
-export function lineOf(level) {
+function lineOf(level) {
   return level <= 10 ? "T1 or T2" : "T1";
 }
 

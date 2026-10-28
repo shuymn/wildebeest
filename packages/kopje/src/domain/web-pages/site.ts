@@ -19,12 +19,12 @@ import type { PresentOptions } from "../status-presenter";
 // account, list and footer are one snapshot. Before setup has fixed the domain it answers not_set_up and reads nothing
 // else (SETUP-1).
 
-export type SiteDocuments = { privacyPolicy: boolean; termsOfService: boolean };
+type SiteDocuments = { privacyPolicy: boolean; termsOfService: boolean };
 
 // What every page shows around its content: the domain and the documents the footer links.
 export type Site = { domain: string; documents: SiteDocuments };
 
-export type NotSetUp = { status: "not_set_up" };
+type NotSetUp = { status: "not_set_up" };
 
 // A page read's answer: not_set_up, or the read's own answer with the site facts.
 export type PageAnswer<O> = NotSetUp | (O & { site: Site });

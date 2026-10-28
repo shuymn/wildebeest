@@ -6,8 +6,6 @@ import { type Link, linkTo } from "./link";
 
 // An account as the pages show it. Pure: no Store, no visibility decisions.
 
-export type { Inline } from "./emoji";
-
 // A profile field: its name as text and its value as sanitized HTML, each with the account's emoji.
 export type FieldView = { name: Inline[]; value: SafeHtml };
 

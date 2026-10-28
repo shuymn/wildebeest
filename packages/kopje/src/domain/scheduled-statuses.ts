@@ -45,12 +45,12 @@ import { ABOVE_EVERY_ID, BELOW_EVERY_ID, statusCursor } from "./windows";
 // ScheduledStatus::TOTAL_LIMIT, DAILY_LIMIT and MINIMUM_OFFSET.
 export const TOTAL_LIMIT = 300;
 export const DAILY_LIMIT = 25;
-export const MINIMUM_OFFSET_MS = 5 * 60 * 1000;
+const MINIMUM_OFFSET_MS = 5 * 60 * 1000;
 
 // The bound of a stored params document (RES-1), as the schema checks it. What it holds is bounded before (the status
 // text's raw bound, at most four media ids, a parent id, a language tag) far under it, but for allowed_mentions, which
 // may be as long as the request: a document past the bound is refused as "Record invalid".
-export const MAX_PARAMS_BYTES = 128 * 1024;
+const MAX_PARAMS_BYTES = 128 * 1024;
 
 // At most this many scheduled statuses are published per cron run (RES-6), each in its own transaction.
 export const PUBLISH_ROUND = 25;
@@ -81,7 +81,7 @@ export type ScheduledParams = {
   quote_approval_policy: QuotePolicyName;
 };
 
-export type ScheduledPoll = { options: string[]; expires_in: string; multiple: boolean; hide_totals: boolean };
+type ScheduledPoll = { options: string[]; expires_in: string; multiple: boolean; hide_totals: boolean };
 
 // REST::ScheduledStatusSerializer.
 export type ScheduledStatus = {

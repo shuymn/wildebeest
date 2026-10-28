@@ -17,7 +17,7 @@ import { buildLegacyFixture, type FixtureOptions } from "./legacy-fixture.js";
 // Shared steps of the converter suites: a temporary directory per test, exports written from synthetic fixtures,
 // conversion and verification as the CLI runs them, and tampering that keeps a dump self-consistent.
 
-export const BASE_TIME = Date.parse("2026-10-20T00:00:00.000Z");
+const BASE_TIME = Date.parse("2026-10-20T00:00:00.000Z");
 
 export type Categories = Record<
   string,

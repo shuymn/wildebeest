@@ -252,7 +252,7 @@ async function body<T>(op: string, read: Promise<T>): Promise<T> {
 
 // The text of each <name>...</name> element, entities decoded. S3 responses are flat enough for this: the names read
 // here never nest inside themselves.
-export function elements(xml: string, name: string): string[] {
+function elements(xml: string, name: string): string[] {
   const found: string[] = [];
   const pattern = new RegExp(`<${name}>([\\s\\S]*?)</${name}>`, "g");
   for (const match of xml.matchAll(pattern)) {

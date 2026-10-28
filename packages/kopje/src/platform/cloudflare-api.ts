@@ -274,7 +274,7 @@ export type ReconcileHooks = { checkpoint: (managed: ManagedIds) => Promise<void
 export type AccessResult = { accountId: string; signInAud: string; adminAud: string; managed: ManagedIds };
 
 // Names that identify Kopje's objects for this domain.
-export function accessNames(domain: string) {
+function accessNames(domain: string) {
   return {
     adminPolicy: `Kopje ${domain} admin`,
     cliPolicy: `Kopje ${domain} admin CLI`,
@@ -529,7 +529,7 @@ const CHALLENGING = new Set(["block", "managed_challenge", "challenge", "js_chal
 
 // Whether the zone's bot settings challenge automated clients: Bot Fight Mode (fight_mode), Super Bot Fight Mode
 // (sbfm_*), or a stale configuration still in force after a plan change. 'off' only when the answer establishes it.
-export function botFightState(settings: BotSettings): "on" | "off" | "unknown" {
+function botFightState(settings: BotSettings): "on" | "off" | "unknown" {
   const stale =
     typeof settings.stale_zone_configuration === "object" && settings.stale_zone_configuration !== null
       ? (settings.stale_zone_configuration as BotSettings)

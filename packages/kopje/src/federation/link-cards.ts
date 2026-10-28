@@ -90,7 +90,7 @@ import {
 // kind and reason, and the hostname only.
 
 export const CARD_ROUND_MS = 60_000;
-export const CARD_FINISH_MS = 10_000;
+const CARD_FINISH_MS = 10_000;
 export const CARD_FETCHES_MS = CARD_ROUND_MS - CARD_FINISH_MS;
 export const CARD_CONCURRENCY = 3;
 export const CARD_CHAINS = 2;

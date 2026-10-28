@@ -81,7 +81,7 @@ export const MAX_SPOILER_LENGTH = 10_000;
 // Replies stored before their parent that one arriving parent links (the rest stay unresolved, by uri).
 export const MAX_LINKED_REPLIES = 100;
 // An Update of an unknown status creates it only if the status is this recent (Mastodon's OBJECT_AGE_THRESHOLD).
-export const UPDATE_CREATES_WITHIN_MS = 24 * 60 * 60 * 1000;
+const UPDATE_CREATES_WITHIN_MS = 24 * 60 * 60 * 1000;
 
 export type StoreContext = {
   now: number;
@@ -122,7 +122,7 @@ function remoteTime(value: string | null, now: number): number {
 }
 
 // How far ahead of the clock a remote version may be (clock skew between servers).
-export const VERSION_SKEW_MS = 5 * 60 * 1000;
+const VERSION_SKEW_MS = 5 * 60 * 1000;
 
 // A remote version (updated, else published) as the remote wrote it, unclamped, so that versions compare by their own
 // order whenever they arrive. NaN if there is none; Infinity if it is more than VERSION_SKEW_MS ahead of the clock,
@@ -141,7 +141,7 @@ function versionOf(value: string | null, now: number): number {
 // never from a Create of a status already stored, so a replayed Create cannot bring an older policy back
 // (test/quote-authoring.test.ts concurrency table, row 2). Advisory (FEP-044f): it decides only whether a local user
 // may ask (R36); the quoted author's answer decides the quote.
-export function remoteQuotePolicy(db: Db, author: Author, policy: RemoteQuotePolicyInput | null | undefined): number {
+function remoteQuotePolicy(db: Db, author: Author, policy: RemoteQuotePolicyInput | null | undefined): number {
   if (policy === null || policy === undefined) {
     return 0;
   }

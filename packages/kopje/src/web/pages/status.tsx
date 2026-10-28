@@ -48,7 +48,7 @@ const STATUS_TABS: readonly { kind: StatusTabKind; count: CountKind }[] = [
 
 // The cursor-less path of a status's tab: the Replies tab is the status's own path, under its author's
 // stored username; the others are below it.
-export function statusTabPath(status: Status, kind: StatusTabKind): string {
+function statusTabPath(status: Status, kind: StatusTabKind): string {
   const base = `/@${status.account.username}/${status.id}`;
   return kind === "replies" ? base : `${base}/${kind}`;
 }

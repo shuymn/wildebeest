@@ -32,8 +32,8 @@ const REQUIRED = [
   "BACKUP_S3_SECRET_ACCESS_KEY",
 ] as const;
 
-export const DEFAULT_BACKUP_PREFIX = "kopje-backup/";
-export const DEFAULT_RETENTION = 7;
+const DEFAULT_BACKUP_PREFIX = "kopje-backup/";
+const DEFAULT_RETENTION = 7;
 const MAX_RETENTION = 366;
 // Path-style S3 bucket names (lowercase DNS-like names, as every S3-compatible service accepts).
 const BUCKET = /^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$/;
