@@ -133,10 +133,9 @@ export function availableLocalSql(l: string): string {
   return `${l}.suspended_at IS NULL`;
 }
 
-// The same rule for an account `a` with its local_accounts row `l` LEFT JOINed (NULL for a remote account), read
-// from the two rows without another lookup of the account (domain coverage seeks the blocks only): account
-// presentation (accounts.ts ACCOUNT_COLUMN_MAP) and the admin's list of accounts (admin-accounts.ts) read both rows
-// anyway.
+// The same rule for an account `a` with its local_accounts row `l` LEFT JOINed (NULL for a remote account), read from
+// the two rows without another lookup of the account (domain coverage seeks the blocks only): account presentation
+// (account-columns.ts ACCOUNT_COLUMN_MAP) and the admin's list of accounts (admin-accounts.ts) read both rows anyway.
 export function availableJoinedSql(a: string, l: string): string {
   return `(${availableLocalSql(l)} AND ${a}.deleted_at IS NULL AND NOT ${individuallySuspendedSql(a)}
 		AND NOT ${guardedSql(domainCoveredSql(a))})`;
@@ -1168,7 +1167,8 @@ export function scheduledOwnSql(ss: string, viewer: string): string {
 // R27 (PollPolicy#vote?): whether `voter` may vote in the poll of the status `s`: may see the status by itself (R3),
 // and blocks neither its author (an author who blocks the voter hides the status already) nor the author's domain, to
 // which a remote poll's vote would not be delivered (R23 leaves such an account out). Votes are their voters'
-// own: polls.ts alone reads poll_votes, and shows a poll's counts and a viewer's own votes, never who voted.
+// own: polls.ts alone reads poll_votes (status-rows.ts only counts a viewer's own, for R), and shows a poll's counts
+// and a viewer's own votes, never who voted.
 export function mayVoteSql(s: string, voter: string): string {
   return `(${viewableSql(s, voter)} AND NOT ${blockedSql(voter, `${s}.account_id`)})`;
 }
