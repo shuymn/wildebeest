@@ -83,8 +83,7 @@ describe("convert and verify-conversion", () => {
 
   it("makes the conversations of the direct statuses carried, as migration 0009 makes them", async () => {
     const exportPath = await exportOf({ level: 39, directMessages: true });
-    // The boosts, favourite and bookmark of the Note name it by the id it lost, so they are dropped.
-    const { ok, dumpPath } = await convert(exportPath, { acceptDeletions: true });
+    const { ok, dumpPath } = await convert(exportPath);
     expect(ok).toBe(true);
     const { ok: verified, report } = await verify(exportPath, dumpPath);
     expect(verified).toBe(true);
