@@ -1,11 +1,13 @@
 import { readFileSync } from 'node:fs'
+import { createServer } from 'node:http'
+import type { AddressInfo } from 'node:net'
 
 import { AxeBuilder } from '@axe-core/playwright'
 import { expect, type Locator, type Page, test } from '@playwright/test'
 
 import {
 	ASSET_HEADERS,
-	consentPageHeaders,
+	CONSENT_PAGE_HEADERS,
 	ASSET_TYPES,
 	EMBED_PAGE_HEADERS,
 	ERROR_PAGE_HEADERS,
@@ -47,7 +49,7 @@ const PAGE_HEADERS = {
 	private: PRIVATE_PAGE_HEADERS,
 	embed: EMBED_PAGE_HEADERS,
 	handoff: HANDOFF_PAGE_HEADERS,
-	consent: consentPageHeaders('https://client.example'),
+	consent: CONSENT_PAGE_HEADERS,
 	error: ERROR_PAGE_HEADERS,
 	unavailable: UNAVAILABLE_PAGE_HEADERS,
 }
@@ -2827,51 +2829,101 @@ for (const [decision, key] of [
 	})
 }
 
-// The decision's answer is a 302 to the app's redirect URI, and Chromium checks form-action on a form submission's
-// redirects too (WEB-2). Approving on the consent page follows the redirect to a web app's callback on its origin, and
-// to a native app's custom scheme, with no CSP violation (afterEach). The page is served with the headers the Worker
-// sends for that app's redirect URI (test/browser-headers.test.ts); the hop is seen through CDP, since Playwright
-// routes no request a redirect makes.
-for (const [app, target, location] of [
-	['a web app’s origin', 'https://client.example', 'https://client.example/callback?code=c&state=s'],
-	['a native app’s custom scheme', 'kopjeclient:', 'kopjeclient://callback?code=c&state=s'],
-] as const) {
-	test(`consent: approving follows the redirect to ${app}`, async ({ page }) => {
-		const fixture = pageNamed('consent')
-		await open(page, fixture, (p) =>
-			p.route(`${ORIGIN}/oauth/authorize`, (route) =>
-				route.request().method() === 'POST'
-					? route.fulfill({ status: 302, headers: { location } })
-					: route.fulfill({
-							status: fixture.status,
-							headers: { ...consentPageHeaders(target) },
-							body: readFileSync(new URL(`${fixture.name}.html`, PAGES_DIR)),
-						})
-			)
+// A server on a loopback port of its own, so an origin of its own: `answer` replies to each request, whose path it
+// records.
+async function loopback(answer: (path: string) => { status: number; headers: Record<string, string> }) {
+	const requests: string[] = []
+	const server = createServer((request, response) => {
+		const path = request.url ?? ''
+		requests.push(path)
+		const { status, headers } = answer(path)
+		response.writeHead(status, headers).end(status === 200 ? '<!doctype html><title>app</title>' : '')
+	})
+	await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
+	const { port } = server.address() as AddressInfo
+	return {
+		origin: `http://127.0.0.1:${port}`,
+		requests,
+		close: () => {
+			server.closeAllConnections()
+			return new Promise<void>((resolve) => server.close(() => resolve()))
+		},
+	}
+}
+
+// The decision's answer is a 302 to the app's redirect URI, whose server may redirect on, to another origin or to a
+// native app's scheme, and Chromium checks form-action on every hop of a form submission (WEB-2). The consent page is
+// opened with `headers`, and its decision answered with a 302 to an app on a loopback origin, which redirects to a
+// page on another loopback origin or to a custom scheme. The hops are the URLs each redirect led to, as CDP sees them
+// (Playwright routes no request a redirect makes).
+async function approveThroughApp(page: Page, headers: Readonly<Record<string, string>>, scheme: boolean) {
+	const final = await loopback(() => ({ status: 200, headers: { 'content-type': 'text/html' } }))
+	const next = scheme ? 'kopjeclient://callback?code=c' : `${final.origin}/done?code=c`
+	const app = await loopback(() => ({ status: 302, headers: { location: next } }))
+	const callback = `${app.origin}/cb?code=c&state=s`
+	const fixture = pageNamed('consent')
+	await open(page, fixture, (p) =>
+		p.route(`${ORIGIN}/oauth/authorize`, (route) =>
+			route.request().method() === 'POST'
+				? route.fulfill({ status: 302, headers: { location: callback } })
+				: route.fulfill({
+						status: fixture.status,
+						headers: { ...headers },
+						body: readFileSync(new URL(`${fixture.name}.html`, PAGES_DIR)),
+					})
 		)
-		// The URL each redirect led to, once its request has ended (in a network error: nothing serves it).
-		const followed: string[] = []
-		const redirected = new Map<string, string>()
-		const ended = ({ requestId }: { requestId: string }) => {
-			const url = redirected.get(requestId)
-			if (url !== undefined) {
-				followed.push(url)
-			}
+	)
+	const hops: string[] = []
+	const ended = new Set<string>()
+	const cdp = await page.context().newCDPSession(page)
+	cdp.on('Network.requestWillBeSent', (event) => {
+		if (event.redirectResponse !== undefined) {
+			hops.push(event.request.url)
 		}
-		const cdp = await page.context().newCDPSession(page)
-		cdp.on('Network.requestWillBeSent', (event) => {
-			if (event.redirectResponse !== undefined) {
-				redirected.set(event.requestId, event.request.url)
+	})
+	cdp.on('Network.loadingFailed', (event) => ended.add(event.requestId))
+	cdp.on('Network.loadingFinished', (event) => ended.add(event.requestId))
+	await cdp.send('Network.enable')
+	await page.locator('button[value="approve"]').click()
+	return { hops, ended, callback, next, app, final, close: () => Promise.all([app.close(), final.close()]) }
+}
+
+for (const scheme of [false, true]) {
+	const to = scheme ? 'a custom scheme' : 'another origin'
+	test(`consent: approving follows the app’s redirect on to ${to}`, async ({ page }) => {
+		const run = await approveThroughApp(page, CONSENT_PAGE_HEADERS, scheme)
+		try {
+			await expect.poll(() => run.hops).toEqual([run.callback, run.next])
+			expect(run.app.requests).toEqual(['/cb?code=c&state=s'])
+			if (scheme) {
+				// The scheme's launch ends the navigation, and the consent page stays.
+				await expect.poll(() => run.ended.size).toBeGreaterThan(0)
+			} else {
+				await expect(page).toHaveURL(run.next)
+				expect(run.final.requests).toContain('/done?code=c')
 			}
-		})
-		cdp.on('Network.loadingFailed', ended)
-		cdp.on('Network.loadingFinished', ended)
-		await cdp.send('Network.enable')
-		// A web app's callback replaces the page (with the network error); a custom scheme leaves it in place.
-		const left = target.endsWith(':') ? null : page.waitForEvent('framenavigated')
-		await page.locator('button[value="approve"]').click()
-		await expect.poll(() => followed).toEqual([location])
-		await left
-		await page.waitForLoadState()
+		} finally {
+			await run.close()
+		}
 	})
 }
+
+// The control: under the private pages' form-action 'self', the first hop is blocked, with the reported message.
+test('consent: under form-action self, the redirect to the app is blocked', async ({ page }) => {
+	const run = await approveThroughApp(page, PRIVATE_PAGE_HEADERS, false)
+	// The violation is this test's subject, not a failure.
+	cspOptOut.add(page)
+	try {
+		const violations = cspWatches.get(page)!
+		await expect
+			.poll(async () => (await violations()).map((line) => line.trim()))
+			.toEqual([
+				`form-action blocked ${ORIGIN}/oauth/authorize`,
+				`Sending form data to '${ORIGIN}/oauth/authorize' violates the following Content Security Policy directive: "form-action 'self'". The request has been blocked.`,
+			])
+		expect(run.hops).toEqual([])
+		expect(run.app.requests).toEqual([])
+	} finally {
+		await run.close()
+	}
+})

@@ -124,16 +124,13 @@ export const verifyApp: ApiHandler = async (c, deps) => {
 	return c.json(presentApplication(client, c.env) satisfies Application)
 }
 
-// The schemes no redirect URI may have: script URLs and local files. A browser follows no redirect to them either.
-export const REFUSED_REDIRECT_SCHEMES: readonly string[] = ['javascript:', 'data:', 'vbscript:', 'file:']
-
 // Absolute, no fragment (RFC 6749 §3.1.2), and not a script URL. Custom schemes of native apps are allowed.
 export function validRedirectUri(uri: string): boolean {
 	if (uri === OOB_REDIRECT_URI) {
 		return true
 	}
 	const url = uri.length > MAX_URI ? null : parseUrl(uri)
-	return url !== null && url.hash === '' && !REFUSED_REDIRECT_SCHEMES.includes(url.protocol)
+	return url !== null && url.hash === '' && !['javascript:', 'data:', 'vbscript:', 'file:'].includes(url.protocol)
 }
 
 function parseUrl(uri: string): URL | null {

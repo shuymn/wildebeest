@@ -1366,24 +1366,20 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
   and approval").
 - **WEB-2: Kopje's HTML pages cannot be framed, scripted or cached.** The consent and code pages and the messages of
   `/oauth/authorize` send the private pages' headers (`PRIVATE_HEADERS`, the web UI pages' policy below), and render
-  every value escaped. The consent page's `form-action` also names the one redirect URI the request verified, since
-  browsers check `form-action` on the redirect that answers a form submission and the decision's answer is a 302 to
-  it: the URI's origin for an http(s) URI (CSP matches no path after a redirect), its scheme for another scheme (a
-  native app's), and `'self'` alone for the out-of-band URI and for a scheme no browser follows a redirect to
-  (`javascript:`, `data:`, `vbscript:`, `file:`). The source is built from the parsed URI and must match CSP's
-  host-source (DNS labels, an optional port) or scheme-source grammar, so it cannot end or add a directive; a verified
-  URI no source can name (an IPv6 literal, a host with `_` or a trailing dot) gets no `form-action` on its consent page,
-  as Mastodon's authorization pages have none: the page runs no script and its one form posts to this origin. _Enforced
-  (main):_ `src/app/authorize.tsx`, `consentHeaders` in `src/app/web-headers.ts`, `src/web/pages/oauth.tsx`;
-  `test/oauth-pages.test.ts` (every header asserted; "allow the consent form the verified redirect URI only, by origin
-  or by scheme", "drop form-action for a verified redirect URI no CSP source can name, and keep it for one no browser
-  follows"), `browser/pages.spec.ts` ("consent: approving follows the redirect to …"), `test/oauth.test.ts` ("logs in
-  through Access and calls the API with the token", escaping).
+  every value escaped. The consent page alone has no `form-action` (`CONSENT_HEADERS`), as Mastodon's authorization
+  pages have none: browsers check `form-action` on every redirect of a form submission, and the decision's 302 to the
+  app's redirect URI may lead on to origins and schemes Kopje cannot know. A missing `form-action` cannot be used to
+  post elsewhere: the page holds only Kopje's own form, which posts to this origin, no script and no user HTML.
+  _Enforced (main):_ `src/app/authorize.tsx`, `src/app/web-headers.ts`, `src/web/pages/oauth.tsx`; `test/oauth-pages.test.ts`
+  (every header asserted; "send the consent page without form-action, its form carrying the verified redirect URI"),
+  `browser/pages.spec.ts` ("consent: approving follows the app's redirect on to …", and the control "consent: under
+  form-action self, the redirect to the app is blocked"), `test/oauth.test.ts` ("logs in through Access and calls the
+  API with the token", escaping).
   The error pages a browser's page request gets for 404, 500 and 503 (`src/app/error-pages.tsx`, chosen in
   `src/app/negotiation.ts`): the public pages' headers for 404, the private pages' with `Vary: Accept` for 500 and 503;
   only page routes and paths outside the document namespaces negotiate; `test/error-pages.test.ts`. Web UI pages:
   _Enforced (main):_ a CSP of `default-src 'none'` with only `style-src 'self'` (the stylesheet is a static asset),
-  `img-src 'self' https:`, `form-action 'self'` (the consent page's above), `base-uri 'none'` and
+  `img-src 'self' https:`, `form-action 'self'` (none on the consent page, above), `base-uri 'none'` and
   `frame-ancestors 'none'` (no script source at all), `X-Frame-Options: DENY`; pages of a signed-in user and the
   sign-in flow send `Cache-Control: no-store` and `Referrer-Policy: same-origin`; public pages may be kept 60 s and vary
   with `Accept`. Public pages, with the L1 bundle or without, and the embed add `media-src 'self' https:`, so a post's

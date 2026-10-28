@@ -1,6 +1,6 @@
 import { type Context, Hono } from 'hono'
 
-import { consentHeaders, PRIVATE_HEADERS } from './web-headers'
+import { CONSENT_HEADERS, PRIVATE_HEADERS } from './web-headers'
 import { type Client, type IssueCodeResult, type LoginAccount, OOB_REDIRECT_URI } from '../domain/oauth'
 import { type ApiDeps, storeCall } from '../mastodon/context'
 import { maintenanceError } from '../mastodon/errors'
@@ -21,8 +21,8 @@ import { STRINGS } from '../web/strings'
 // An identity without an account but with an invitation sees the consent page with the invited username, and its
 // approval makes the account (AUTH-9, domain/account-invitations.ts); the GET writes nothing (WEB-1).
 // `lang` (Mastodon's page locale) has no effect: the page is English only. The pages are the private pages' (WEB-2,
-// PRIVATE_HEADERS) without the site's chrome, which would add a Store read to the flow; the consent page's form-action
-// also allows the one redirect URI the request verified (consentHeaders).
+// PRIVATE_HEADERS) without the site's chrome, which would add a Store read to the flow; the consent page has no
+// form-action (CONSENT_HEADERS).
 
 export type AuthorizeDeps = ApiDeps & { fetch: typeof fetch; keygen: KeyGen }
 
@@ -295,7 +295,7 @@ export function authorizeRoutes(deps: AuthorizeDeps): Hono<AuthorizeEnv> {
 				fields={fields}
 				firstParty={firstParty}
 			/>,
-			consentHeaders(request.redirectUri)
+			CONSENT_HEADERS
 		)
 	})
 

@@ -5,8 +5,8 @@
 export const DOMAIN = 'kopje.test'
 export const ORIGIN = `https://${DOMAIN}`
 
-// 'l1': a public page that loads the L1 bundle; 'handoff': a handoff page; 'consent': a consent page, whose redirect
-// URI is https://client.example/callback; 'error' and 'unavailable': the 500 and 503 pages of app.ts.
+// 'l1': a public page that loads the L1 bundle; 'handoff': a handoff page; 'consent': a consent page (no
+// form-action); 'error' and 'unavailable': the 500 and 503 pages of app.ts.
 export type PageKind = 'public' | 'l1' | 'private' | 'embed' | 'handoff' | 'consent' | 'error' | 'unavailable'
 
 export type FixturePage = { name: string; path: string; status: 200 | 400 | 404 | 500 | 503; kind: PageKind }

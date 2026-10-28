@@ -40,14 +40,12 @@ export const PRIVATE_PAGE_HEADERS: Readonly<Record<string, string>> = {
 	link: PRELOAD,
 }
 
-// The consent page whose verified redirect URI is `target` (a CSP source; null when none can name it): a private
-// page's headers, its form-action also allowing that target, or none at all.
-export function consentPageHeaders(target: string | null): Readonly<Record<string, string>> {
-	const forms = target === null ? '' : `form-action 'self' ${target}; `
-	return {
-		...PRIVATE_PAGE_HEADERS,
-		'content-security-policy': `default-src 'none'; style-src 'self'; img-src 'self' https:; ${forms}base-uri 'none'; frame-ancestors 'none'`,
-	}
+// The consent page: a private page's headers with no form-action (WEB-2), so the decision's redirect may lead to any
+// origin or scheme.
+export const CONSENT_PAGE_HEADERS: Readonly<Record<string, string>> = {
+	...PRIVATE_PAGE_HEADERS,
+	'content-security-policy':
+		"default-src 'none'; style-src 'self'; img-src 'self' https:; base-uri 'none'; frame-ancestors 'none'",
 }
 
 // The 500 page of a browser's page request (app.ts): a private page's headers, varying with Accept as the JSON
