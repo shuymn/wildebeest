@@ -53,7 +53,7 @@ export function resolve(from: string, specifier: string): string {
 
 // A string or template literal: its text parts and interpolated expressions in order, its ancestors (nearest first),
 // and the name of the constant it initializes (`const NAME = '...'`, with or without `as const` or a type; never a
-// `let` or `var`, which may be reassigned). An expression's source is canonical(), so a guard keyed by it reads the same
+// `let` or `var`, which may be reassigned). An expression's source is its canonical() key, so a guard keyed by it reads the same
 // under any formatter style.
 export type Part = { text: string } | { expression: Node; source: string }
 export type Literal = { node: Node; parts: Part[]; parents: Node[]; constant: string | null }
@@ -97,7 +97,7 @@ export function parse(source: Source): Parsed {
 				parts.push({ text: quasi.value.cooked ?? quasi.value.raw })
 				const expression = node.expressions[i]
 				if (expression !== undefined) {
-					parts.push({ expression, source: canonical(source.text, expression) })
+					parts.push({ expression, source: canonical(expression) })
 				}
 			})
 			literals.push({ node, parts, parents, constant: constantOf(node, parents) })
@@ -108,33 +108,95 @@ export function parse(source: Source): Parsed {
 	return value
 }
 
-// The source of `node` in one style. Outside literals, each whitespace run is one space, none is kept inside `(` and
-// `[` or before `)` and `]`, and a trailing comma before `)` or `]` is dropped. A string literal is its value, quoted afresh: in single quotes unless it holds more single quotes
-// than double, with the quote, backslashes and every character but a plain space or a printable one escaped, so two
-// different values never read the same. A template's text is kept as written.
-function canonical(text: string, node: Node): string {
-	const kept: [start: number, end: number, text: string][] = []
-	walk(node, (n) => {
-		if (n.type === 'Literal' && typeof n.value === 'string') {
-			kept.push([n.start, n.end, quoted(n.value)])
-		} else if (n.type === 'TemplateElement') {
-			kept.push([n.start, n.end, text.slice(n.start, n.end)])
-		}
-	})
-	kept.sort((a, b) => a[0] - b[0])
-	const code = (from: number, to: number) =>
-		text
-			.slice(from, to)
-			.replace(/\s+/g, ' ')
-			.replace(/, ?([)\]])/g, '$1')
-			.replace(/([([]) | ([)\]])/g, '$1$2')
-	let out = ''
-	let from = node.start
-	for (const [start, end, literal] of kept) {
-		out += code(from, start) + literal
-		from = end
+// The key of an expression, printed from its syntax tree and never from its text, so formatting (quotes, whitespace,
+// line breaks, semicolons, trailing commas, redundant parentheses) cannot change it and two different trees never
+// share one. Identifiers, member access, calls, spreads, arrays (a hole printed as an empty slot), templates (their raw
+// text), string literals (their value, see quoted()), numbers (their value), regular expressions (pattern and flags),
+// unary, binary, logical and conditional expressions (a compound operand in parentheses) print as JavaScript that
+// parses back to the same tree. Any other node prints as its type and every property but its position, in key order,
+// inside `Type{…}`, which no printed JavaScript above produces outside a literal.
+function canonical(node: Node): string {
+	const n = node as Node & Record<string, unknown>
+	const sub = (child: unknown) => canonical(child as Node)
+	const operand = (child: unknown) => {
+		const type = (child as Node).type
+		return COMPOUND.has(type) ? `(${sub(child)})` : sub(child)
 	}
-	return (out + code(from, node.end)).trim()
+	switch (n.type) {
+		case 'Identifier':
+		case 'PrivateIdentifier':
+			return `${n.type === 'PrivateIdentifier' ? '#' : ''}${String(n.name)}`
+		case 'ThisExpression':
+			return 'this'
+		case 'Literal':
+			if (typeof n.value === 'string') {
+				return quoted(n.value)
+			}
+			if (typeof n.bigint === 'string') {
+				return `${n.bigint}n`
+			}
+			if (n.regex !== undefined && n.regex !== null) {
+				const { pattern, flags } = n.regex as { pattern: string; flags: string }
+				return `/${pattern}/${flags}`
+			}
+			return String(n.value)
+		case 'TemplateLiteral': {
+			const quasis = n.quasis as { value: { raw: string } }[]
+			const expressions = n.expressions as Node[]
+			return `\`${quasis.map((q, i) => q.value.raw + (i < expressions.length ? `\${${sub(expressions[i])}}` : '')).join('')}\``
+		}
+		case 'ChainExpression':
+			return sub(n.expression)
+		case 'MemberExpression': {
+			const object = operand(n.object)
+			const dot = n.optional === true ? '?.' : n.computed === true ? '' : '.'
+			return n.computed === true ? `${object}${dot}[${sub(n.property)}]` : `${object}${dot}${sub(n.property)}`
+		}
+		case 'CallExpression':
+			return `${operand(n.callee)}${n.optional === true ? '?.' : ''}(${(n.arguments as Node[]).map(sub).join(', ')})`
+		case 'SpreadElement':
+			return `...${operand(n.argument)}`
+		case 'ArrayExpression': {
+			const elements = n.elements as (Node | null)[]
+			const printed = elements.map((e) => (e === null ? '' : sub(e))).join(', ')
+			return `[${printed}${elements.at(-1) === null ? ',' : ''}]`
+		}
+		case 'UnaryExpression': {
+			const word = /^[a-z]/.test(String(n.operator)) ? ' ' : ''
+			const argument = n.argument as Node
+			return `${String(n.operator)}${word}${argument.type === 'UnaryExpression' ? `(${sub(argument)})` : operand(argument)}`
+		}
+		case 'BinaryExpression':
+		case 'LogicalExpression':
+			return `${operand(n.left)} ${String(n.operator)} ${operand(n.right)}`
+		case 'ConditionalExpression':
+			return `${operand(n.test)} ? ${operand(n.consequent)} : ${operand(n.alternate)}`
+		default:
+			return generic(n)
+	}
+}
+
+const COMPOUND = new Set(['UnaryExpression', 'BinaryExpression', 'LogicalExpression', 'ConditionalExpression'])
+const POSITION = new Set(['type', 'start', 'end', 'range', 'loc'])
+
+function generic(node: Record<string, unknown>): string {
+	const value = (v: unknown): string => {
+		if (v === null) {
+			return '<null>'
+		}
+		if (Array.isArray(v)) {
+			return `[${v.map(value).join(' ')}]`
+		}
+		if (typeof v === 'object' && typeof (v as Node).type === 'string') {
+			return canonical(v as Node)
+		}
+		return JSON.stringify(v) ?? '<undefined>'
+	}
+	const fields = Object.keys(node)
+		.filter((k) => !POSITION.has(k))
+		.sort()
+		.map((k) => `${k}=${value(node[k])}`)
+	return `${String(node.type)}{${fields.join(' ')}}`
 }
 
 function quoted(value: string): string {

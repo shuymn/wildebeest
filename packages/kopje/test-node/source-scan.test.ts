@@ -55,6 +55,39 @@ describe('the source scan', () => {
 		expect(key("projected.join(' ')")).not.toBe(key("projected.join('\\t')"))
 	})
 
+	it('keys a tree the same however it is laid out', () => {
+		const same: [string, string][] = [
+			['f([a,])', 'f([a])'],
+			['f((a))', 'f(a)'],
+			['f(\n\t(a - b) - c,\n)', 'f(a - b - c)'],
+			['() => {\n\ta;\n\tb;\n}', '() => { a\nb }'],
+			['(x) => x', 'x => x'],
+			['a?.b?.(c)', 'a ?. b ?. (c)'],
+		]
+		for (const [a, b] of same) {
+			expect(key(a), a).toBe(key(b))
+		}
+	})
+
+	it('keys two different trees differently', () => {
+		const different: [string, string][] = [
+			['f([])', 'f([,])'],
+			['f([a])', 'f([a,,])'],
+			['f(/[ ]/)', 'f(/[]/)'],
+			['f(/a/g)', 'f(/a/)'],
+			['() => {\n\treturn\n\t1\n}', '() => {\n\treturn 1\n}'],
+			['a - (b - c)', 'a - b - c'],
+			['f(null)', 'f(Null)'],
+			['a.b', "a['b']"],
+			['`a ${b}`', '`a  ${b}`'],
+			['x as A', 'x as B'],
+			['- -a', '--a'],
+		]
+		for (const [a, b] of different) {
+			expect(key(a), `${a} | ${b}`).not.toBe(key(b))
+		}
+	})
+
 	it('throws on a parse error rather than skip the file', () => {
 		expect(() => parse({ path: 'src/probe.ts', text: 'a\nconst = 1' })).toThrow('src/probe.ts:2:')
 	})
