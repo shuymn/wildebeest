@@ -35,7 +35,7 @@ catalog:
   "@jsquash/webp": 1.5.0
   "@playwright/test": 1.64.0
   fast-check: 4.10.2
-  oxc-parser: 0.154.0
+  oxc-parser: 0.155.0
   parse5: 8.0.1
   vite: 6.4.4
   vitest: 5.0.5
