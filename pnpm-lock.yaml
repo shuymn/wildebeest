@@ -2584,7 +2584,7 @@ snapshots:
       es-toolkit: 1.46.1
       jsonld: 9.0.0
       pkijs: 3.4.1
-      temporal-polyfill: 1.0.5
+      temporal-polyfill: 1.0.6
 
   '@fedify/webfinger@2.4.4':
     dependencies:
