@@ -101,7 +101,7 @@
     "sanitize-html": "2.18.1",
     "temporal-polyfill": "1.0.5",
     "typescript": "7.0.2",
-    "vite": "6.4.4",
+    "vite": "7.3.7",
     "vitest": "5.0.5",
     "wrangler": "4.149.0",
     "zod": "4.6.7"
