@@ -213,7 +213,9 @@ function captureProblems(files: readonly Source[]): string[] {
   if (!created.test(body(files, "src/domain/inbox.ts", "deleteObject") ?? "")) {
     found.push("deleteObject captures other than when its job is created");
   }
-  const calls = files.flatMap((source) => [...parse(source).code.matchAll(/\bstreamDelete\(/g)].map(() => source.path));
+  const calls = files
+    .flatMap((source) => [...parse(source).code.matchAll(/\bstreamDelete\(/g)].map(() => source.path))
+    .toSorted();
   const expected = [
     "src/domain/inbox.ts",
     "src/domain/inbox.ts",
@@ -222,7 +224,7 @@ function captureProblems(files: readonly Source[]): string[] {
     // Its declaration.
     "src/domain/streaming.ts",
   ];
-  if (calls.toSorted().join() !== expected.join()) {
+  if (calls.join() !== expected.join()) {
     found.push(`streamDelete is named at ${calls.join(", ")}`);
   }
   return found;
