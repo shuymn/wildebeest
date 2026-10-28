@@ -1,13 +1,8 @@
 import { describe, expect, it } from "vitest";
 
 import { selectSql } from "../src/db/columns";
-import {
-  ACCOUNT_COLUMN_MAP,
-  ACCOUNT_FROM,
-  type Field,
-  MAX_REMOTE_FIELDS,
-  REMOTE_FIELDS_BYTES,
-} from "../src/domain/accounts";
+import { ACCOUNT_COLUMN_MAP, MAX_REMOTE_FIELDS, REMOTE_FIELDS_BYTES } from "../src/domain/account-columns";
+import { ACCOUNT_FROM, type Field } from "../src/domain/accounts";
 import { ANSWER_BYTES } from "../src/domain/answer-budget";
 import { MAX_LIST_MEMBERS_ANSWERED } from "../src/domain/lists";
 import { utf8Length } from "../src/platform/dump-format";

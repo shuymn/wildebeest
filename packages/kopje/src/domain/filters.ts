@@ -1,9 +1,10 @@
-import { fixedColumns, selectSql } from "../db/columns";
+import { selectSql } from "../db/columns";
 import type { Db } from "../db/sql";
 import { resolveApiId } from "./accounts";
 import { canView, type ViewerContext } from "./audience";
 import { userReadOperation, userWriteOperation } from "./auth";
 import { allocateLocalId } from "./ids";
+import { FILTER_MATCH_COLUMNS } from "./status-rows";
 
 // Filters (Mastodon 4.5's CustomFilter, CustomFilterKeyword and CustomFilterStatus, Api::V2::FiltersController and
 // its keywords and statuses controllers, and the v1 layer Api::V1::FiltersController over them). A filter belongs to
@@ -806,11 +807,6 @@ export function activeFilters(db: Db, viewer: ViewerContext): ActiveFilters | nu
     })),
   };
 }
-
-export const FILTER_MATCH_COLUMNS = fixedColumns(
-  { filter_id: "fs.filter_id", status_id: "fs.status_id" },
-  { filter_id: 18, status_id: 18 },
-);
 
 // The filters among `active` that name each of `statusIds` (CustomFilterStatus), by status id: one seek per filter
 // and status through filter_statuses_pair, so the rows read follow the page, not what other filters name.

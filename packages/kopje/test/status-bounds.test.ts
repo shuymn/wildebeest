@@ -5,11 +5,7 @@ import { describe, expect, it } from "vitest";
 import { selectSql } from "../src/db/columns";
 import { Db, VALUE_BYTES } from "../src/db/sql";
 import {
-  fieldSources,
-  getAccount,
-  MAX_FIELD_NAME,
-  MAX_FIELD_VALUE,
-  MAX_FIELDS,
+  MAX_REMOTE_FIELDS,
   MOVED_ACCOUNT_COLUMNS,
   MOVED_CREATED_AT_LIMIT,
   MOVED_DISPLAY_NAME_LIMIT,
@@ -17,8 +13,14 @@ import {
   MOVED_LAST_STATUS_AT_LIMIT,
   MOVED_URL_LIMIT,
   REMOTE_FIELDS_BYTES,
-  MAX_REMOTE_FIELDS,
   REMOTE_VERIFIED_JSON_BYTES,
+} from "../src/domain/account-columns";
+import {
+  fieldSources,
+  getAccount,
+  MAX_FIELD_NAME,
+  MAX_FIELD_VALUE,
+  MAX_FIELDS,
   VERIFIED_AT_JSON_BYTES,
 } from "../src/domain/accounts";
 import { createActivity, getFeatured, noteOf, OUTBOX_BYTES, PIN_LIMIT, statusFacts } from "../src/domain/activities";
@@ -1864,13 +1866,13 @@ async function measureShapes(fill: Fill): Promise<FillMeasure> {
 const STATIC_COLUMNS = new Set(["avatar_static_url", "header_static_url"]);
 const STATIC_COLUMN_HEAP = VALUE_BYTES + 2 * STATIC_URL_LIMIT;
 
-// A remote account's verification times (migration 0068_remote_field_verification, accounts.ts REMOTE_VERIFIED_SQL):
-// the writer's maximum of remote_field_links.links (REMOTE_VERIFIED_SHOWN entries [index, href, time, checked] at the
-// largest index, an href of REMOTE_FIELD_LINK_BYTES no character of which JSON escapes, and a time), the projection's
-// maximum ([index, time] of each), and the column's heap on every account row whatever the fills hold (theirs hold no
-// row); and the most JSON a remote account's fields present: REMOTE_FIELDS_BYTES of names and values (counted as
-// presented, a verified value's link included), each of MAX_REMOTE_FIELDS fields' keys, REMOTE_VERIFIED_SHOWN of them
-// with a time and the rest null, and the array's separators.
+// A remote account's verification times (migration 0068_remote_field_verification, account-columns.ts
+// REMOTE_VERIFIED_SQL): the writer's maximum of remote_field_links.links (REMOTE_VERIFIED_SHOWN entries [index, href,
+// time, checked] at the largest index, an href of REMOTE_FIELD_LINK_BYTES no character of which JSON escapes, and a
+// time), the projection's maximum ([index, time] of each), and the column's heap on every account row whatever the
+// fills hold (theirs hold no row); and the most JSON a remote account's fields present: REMOTE_FIELDS_BYTES of names
+// and values (counted as presented, a verified value's link included), each of MAX_REMOTE_FIELDS fields' keys,
+// REMOTE_VERIFIED_SHOWN of them with a time and the rest null, and the array's separators.
 const ISO_TIME = new Date(NOW).toISOString();
 const REMOTE_LINKS_WRITER_MAX = jsonBytes(
   Array.from({ length: REMOTE_VERIFIED_SHOWN }, () => [

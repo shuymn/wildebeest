@@ -5,13 +5,12 @@ import { describe, expect, it } from "vitest";
 
 import { selectSql } from "../src/db/columns";
 import { Db } from "../src/db/sql";
+import { MAX_REMOTE_FIELDS, MOVED_ACCOUNT_COLUMNS } from "../src/domain/account-columns";
 import {
   DISPLAY_NAME_LIMIT,
   familiarFollowers,
   listFollows,
   MAX_FAMILIAR_FOLLOWERS,
-  MAX_REMOTE_FIELDS,
-  MOVED_ACCOUNT_COLUMNS,
   presentAccountsWithin,
   PROFILE_URL_LIMIT,
   USERNAME_LIMIT,
