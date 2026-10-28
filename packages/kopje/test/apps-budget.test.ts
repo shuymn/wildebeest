@@ -16,13 +16,22 @@ import {
 	sql,
 } from './api-helpers'
 import { NOW } from './app-helpers'
-import { signIn } from './web-helpers'
-import { EVICTION_GRACE_MS, MAX_PENDING_APPS, sweepOAuth, UNUSED_APP_TTL_MS } from '../src/domain/oauth'
+import { plannedRun, scansOf, staleStatistics } from './read-helpers'
+import { csrfOf, postForm, signIn } from './web-helpers'
+import {
+	EVICTION_GRACE_MS,
+	issueCode,
+	MAX_PENDING_APPS,
+	OAUTH_SWEEP_BATCH,
+	registerApp as registerAppOperation,
+	sweepOAuth,
+	UNUSED_APP_TTL_MS,
+} from '../src/domain/oauth'
 import { handleScheduled } from '../src/jobs/scheduled'
 import type { StoreStub } from '../src/platform/store-client'
 
 // RES-6 for POST /api/v1/apps: a per-IP rate limit (the Rate Limiting binding) and a storage budget of
-// never-authorized apps, with expiry of unused ones (Mastodon's ApplicationsVacuum) and a visible refusal.
+// never-authorized apps, with expiry of unused ones (Kopje's own) and a visible refusal; an authorized app is kept.
 
 const APP = { client_name: 'Flood', redirect_uris: 'https://flood.example/cb', scopes: 'read' }
 
@@ -179,39 +188,195 @@ describe('app registration budget (RES-6)', () => {
 		expect(await sql(h.store, "SELECT token_hash FROM oauth_tokens WHERE token_hash = 'expired'")).toEqual([])
 	})
 
-	// RES-6: statuses.application_id has no foreign key (migration 0064_status_applications), so removing an app writes
-	// no status row however many it posted; its statuses then present `application: null`.
-	it('removes an app whose token was revoked without writing its statuses, which then show no app', async () => {
+	// RES-6: an app a user authorized stays registered after every token is gone, as Mastodon never removes one; a
+	// client that kept its client_id signs in with it again, and its statuses keep showing it.
+	it('keeps an app whose authorization was revoked past the sweep, and authorizes it again by the same client_id', async () => {
 		const h = await apiHarness()
 		await seedAccount(h.store, { username: 'alice', email: 'alice@example.com' })
 		const app = await registerApp(h)
 		const { token } = await login(h, { app, scope: 'read write' })
 		const posted = await h.request('/api/v1/statuses', bearer(token, json({ status: 'hello' })))
 		const { id } = await posted.json<{ id: string }>()
-		const shown = async () =>
-			(await (await h.request(`/api/v1/statuses/${id}`)).json<{ application: unknown }>()).application
-		expect(await shown()).toEqual({ name: 'Test Client', website: 'https://client.test' })
+		const browser = await signIn(h)
+		const revoked = await postForm(h, browser, '/settings/authorizations/revoke', {
+			client_id: app.client_id,
+			csrf: await csrfOf(h, browser),
+		})
+		expect(revoked.status).toBe(303)
+		expect(await count(h.store, `id = '${app.client_id}'`)).toBe(1)
+		expect(await sql(h.store, 'SELECT token_hash FROM oauth_tokens WHERE client_id = ?', app.client_id)).toEqual([])
+		await sql(h.store, 'UPDATE oauth_clients SET created_at = ?', new Date(NOW - 2 * UNUSED_APP_TTL_MS).toISOString())
+		// A never-authorized app of the same age, which the sweep removes: the sweep ran over both.
+		await fill(h.store, 1, NOW - 2 * UNUSED_APP_TTL_MS, 'old')
+		const swept = await runInDurableObject(h.store, (_instance, state) =>
+			sweepOAuth.run(state.storage.sql, { now: NOW })
+		)
+		expect(swept).toEqual({ apps: 1, tokens: 0, webState: 0 })
+		expect(await count(h.store, "id LIKE 'old-%'")).toBe(0)
+		expect(await count(h.store, `id = '${app.client_id}'`)).toBe(1)
+		const again = await login(h, { app })
+		expect((await h.request('/api/v1/accounts/verify_credentials', bearer(again.token))).status).toBe(200)
+		const shown = await (await h.request(`/api/v1/statuses/${id}`)).json<{ application: unknown }>()
+		expect(shown.application).toEqual({ name: 'Test Client', website: 'https://client.test' })
+	})
+
+	it('never evicts an app authorized and then revoked, and still evicts a never-authorized one', async () => {
+		const h = await apiHarness()
+		await seedAccount(h.store, { username: 'alice', email: 'alice@example.com' })
+		const app = await registerApp(h)
+		const { token } = await login(h, { app })
 		const revoked = await h.request(
 			'/oauth/revoke',
 			form({ token, client_id: app.client_id, client_secret: app.client_secret })
 		)
 		expect(revoked.status).toBe(200)
+		expect(await sql(h.store, 'SELECT token_hash FROM oauth_tokens WHERE client_id = ?', app.client_id)).toEqual([])
+		// The revoked app is the oldest of all, past the day and the grace, and every pending slot is taken.
 		await sql(h.store, 'UPDATE oauth_clients SET created_at = ?', new Date(NOW - 2 * UNUSED_APP_TTL_MS).toISOString())
-		// The rows the production sweep changes, counted by SQLite around it: the app alone (its token went with the
-		// revocation), no status row and nothing else.
-		const { swept, changes } = await runInDurableObject(h.store, (_instance, state) => {
-			const total = () => state.storage.sql.exec<{ n: number }>('SELECT total_changes() AS n').one().n
-			const start = total()
-			const result = sweepOAuth.run(state.storage.sql, { now: NOW })
-			return { swept: result, changes: total() - start }
+		await fill(h.store, MAX_PENDING_APPS, NOW - EVICTION_GRACE_MS - 1000)
+		expect((await h.request('/api/v1/apps', json(APP))).status).toBe(200)
+		expect(await count(h.store, `id = '${app.client_id}'`)).toBe(1)
+		// The oldest never-authorized app went in its place.
+		expect(await count(h.store, "id = 'filler-0'")).toBe(0)
+		expect(await count(h.store, "id LIKE 'filler-%'")).toBe(MAX_PENDING_APPS - 1)
+	})
+})
+
+// RES-7 for the budget's statements: authorized apps, each with a user's token, grown after ANALYZE, are never read.
+// Every input at its worst: MAX_PENDING_APPS pending apps (the budget full), each older than the day and holding an app
+// token, so the expiry pass reads every one and removes none and eviction runs; the web client not yet authorized, so
+// it is a pending candidate too.
+describe('app budget reads with stale statistics (RES-6, RES-7)', () => {
+	const AUTHORIZED = 3 * MAX_PENDING_APPS
+
+	it('walks the pending apps by their partial index and marks an app by its key', { timeout: 60_000 }, async () => {
+		const h = await apiHarness()
+		const alice = await seedAccount(h.store, { username: 'alice', email: 'alice@example.com' })
+		await fill(h.store, 2, NOW - 2 * UNUSED_APP_TTL_MS, 'small')
+		await sql(h.store, "INSERT INTO instance_settings (name, value) VALUES ('web_client_id', 'small-0')")
+		const pattern = /oauth_clients/
+		const { after } = await staleStatistics(h, {
+			capture: async (phase) => ({
+				registered: await plannedRun(
+					h,
+					pattern,
+					registerAppOperation,
+					{
+						clientId: `new-${phase}`,
+						secret: 's',
+						name: 'n',
+						redirectUris: ['https://n.example/cb'],
+						website: null,
+						scopes: ['read'],
+						now: NOW,
+					},
+					true
+				),
+				swept: await plannedRun(h, pattern, sweepOAuth, { now: NOW }, true),
+				marked: await plannedRun(
+					h,
+					pattern,
+					issueCode,
+					{
+						clientId: `new-${phase}`,
+						redirectUri: 'https://n.example/cb',
+						scopes: ['read'],
+						codeChallenge: null,
+						email: 'alice@example.com',
+						codeHash: `code-${phase}`,
+						now: NOW,
+					},
+					true
+				),
+			}),
+			grow: async () => {
+				await sql(h.store, "DELETE FROM oauth_clients WHERE id LIKE 'new-%' OR id = 'small-1'")
+				await sql(
+					h.store,
+					`WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < ?1)
+					INSERT INTO oauth_clients (id, secret, name, redirect_uris, scopes, created_at, authorized)
+					SELECT 'authorized-' || i, 's', 'a', 'https://a.example/cb', 'read', ?2, 1 FROM n`,
+					AUTHORIZED,
+					new Date(NOW - 3 * UNUSED_APP_TTL_MS).toISOString()
+				)
+				await sql(
+					h.store,
+					`INSERT INTO oauth_tokens (token_hash, kind, client_id, account_id, scopes)
+					SELECT 'u-' || id, 'access', id, ?, 'read' FROM oauth_clients WHERE authorized = 1`,
+					alice
+				)
+				// MAX_PENDING_APPS beside the web client (small-0), which the budget does not count: it is full.
+				await fill(h.store, MAX_PENDING_APPS, NOW - 2 * UNUSED_APP_TTL_MS, 'pending')
+				await sql(
+					h.store,
+					`INSERT INTO oauth_tokens (token_hash, kind, client_id, scopes)
+					SELECT 'a-' || id, 'access', id, 'read' FROM oauth_clients WHERE authorized = 0`
+				)
+			},
 		})
-		expect(swept).toEqual({ apps: 1, tokens: 0, webState: 0 })
-		expect(changes).toBe(1)
-		expect(await count(h.store, `id = '${app.client_id}'`)).toBe(0)
-		// The status keeps the dangling id.
-		expect(await sql(h.store, 'SELECT id, application_id FROM statuses')).toEqual([
-			{ id, application_id: app.client_id },
+		expect(after.registered.result).toMatchObject({ status: 'ok' })
+		// The budget was full: the expiry pass removed none (each holds an app token), and eviction took the oldest.
+		expect(await count(h.store, "id = 'pending-0'")).toBe(0)
+		expect(await count(h.store, "id LIKE 'authorized-%'")).toBe(AUTHORIZED)
+		expect(after.swept.result).toEqual({ apps: 0, tokens: 0, webState: 0 })
+		expect(after.marked.result).toEqual({ status: 'ok' })
+		expect(await count(h.store, "id = 'new-after' AND authorized = 1")).toBe(1)
+
+		const kind = (query: string) =>
+			query.startsWith('SELECT COUNT')
+				? 'count'
+				: query.startsWith('INSERT')
+					? 'insert'
+					: query.startsWith('UPDATE')
+						? 'mark'
+						: !query.startsWith('DELETE')
+							? 'read'
+							: query.includes('ORDER BY')
+								? 'evict'
+								: query.includes('LIMIT')
+									? 'sweep'
+									: 'expire'
+		const statements = [...after.registered.plans, ...after.swept.plans, ...after.marked.plans]
+		// Three counts (before the expiry pass, before eviction, after it), the expiry pass, eviction, the insert and
+		// its read; the sweep; issueCode's client read and its mark.
+		expect(statements.map((p) => kind(p.query))).toEqual([
+			'count',
+			'expire',
+			'count',
+			'evict',
+			'count',
+			'insert',
+			'read',
+			'sweep',
+			'read',
+			'mark',
 		])
-		expect(await shown()).toBeNull()
+		// Then the sweep's other worst: its batch filled with unused apps (their app tokens gone, one more aged app), each
+		// removed by its key.
+		await sql(h.store, "DELETE FROM oauth_tokens WHERE token_hash LIKE 'a-%'")
+		await fill(h.store, 1, NOW - 2 * UNUSED_APP_TTL_MS, 'extra')
+		const drained = await plannedRun(h, pattern, sweepOAuth, { now: NOW }, true)
+		expect(drained.result).toEqual({ apps: OAUTH_SWEEP_BATCH, tokens: 0, webState: 0 })
+		expect(await count(h.store, "id LIKE 'authorized-%'")).toBe(AUTHORIZED)
+		statements.push(...drained.plans)
+		for (const statement of statements) {
+			const k = kind(statement.query)
+			if (k === 'count' || k === 'expire' || k === 'evict' || k === 'sweep') {
+				expect(statement.plan.join(' | '), statement.query).toMatch(/USING (?:COVERING )?INDEX oauth_clients_pending/)
+				expect(scansOf(statement.plan, ['oauth_clients', 'oauth_tokens', 'u']), statement.query).toEqual([])
+				// Per pending candidate (MAX_PENDING_APPS and the web client): its index entry and, in the expiry pass and
+				// the sweep, one seek of its tokens (the first hit ends it); a removed one at most four more (its row by key,
+				// its index entries and the foreign-key check of its tokens); the web client's setting is one seek. Measured
+				// 502, 1,004 and 3,002 (the drained sweep), the same with ten times as many authorized apps: none is read.
+				expect(statement.rows, statement.query).toBeLessThanOrEqual(6 * (MAX_PENDING_APPS + 1) + 2)
+			} else {
+				expect(statement.plan, statement.query).toEqual(
+					statement.query.startsWith('INSERT')
+						? []
+						: ['SEARCH oauth_clients USING INDEX sqlite_autoindex_oauth_clients_1 (id=?)']
+				)
+				expect(statement.rows, statement.query).toBeLessThanOrEqual(1)
+			}
+		}
 	})
 })

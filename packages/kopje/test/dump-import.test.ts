@@ -601,6 +601,34 @@ describe('dump', () => {
 		)
 	}, 120_000)
 
+	it('round-trips authorized apps (0086) without their tokens, and refuses a mark past its bound on import', async () => {
+		const source = await seeded(0)
+		await runInDurableObject(source, (_instance, state) => {
+			state.storage.sql.exec(
+				`INSERT INTO oauth_clients (id, secret, name, redirect_uris, authorized)
+				VALUES ('revoked-app', 's', 'r', 'urn:x', 1), ('pending-app', 's', 'p', 'urn:x', 0)`
+			)
+		})
+		const { text } = await dumpViaRpc(source)
+		const restored = await migratedStore()
+		await copyConfig(source, restored)
+		await importViaRpc(restored, text)
+		await runInDurableObject(restored, (_instance, state) => {
+			expect(
+				state.storage.sql.exec("SELECT id, authorized FROM oauth_clients WHERE id LIKE '%-app' ORDER BY id").toArray()
+			).toEqual([
+				{ id: 'pending-app', authorized: 0 },
+				{ id: 'revoked-app', authorized: 1 },
+			])
+		})
+		const line = text.split('\n').find((row) => row.includes("'revoked-app'"))!
+		expect(line).toMatch(/,1\);$/)
+		const dump = text.replace(line, line.replace(/,1\);$/, ',2);'))
+		const target = await migratedStore()
+		await copyConfig(source, target)
+		expect(String(await rejectionOf(importViaRpc(target, dump)))).toMatch(/oauth_client_authorized/)
+	}, 120_000)
+
 	it('restores followed and featured hashtags past the list bound as they are, which the lists leave out', async () => {
 		const source = await seeded(0)
 		const long = 'a'.repeat(300)

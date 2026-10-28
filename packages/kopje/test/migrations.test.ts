@@ -10506,3 +10506,76 @@ describe('0085_retraction_staging', () => {
 		})
 	})
 })
+
+describe('0086_authorized_apps', () => {
+	const NAME = '0086_authorized_apps'
+	const at = NAMES.indexOf(NAME)
+	const CLIENT = (id: string) =>
+		`INSERT INTO oauth_clients (id, secret, name, redirect_uris) VALUES ('${id}', 's', 'n', 'https://n.example/cb')`
+
+	it("marks the apps that hold a user's code or token, and no other, declared foreignKeys: 'unchanged'", async () => {
+		expect(NAMES[at - 1]).toBe('0085_retraction_staging')
+		expect(MIGRATIONS[at]?.foreignKeys).toBe('unchanged')
+		const store = freshStore()
+		await runInDurableObject(store, async (_instance, state) => {
+			const sql = state.storage.sql
+			await kernel(state, MIGRATIONS.slice(0, at)).upgrade()
+			const alice = '100000000000000001'
+			sql.exec(
+				"INSERT INTO accounts (id, uri, username, domain) VALUES (?, 'https://kopje.test/ap/users/alice', 'alice', NULL)",
+				alice
+			)
+			sql.exec(
+				"INSERT INTO local_accounts (account_id, email, privkey, privkey_salt, pubkey) VALUES (?, 'a@example.com', X'00', X'00', 'k')",
+				alice
+			)
+			for (const id of ['token', 'code', 'both', 'app-token', 'none']) {
+				sql.exec(CLIENT(id))
+			}
+			sql.exec(
+				`INSERT INTO oauth_tokens (token_hash, kind, client_id, account_id, scopes, redirect_uri, expires_at) VALUES
+					('t', 'access', 'token', ?1, 'read', NULL, NULL),
+					('c', 'code', 'code', ?1, 'read', 'https://n.example/cb', '2026-01-01T00:00:00.000Z'),
+					('b1', 'access', 'both', NULL, 'read', NULL, NULL), ('b2', 'access', 'both', ?1, 'read', NULL, NULL),
+					('a', 'access', 'app-token', NULL, 'read', NULL, NULL)`,
+				alice
+			)
+			expect(await kernel(state, MIGRATIONS.slice(0, at + 1)).upgrade()).toMatchObject({ ok: true, applied: [NAME] })
+			expect(sql.exec('SELECT id, authorized FROM oauth_clients ORDER BY id').toArray()).toEqual([
+				{ id: 'app-token', authorized: 0 },
+				{ id: 'both', authorized: 1 },
+				{ id: 'code', authorized: 1 },
+				{ id: 'none', authorized: 0 },
+				{ id: 'token', authorized: 1 },
+			])
+			expect(
+				sql.exec<{ sql: string }>("SELECT sql FROM sqlite_master WHERE name = 'oauth_clients_pending'").one().sql
+			).toMatch(/\(created_at, id\) WHERE authorized = 0$/)
+		})
+	})
+
+	it.each([
+		['2', 'UPDATE oauth_clients SET authorized = 2'],
+		['-1', 'UPDATE oauth_clients SET authorized = -1'],
+		['NULL', 'UPDATE oauth_clients SET authorized = NULL'],
+		['a real', 'UPDATE oauth_clients SET authorized = 0.5'],
+		['text', "UPDATE oauth_clients SET authorized = 'yes'"],
+		['a blob', "UPDATE oauth_clients SET authorized = X'01'"],
+	])('refuses %s, after admitting 0 and 1', async (_name, statement) => {
+		const store = freshStore()
+		await runInDurableObject(store, async (_instance, state) => {
+			expect(await kernel(state, MIGRATIONS.slice(0, at + 1)).upgrade()).toMatchObject({ ok: true })
+			const sql = state.storage.sql
+			sql.exec(CLIENT('x'))
+			sql.exec('UPDATE oauth_clients SET authorized = 1')
+			// Text and a real that read as an integer are stored as it, by the column's affinity.
+			sql.exec("UPDATE oauth_clients SET authorized = '1'")
+			sql.exec('UPDATE oauth_clients SET authorized = 0.0')
+			expect(sql.exec('SELECT authorized, typeof(authorized) AS t FROM oauth_clients').one()).toEqual({
+				authorized: 0,
+				t: 'integer',
+			})
+			expect(() => sql.exec(statement)).toThrow(/constraint failed/)
+		})
+	})
+})

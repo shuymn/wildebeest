@@ -1,7 +1,7 @@
 import { type Authorized, authorize, type Credential, CREDENTIAL_EPOCH_SQL } from './auth'
 import { readOperation, sessionOperation, writeOperation } from './operation'
 import { sweepWebState } from './web-session'
-import { ACCOUNTS_ID_INDEX } from '../db/indexes'
+import { ACCOUNTS_ID_INDEX, OAUTH_CLIENTS_ID_INDEX } from '../db/indexes'
 import type { Db } from '../db/sql'
 import { loginEmailMatchSql } from '../platform/login-email'
 import { withinScopes } from '../security/scopes'
@@ -59,14 +59,16 @@ export type RegisterAppInput = {
 	now: number
 }
 
-// RES-6, the storage budget of anonymous app registration. A never-authorized app is one no user has a token or a code
-// for (app tokens from client_credentials do not count). At most MAX_PENDING_APPS are kept: when the budget is full,
-// unused apps (no token of any kind) older than UNUSED_APP_TTL_MS go first, as Mastodon's ApplicationsVacuum removes
-// them, then the oldest never-authorized apps older than EVICTION_GRACE_MS (so a client in the middle of its first
-// login keeps its registration), app tokens and all: anyone can get an app token without a user, so app tokens cannot
-// protect an app, or the budget could be filled for good. An app a user authorized (a user token or code) is never
-// counted or removed. If nothing can go, the registration is refused (429). The cron removes unused apps after
-// UNUSED_APP_TTL_MS as well (sweepOAuth). The web UI's own client is never counted or removed.
+// RES-6, the storage budget of anonymous app registration. A pending app is one no user has authorized:
+// oauth_clients.authorized (migration 0086_authorized_apps) is set by markAuthorized when a user's first code is issued
+// for it, and stays set when its codes and tokens go, as Mastodon 4.5.11 never removes an application (revocation and
+// Vacuum::AccessTokensVacuum remove tokens only). At most MAX_PENDING_APPS pending apps are kept: when the budget is
+// full, unused ones (no token of any kind) older than UNUSED_APP_TTL_MS go first, then the oldest pending ones older
+// than EVICTION_GRACE_MS (so a client in the middle of its first login keeps its registration), app tokens and all:
+// anyone can get an app token without a user, so app tokens cannot protect an app, or the budget could be filled for
+// good. An authorized app is never counted or removed. If nothing can go, the registration is refused (429). The cron
+// removes unused pending apps after UNUSED_APP_TTL_MS as well (sweepOAuth). The web UI's own client is never counted or
+// removed.
 export const MAX_PENDING_APPS = 500
 export const UNUSED_APP_TTL_MS = 24 * 60 * 60 * 1000
 export const EVICTION_GRACE_MS = 60 * 60 * 1000
@@ -80,18 +82,33 @@ export function webClientId(db: Db): string | null {
 	)
 }
 
-// Clients no user has authorized, oldest first; `extra` narrows them further.
+// Clients no user has authorized, by the partial index in (created_at, id) order; `extra` narrows them further.
 function pendingAppsSql(extra = ''): string {
-	return `FROM oauth_clients c
-		WHERE c.id IS NOT (SELECT value FROM instance_settings WHERE name = '${WEB_CLIENT_SETTING}')
-			AND NOT EXISTS (SELECT 1 FROM oauth_tokens t WHERE t.client_id = c.id AND t.account_id IS NOT NULL)
+	return `FROM oauth_clients c INDEXED BY oauth_clients_pending
+		WHERE c.authorized = 0
+			AND c.id IS NOT (SELECT value FROM instance_settings WHERE name = '${WEB_CLIENT_SETTING}')
 			${extra}`
 }
 
-const UNUSED = 'AND NOT EXISTS (SELECT 1 FROM oauth_tokens u WHERE u.client_id = c.id)'
+const UNUSED = 'AND NOT EXISTS (SELECT 1 FROM oauth_tokens u INDEXED BY oauth_tokens_client WHERE u.client_id = c.id)'
 
+// Records that a user authorized the app (RES-6), in the transaction that writes the user's code (issueCode): every
+// user token is exchanged from a code (exchangeCode, the web session's consumeCode), so none exists without one; an app
+// token (client_credentials) never marks. One seek by the client's key, pinned (the partial index also matches
+// authorized = 0); a row already marked is not written again.
+function markAuthorized(db: Db, clientId: string): void {
+	db.run(
+		`UPDATE oauth_clients INDEXED BY ${OAUTH_CLIENTS_ID_INDEX} SET authorized = 1 WHERE id = ? AND authorized = 0`,
+		clientId
+	)
+}
+
+// The selected clients, each removed by its key (pinned: a scan of the table would read every authorized app).
 function deleteClients(db: Db, where: string, ...params: SqlStorageValue[]): number {
-	return db.all(`DELETE FROM oauth_clients WHERE id IN (SELECT c.id ${where}) RETURNING id`, ...params).length
+	return db.all(
+		`DELETE FROM oauth_clients INDEXED BY ${OAUTH_CLIENTS_ID_INDEX} WHERE id IN (SELECT c.id ${where}) RETURNING id`,
+		...params
+	).length
 }
 
 function pendingApps(db: Db): number {
@@ -229,8 +246,9 @@ export const introspectToken = readOperation<
 // At most this many rows of each kind are removed per cron run.
 export const OAUTH_SWEEP_BATCH = 500
 
-// The cron (jobs/scheduled.ts): unused apps older than UNUSED_APP_TTL_MS, codes and access tokens (web sessions) past
-// their expiry, and expired sign-in attempts and browser families (domain/web-session.ts). Bounded per run.
+// The cron (jobs/scheduled.ts): unused pending apps older than UNUSED_APP_TTL_MS, codes and access tokens (web
+// sessions) past their expiry, and expired sign-in attempts and browser families (domain/web-session.ts). Bounded per
+// run.
 export const sweepOAuth = writeOperation<{ now: number }, { apps: number; tokens: number; webState: number }>(
 	(db, { now }) => {
 		const apps = deleteClients(
@@ -347,6 +365,7 @@ export const issueCode = sessionOperation<IssueCodeInput, IssueCodeResult>((db, 
 		new Date(input.now).toISOString(),
 		account.accountId
 	)
+	markAuthorized(db, input.clientId)
 	return { status: 'ok' }
 })
 
