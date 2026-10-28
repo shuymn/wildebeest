@@ -26,9 +26,23 @@ function table(names: readonly string[]): string {
   return `(?:${quoted("main")}\\s*\\.\\s*)?${quoted(`(?:${names.join("|")})`)}(?!\\w)`;
 }
 
-// FROM t or JOIN t.
+// t after one of `keywords`, or with an alias where nothing names a keyword: at the start of a string (a fragment a
+// caller puts after FROM, as admin-measures.ts walkOf's `from`) or after a comma (FROM x, t a).
+function named(keywords: string, names: readonly string[]): RegExp {
+  return new RegExp(
+    `\\b(?:${keywords})\\s+${table(names)}|(?:['"\`]|,)\\s*${table(names)}\\s+(?:AS\\s+)?[A-Za-z_]\\w*`,
+    "i",
+  );
+}
+
+// FROM t or JOIN t, or t read through a fragment.
 function reads(...names: string[]): RegExp {
-  return new RegExp(`\\b(?:FROM|JOIN)\\s+${table(names)}`, "i");
+  return named("FROM|JOIN", names);
+}
+
+// FROM t, JOIN t, INTO t or UPDATE t, or t read through a fragment.
+function readsOrWrites(...names: string[]): RegExp {
+  return named("FROM|JOIN|INTO|UPDATE", names);
 }
 
 // One SQL string (no quote or statement end between) that reads follows and an inbox column, in either order.
@@ -136,7 +150,7 @@ const RULES: readonly Rule[] = [
   {
     // R39: a dismissal is its owner's alone; only the policy module reads it (suggestionCandidateSql).
     name: "reads or writes follow_recommendation_mutes",
-    pattern: new RegExp(`\\b(?:FROM|JOIN|INTO|UPDATE)\\s+${table(["follow_recommendation_mutes"])}`, "i"),
+    pattern: readsOrWrites("follow_recommendation_mutes"),
     allowed: {
       ...POLICY_ONLY,
       "src/domain/suggestions.ts": "the viewer’s own dismissals (dismissSuggestion)",
@@ -155,7 +169,7 @@ const RULES: readonly Rule[] = [
   {
     // R26: nothing of a scheduled status is shown, notified or delivered before it is published.
     name: "reads or writes scheduled_statuses",
-    pattern: new RegExp(`\\b(?:FROM|JOIN|INTO|UPDATE)\\s+${table(["scheduled_statuses"])}`, "i"),
+    pattern: readsOrWrites("scheduled_statuses"),
     allowed: {
       "src/domain/scheduled-statuses.ts": "the owner’s scheduled statuses (scheduledOwnSql) and their publication",
     },
@@ -163,7 +177,7 @@ const RULES: readonly Rule[] = [
   {
     // R27: votes are their voters' own; only counts and a viewer's own votes are shown, never who voted.
     name: "reads or writes poll_votes",
-    pattern: new RegExp(`\\b(?:FROM|JOIN|INTO|UPDATE)\\s+${table(["poll_votes"])}`, "i"),
+    pattern: readsOrWrites("poll_votes"),
     allowed: {
       ...POLICY_ONLY,
       "src/domain/polls.ts": "votes cast through mayVoteSql (R27), the viewer’s own, and their purges",
@@ -174,7 +188,7 @@ const RULES: readonly Rule[] = [
   {
     // R29: the hashtags an account follows are its own; nobody else is shown them.
     name: "reads or writes tag_follows",
-    pattern: new RegExp(`\\b(?:FROM|JOIN|INTO|UPDATE)\\s+${table(["tag_follows"])}`, "i"),
+    pattern: readsOrWrites("tag_follows"),
     allowed: {
       "src/domain/tags.ts": "the viewer’s own followed hashtags: their follows, the list and the Tag’s following",
       "src/domain/timelines.ts": "home’s windows of the viewer’s own followed hashtags (R9)",
@@ -184,12 +198,22 @@ const RULES: readonly Rule[] = [
     // R34: a report is its reporter's; only its writer reads it, then the OAuth admin (R37), and a purge deletes the
     // reports of the account.
     name: "reads or writes reports",
-    pattern: new RegExp(`\\b(?:FROM|JOIN|INTO|UPDATE)\\s+${table(["reports"])}`, "i"),
+    pattern: readsOrWrites("reports"),
     allowed: {
       "src/domain/reports.ts":
         "the reporter’s report, written and answered once (createReport), and the OAuth admin’s reads and actions (R37)",
       "src/domain/report-presenter.ts":
         "reads only: the reporter’s Report entity, for reports.ts and the notifications",
+      "src/domain/inbox.ts": "an actor purge deletes the reports of the account",
+      "src/domain/admin-measures.ts": "reads only: the OAuth admin's report counts (R37), never a report's content",
+    },
+  },
+  {
+    // R34: the readers (report-presenter.ts, admin-measures.ts) never write a report.
+    name: "writes reports",
+    pattern: new RegExp(`\\b(?:INTO|UPDATE|DELETE\\s+FROM)\\s+${table(["reports"])}`, "i"),
+    allowed: {
+      "src/domain/reports.ts": "the reporter’s report and its answer, and the OAuth admin’s actions (R37)",
       "src/domain/inbox.ts": "an actor purge deletes the reports of the account",
     },
   },
@@ -198,10 +222,7 @@ const RULES: readonly Rule[] = [
     // stamp, the answer to a QuoteRequest, a revoke) and keeps the answered requests, and only the policy module reads
     // them for a client (R35: quoteReads) or for reach (reachQuoters).
     name: "reads or writes quotes",
-    pattern: new RegExp(
-      `\\b(?:FROM|JOIN|INTO|UPDATE)\\s+${table(["quotes", "quote_revocations", "quote_requests"])}`,
-      "i",
-    ),
+    pattern: readsOrWrites("quotes", "quote_revocations", "quote_requests"),
     allowed: {
       ...POLICY_ONLY,
       "src/domain/quotes.ts":
@@ -213,10 +234,7 @@ const RULES: readonly Rule[] = [
   {
     // R40: announcements are the operator's; who sees one, its dismissals and its reactions are decided in one module.
     name: "reads or writes announcements",
-    pattern: new RegExp(
-      `\\b(?:FROM|JOIN|INTO|UPDATE)\\s+${table(["announcements", "announcement_reactions", "announcement_dismissals"])}`,
-      "i",
-    ),
+    pattern: readsOrWrites("announcements", "announcement_reactions", "announcement_dismissals"),
     allowed: {
       "src/domain/announcements.ts":
         "the published announcements (announcementShownSql), the viewer’s own dismissals and reactions, and the admin’s writes",
@@ -225,9 +243,15 @@ const RULES: readonly Rule[] = [
   {
     // R41: trends and their reviews are decided in one module, which every list, round and review goes through.
     name: "reads or writes trends",
-    pattern: new RegExp(
-      `\\b(?:FROM|JOIN|INTO|UPDATE)\\s+${table(["trend_tags", "trend_statuses", "trend_links", "tag_trend_reviews", "status_trend_reviews", "account_trend_reviews", "link_trend_reviews", "link_provider_reviews"])}`,
-      "i",
+    pattern: readsOrWrites(
+      "trend_tags",
+      "trend_statuses",
+      "trend_links",
+      "tag_trend_reviews",
+      "status_trend_reviews",
+      "account_trend_reviews",
+      "link_trend_reviews",
+      "link_provider_reviews",
     ),
     allowed: {
       "src/domain/trends.ts":
@@ -238,7 +262,7 @@ const RULES: readonly Rule[] = [
     // R42: a warning is its target's alone, read only through the target's own moderation_warning notification (the
     // rule, shownSql, checks that the notification names one of its recipient's).
     name: "reads or writes account_warnings",
-    pattern: new RegExp(`\\b(?:FROM|JOIN|INTO|UPDATE)\\s+${table(["account_warnings"])}`, "i"),
+    pattern: readsOrWrites("account_warnings"),
     allowed: {
       ...POLICY_ONLY,
       "src/domain/account-warnings.ts": "the admin action’s writes and the presenter of the target’s notification",
@@ -248,7 +272,7 @@ const RULES: readonly Rule[] = [
     // R43: a card is fetched and held only for an eligible status (audience.ts cardEligibleSql: public or unlisted),
     // judged by the one module that writes status_cards at enqueue, at claim and at record.
     name: "reads or writes status_cards",
-    pattern: new RegExp(`\\b(?:FROM|JOIN|INTO|UPDATE)\\s+${table(["status_cards"])}`, "i"),
+    pattern: readsOrWrites("status_cards"),
     allowed: {
       "src/domain/card-images.ts":
         "a recorded card's image link (recordCard, under its fence) and the image GC's reference check; no card is fetched or shown",
@@ -275,7 +299,7 @@ const RULES: readonly Rule[] = [
     // The instance activity's counts and logins (migration 0072) are written where a status, an account or a login
     // is recorded only through one module's writers, which hold the CHECKs' rules, and read by its answer and prune.
     name: "reads or writes the instance activity",
-    pattern: new RegExp(`\\b(?:FROM|JOIN|INTO|UPDATE)\\s+${table(["activity_counts", "activity_logins"])}`, "i"),
+    pattern: readsOrWrites("activity_counts", "activity_logins"),
     allowed: {
       "src/domain/instance-activity.ts": "the counters and the login record, the 12 weeks, and the retention prune",
     },
@@ -370,6 +394,7 @@ const RULE_FIXTURES: readonly [name: string, flagged: string, passed: string][] 
     "db.all('SELECT 1 FROM tags')",
   ],
   ["reads or writes reports", "db.all('SELECT 1 FROM reports r')", "db.all('SELECT reports FROM x')"],
+  ["writes reports", "db.run('DELETE FROM main.reports WHERE id = ?')", "db.run('UPDATE reports_archive SET x = 1')"],
   [
     "reads or writes quotes",
     "db.run('UPDATE quote_requests SET x = 1')",
@@ -444,12 +469,18 @@ describe("policy boundary", () => {
     {
       flagged: {
         "a read in a template": ["db.all(`SELECT 1 FROM ${t} JOIN blocks b`)", "src/domain/probe.ts reads blocks"],
+        "a read through a fragment": [
+          "walk({ from: `reports r CROSS JOIN accounts a` })",
+          "src/domain/probe.ts reads or writes reports",
+        ],
+        "a read after a comma": ["db.all('SELECT 1 FROM accounts a, blocks b')", "src/domain/probe.ts reads blocks"],
         ...Object.fromEntries(
           RULE_FIXTURES.map(([name, flagged]) => [name, [flagged, `src/domain/probe.ts ${name}`] as [string, string]]),
         ),
       },
       passed: {
         "a read named in a comment": "// SELECT 1 FROM blocks b\nf()",
+        "a table's name alone in a string": "f({ rows: 'reports', from: 'local_accounts l' })",
         ...Object.fromEntries(RULE_FIXTURES.map(([name, , passed]) => [name, passed])),
       },
     },
@@ -471,6 +502,20 @@ describe("policy boundary", () => {
       passed: {},
     },
     { path: "src/domain/scheduled-statuses.ts", over: SOURCES },
+  );
+  // A module allowed to read a table, but not to write it, is still refused the write.
+  guardFixtures(
+    violations,
+    {
+      flagged: {
+        "a write by a module that may only read": [
+          "db.all('SELECT 1 FROM reports r')\ndb.run('UPDATE reports SET x = 1')",
+          "src/domain/admin-measures.ts writes reports",
+        ],
+      },
+      passed: {},
+    },
+    { path: "src/domain/admin-measures.ts", over: SOURCES },
   );
 });
 

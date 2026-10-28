@@ -24,6 +24,8 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
 
 ### Fixed
 
+- `/setup`'s Access step, refused while another run holds it, no longer says the wait is at most two minutes: a
+  stalled run keeps the step for its lease and the grace after it, 2.5 minutes, which the message now states.
 - A public page's pager no longer offers a newer or older page where nothing lies: a full page offered the side past
   it even when it held the last rows, so the newest page reached by "Newer posts" linked to an empty page above it, and
   an exact last page to an empty one below it. A side is now offered only when the read passed a row past the page,
