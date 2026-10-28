@@ -1,0 +1,127 @@
+name: Update mise tools
+
+# Re-resolve the major-version ranges in mise.toml and propose the new
+# mise.lock. Renovate cannot update these ranges: it reads a range such as "1"
+# as version 1.0.0 and drops the update as a downgrade. `mise lock --bump` only
+# reads release metadata and writes the lockfile; it never installs or runs the
+# tools, so the App token is created in the same job after it. Only tools whose
+# version changes are re-locked, so checksums of unchanged versions stay pinned.
+
+on:
+  schedule:
+    - cron: "23 21 * * *"
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: false
+
+jobs:
+  update:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    env:
+      BRANCH: mise-update
+      LOCK: mise.lock
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: jdx/mise-action@82a612c5ab8bcda7cc5db6b7e81a8e7584c3dc6e # v5.2.3
+        with:
+          install: false
+          cache: false
+
+      - name: Update lockfile
+        id: lock
+        env:
+          MISE_GITHUB_TOKEN: ${{ github.token }}
+          MISE_YES: 1
+        run: |
+          set -eu
+          mise trust mise.toml >/dev/null
+          mise lock --bump --dry-run --json >"$RUNNER_TEMP/changes.json"
+          if [ "$(jq length "$RUNNER_TEMP/changes.json")" -eq 0 ]; then
+            echo "changed=false" >>"$GITHUB_OUTPUT"
+            exit 0
+          fi
+          jq -r '.[].name' "$RUNNER_TEMP/changes.json" | while IFS= read -r tool; do
+            mise lock --bump "$tool" </dev/null
+          done
+          status=$(git status --porcelain --untracked-files=all)
+          if [ "$status" != " M $LOCK" ]; then
+            printf 'mise lock changed unexpected files:\n%s\n' "$status" >&2
+            exit 1
+          fi
+          {
+            echo "| Tool | From | To |"
+            echo "| --- | --- | --- |"
+            jq -r '.[] | "| `\(.name)` | \(.old_versions | join(", ")) | \(.new_versions | join(", ")) |"' "$RUNNER_TEMP/changes.json"
+          } >"$RUNNER_TEMP/body.md"
+          cat "$RUNNER_TEMP/body.md" >>"$GITHUB_STEP_SUMMARY"
+          echo "changed=true" >>"$GITHUB_OUTPUT"
+
+      - name: Create App token
+        if: steps.lock.outputs.changed == 'true'
+        id: app-token
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          client-id: ${{ vars.APP_CLIENT_ID }}
+          private-key: ${{ secrets.APP_PRIVATE_KEY }}
+          permission-contents: write
+          permission-pull-requests: write
+
+      - name: Open pull request
+        if: steps.lock.outputs.changed == 'true'
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          BASE_BRANCH: ${{ github.ref_name }}
+          COMMIT_QUERY: >-
+            mutation($input: CreateCommitOnBranchInput!) {
+              createCommitOnBranch(input: $input) { commit { oid } }
+            }
+          AUTO_MERGE_QUERY: >-
+            mutation($id: ID!) {
+              enablePullRequestAutoMerge(input: {pullRequestId: $id, mergeMethod: MERGE}) { clientMutationId }
+            }
+        run: |
+          set -eu
+          # An existing branch with the same lockfile is already proposed (or was
+          # rejected by closing its PR). Otherwise start over from the current base;
+          # deleting the branch closes its stale PR.
+          if proposed=$(gh api "repos/$GITHUB_REPOSITORY/contents/$LOCK?ref=$BRANCH" --jq .sha 2>/dev/null); then
+            if [ "$proposed" = "$(git hash-object "$LOCK")" ]; then
+              echo "$BRANCH already proposes this lockfile"
+              exit 0
+            fi
+            gh api -X DELETE "repos/$GITHUB_REPOSITORY/git/refs/heads/$BRANCH"
+          fi
+          gh api -X POST "repos/$GITHUB_REPOSITORY/git/refs" -f ref="refs/heads/$BRANCH" -f sha="$GITHUB_SHA" >/dev/null
+
+          # createCommitOnBranch produces a signed (verified) commit.
+          jq -n \
+            --arg query "$COMMIT_QUERY" \
+            --arg repository "$GITHUB_REPOSITORY" \
+            --arg branch "$BRANCH" \
+            --arg head "$GITHUB_SHA" \
+            --arg path "$LOCK" \
+            --rawfile lock "$LOCK" \
+            '{query: $query, variables: {input: {branch: {repositoryNameWithOwner: $repository, branchName: $branch}, expectedHeadOid: $head, message: {headline: "Update mise tools"}, fileChanges: {additions: [{path: $path, contents: ($lock | @base64)}]}}}}' \
+            >"$RUNNER_TEMP/commit.json"
+          gh api graphql --input "$RUNNER_TEMP/commit.json" >/dev/null
+
+          pr=$(gh api -X POST "repos/$GITHUB_REPOSITORY/pulls" \
+            -f title="Update mise tools" \
+            -f head="$BRANCH" \
+            -f base="$BASE_BRANCH" \
+            -F body=@"$RUNNER_TEMP/body.md")
+          number=$(printf '%s' "$pr" | jq -r '.number')
+          gh api -X POST "repos/$GITHUB_REPOSITORY/issues/$number/labels" -f 'labels[]=dependencies' >/dev/null
+          gh api graphql -f query="$AUTO_MERGE_QUERY" -f id="$(printf '%s' "$pr" | jq -r '.node_id')" >/dev/null
+          echo "opened #$number"
