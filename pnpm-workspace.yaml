@@ -28,7 +28,7 @@ catalog:
   # pins the same wrangler.
   "@cloudflare/vitest-plugin": 1.4.7
   "@cloudflare/workers-types": 5.20261025.1
-  wrangler: 4.149.0
+  wrangler: 4.150.0
 
   # Tests: the runner and its vite, property tests, the browser job, image fixtures, the HTML and source scans.
   "@axe-core/playwright": 4.14.0
@@ -37,7 +37,7 @@ catalog:
   fast-check: 4.10.2
   oxc-parser: 0.154.0
   parse5: 8.0.1
-  vite: 6.4.4
+  vite: 6.4.5
   vitest: 5.0.5
 
   # Lint, format and the Git hooks.
