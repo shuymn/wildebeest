@@ -1,6 +1,7 @@
 {
 	"$schema": "https://docs.renovatebot.com/renovate-schema.json",
 	"extends": ["github>shuymn/github-actions#main"],
+	"assignAutomerge": true,
 	"mise": {
 		"enabled": false
 	},
@@ -8,6 +9,38 @@
 		"managerFilePatterns": ["/^deploy/ci/[^/]+\\.ya?ml$/"]
 	},
 	"packageRules": [
+		{
+			"description": "Group stable npm and GitHub Actions minor/patch updates by manager",
+			"matchManagers": ["npm", "github-actions"],
+			"matchUpdateTypes": ["minor", "patch"],
+			"matchCurrentVersion": "!/^v?0+\\./",
+			"groupName": "{{manager}} non-major dependencies"
+		},
+		{
+			"description": "Keep pre-1.0 minor/patch updates separate from automerged stable updates",
+			"matchUpdateTypes": ["minor", "patch"],
+			"matchCurrentVersion": "/^v?0+\\./",
+			"groupName": "{{manager}} pre-1.0 dependencies"
+		},
+		{
+			"description": "Group linter dependencies together",
+			"groupName": "linters",
+			"extends": ["packages:linters"],
+			"matchPackageNames": ["prettier", "/^@typescript-eslint//"]
+		},
+		{
+			"description": "The root TypeScript serves @typescript-eslint, whose parser accepts typescript below 6.1; Kopje's own TypeScript is packages/kopje's. Held until lint moves to oxlint",
+			"matchFileNames": ["package.json"],
+			"matchPackageNames": ["typescript"],
+			"allowedVersions": "<6.1"
+		},
+		{
+			"description": "No major ESLint updates at the root: lint moves to oxlint",
+			"matchFileNames": ["package.json"],
+			"matchPackageNames": ["eslint", "@eslint/js", "@eslint/eslintrc", "/^@typescript-eslint//", "/^eslint-/"],
+			"matchUpdateTypes": ["major"],
+			"enabled": false
+		},
 		{
 			"description": "Group Vitest packages together",
 			"groupName": "vitest",
