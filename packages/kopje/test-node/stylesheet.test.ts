@@ -36,7 +36,7 @@ function tokens(css: string): Map<string, { light: string; dark: string }> {
 // A hex colour's channels (#rgb or #rrggbb), for the contrast ratio (contrast.ts).
 function channels(hex: string): number[] {
   const digits =
-    hex.length === 4 ? [...hex.slice(1)].map((d) => d + d) : [hex.slice(1, 3), hex.slice(3, 5), hex.slice(5, 7)];
+    hex.length === 4 ? Array.from(hex.slice(1), (d) => d + d) : [hex.slice(1, 3), hex.slice(3, 5), hex.slice(5, 7)];
   return digits.map((d) => parseInt(d, 16));
 }
 

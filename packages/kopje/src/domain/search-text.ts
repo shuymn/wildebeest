@@ -23,6 +23,7 @@ export function queryTerms(query: string): string[][] {
     .slice(0, MAX_TERMS)
     .map((term) => {
       const variants = new Set([term, toHiragana(term), toKatakana(term)]);
+      // oxlint-disable-next-line unicorn/no-useless-spread -- a copy: the loop adds to the set it reads
       for (const variant of [...variants]) {
         if (/[ァ-ヺ]ー+$/.test(variant)) {
           variants.add(variant.replace(/ー+$/, ""));

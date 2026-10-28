@@ -164,7 +164,7 @@ function tabList(
       const list = statusList(budget, { size: pageItemBytes, afterHead });
       const read = statusRepliesWithin(
         db,
-        { id, page: { limit: REPLIES_PAGE_SIZE, ...(cursor ?? {}) }, present: options },
+        { id, page: { limit: REPLIES_PAGE_SIZE, ...cursor }, present: options },
         options.viewer,
         list.admission,
       );
@@ -175,7 +175,7 @@ function tabList(
     }
     case "quotes": {
       const list = statusList(budget, { afterHead });
-      const page = { limit: QUOTES_PAGE_SIZE, ...(cursor ?? {}) };
+      const page = { limit: QUOTES_PAGE_SIZE, ...cursor };
       const read = statusQuotesWithin(db, { id, page, present: options }, options.viewer, false, list.admission);
       return {
         list: { kind, statuses: read.items, stub: list.stub(), parents: listParents(db, budget, read.items) },
@@ -189,7 +189,7 @@ function tabList(
         {
           id,
           kind: kind === "reblogs" ? "reblogged_by" : "favourited_by",
-          page: { limit: INTERACTORS_PAGE_SIZE, ...(cursor ?? {}) },
+          page: { limit: INTERACTORS_PAGE_SIZE, ...cursor },
           present: options,
         },
         options.viewer,

@@ -62,7 +62,7 @@ export function followsPageWithin(db: Db, input: FollowsInput, site: Site, answe
   admitMandatory(budget, account);
   const list = listFollowsWithin(
     db,
-    { account: row.id, direction, page: { limit: FOLLOWS_PAGE_SIZE, ...(cursor ?? {}) }, present: pagePresent(site) },
+    { account: row.id, direction, page: { limit: FOLLOWS_PAGE_SIZE, ...cursor }, present: pagePresent(site) },
     anonymous(site, now).viewer,
     (entries) => admitStrict(budget, entries),
     "available",
