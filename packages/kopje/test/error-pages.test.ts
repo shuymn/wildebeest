@@ -250,85 +250,83 @@ const FAILURES: [string, () => Error, (extra?: Record<string, string>) => Bytes,
   ["500", () => new Error("boom <secret>"), json500, "Something went wrong"],
 ];
 
-for (const [status, error, document, title] of FAILURES) {
-  describe(status, () => {
-    it("answers a page route a browser asks for an HTML page, never kept, without another Store call", async () => {
-      const logged = vi.spyOn(console, "error").mockImplementation(() => {});
-      try {
-        for (const path of ["/about", "/oauth/authorize", "/settings", "/@alice", "/tags/walks"]) {
-          const failing = failingStore(error);
-          const response = await harness(failing.stub).request(path, { headers: { accept: BROWSER } });
-          expect(response.status, path).toBe(Number(status));
-          expect(Object.fromEntries(response.headers), path).toEqual(
-            status === "503" ? UNAVAILABLE_PAGE_HEADERS : ERROR_PAGE_HEADERS,
-          );
-          const html = await response.text();
-          expectPage(html, title);
-          expect(html).not.toContain("boom");
-          // The route's own call alone: the page reads nothing.
-          expect(failing.calls, path).toHaveLength(1);
-        }
-      } finally {
-        logged.mockRestore();
-      }
-    });
-
-    it.each<FailureRow>([
-      // Negotiated (a page route): the API's answer, varying with Accept.
-      ["no Accept", "/about", undefined, document(VARY)],
-      ["a JSON Accept", "/about", "application/json", document(VARY)],
-      ["ActivityPub on a profile", "/@alice", "application/activity+json", document(VARY)],
-      [
-        "HTML refused by its charset",
-        "/about",
-        "text/html;charset=utf-8;q=0, text/html, application/json;q=0.5",
-        document(VARY),
-      ],
-      ["Unicode whitespace before the type", "/about", "\u00a0text/html, application/json;q=0.5", document(VARY)],
-      ["a wildcard of another charset", "/about", "text/*;charset=iso-8859-1, application/json;q=0.5", document(VARY)],
-      // Not negotiated: today's bytes.
-      ["an actor outbox", "/ap/users/alice/outbox", BROWSER, document()],
-      ["the instance actor outbox", "/actor/outbox", BROWSER, document()],
-      ["an emoji", "/emojis/1", BROWSER, document()],
-      ["the API", "/api/v1/instance", BROWSER, document(API_CORS)],
-    ])("keeps the API answer for %s", async (_name, path, accept, expected) => {
-      const failing = failingStore(error);
-      const logged = vi.spyOn(console, "error").mockImplementation(() => {});
-      try {
-        const response = await harness(failing.stub).request(path, init("GET", accept));
-        expect(await bytesOf(response)).toEqual(expected);
-        expect(failing.calls.length, "the route reached the Store").toBeGreaterThan(0);
-      } finally {
-        logged.mockRestore();
-      }
-    });
-
-    it("keeps an inbox POST’s answer (spooled when unavailable)", async () => {
-      const failing = failingStore(error);
-      const h = harness(failing.stub);
-      const logged = vi.spyOn(console, "error").mockImplementation(() => {});
-      try {
-        const response = await h.request(
-          "/inbox",
-          init("POST", BROWSER, { "content-type": "application/activity+json" }, '{"type":"Follow"}'),
+describe.for(FAILURES)("%s", ([status, error, document, title]) => {
+  it("answers a page route a browser asks for an HTML page, never kept, without another Store call", async () => {
+    const logged = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      for (const path of ["/about", "/oauth/authorize", "/settings", "/@alice", "/tags/walks"]) {
+        const failing = failingStore(error);
+        const response = await harness(failing.stub).request(path, { headers: { accept: BROWSER } });
+        expect(response.status, path).toBe(Number(status));
+        expect(Object.fromEntries(response.headers), path).toEqual(
+          status === "503" ? UNAVAILABLE_PAGE_HEADERS : ERROR_PAGE_HEADERS,
         );
-        expect(await bytesOf(response)).toEqual(
-          status === "503" ? { status: 202, headers: NOSNIFF, body: "" } : document(),
-        );
-        expect(failing.calls[0]).toBe("inboxGate");
-      } finally {
-        logged.mockRestore();
+        const html = await response.text();
+        expectPage(html, title);
+        expect(html).not.toContain("boom");
+        // The route's own call alone: the page reads nothing.
+        expect(failing.calls, path).toHaveLength(1);
       }
-    });
-
-    it("keeps a POST to a page route its 404", async () => {
-      const failing = failingStore(error);
-      const response = await harness(failing.stub).request("/settings", init("POST", BROWSER));
-      expect(await bytesOf(response)).toEqual(plain404());
-      expect(failing.calls).toEqual([]);
-    });
+    } finally {
+      logged.mockRestore();
+    }
   });
-}
+
+  it.each<FailureRow>([
+    // Negotiated (a page route): the API's answer, varying with Accept.
+    ["no Accept", "/about", undefined, document(VARY)],
+    ["a JSON Accept", "/about", "application/json", document(VARY)],
+    ["ActivityPub on a profile", "/@alice", "application/activity+json", document(VARY)],
+    [
+      "HTML refused by its charset",
+      "/about",
+      "text/html;charset=utf-8;q=0, text/html, application/json;q=0.5",
+      document(VARY),
+    ],
+    ["Unicode whitespace before the type", "/about", "\u00a0text/html, application/json;q=0.5", document(VARY)],
+    ["a wildcard of another charset", "/about", "text/*;charset=iso-8859-1, application/json;q=0.5", document(VARY)],
+    // Not negotiated: today's bytes.
+    ["an actor outbox", "/ap/users/alice/outbox", BROWSER, document()],
+    ["the instance actor outbox", "/actor/outbox", BROWSER, document()],
+    ["an emoji", "/emojis/1", BROWSER, document()],
+    ["the API", "/api/v1/instance", BROWSER, document(API_CORS)],
+  ])("keeps the API answer for %s", async (_name, path, accept, expected) => {
+    const failing = failingStore(error);
+    const logged = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      const response = await harness(failing.stub).request(path, init("GET", accept));
+      expect(await bytesOf(response)).toEqual(expected);
+      expect(failing.calls.length, "the route reached the Store").toBeGreaterThan(0);
+    } finally {
+      logged.mockRestore();
+    }
+  });
+
+  it("keeps an inbox POST’s answer (spooled when unavailable)", async () => {
+    const failing = failingStore(error);
+    const h = harness(failing.stub);
+    const logged = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      const response = await h.request(
+        "/inbox",
+        init("POST", BROWSER, { "content-type": "application/activity+json" }, '{"type":"Follow"}'),
+      );
+      expect(await bytesOf(response)).toEqual(
+        status === "503" ? { status: 202, headers: NOSNIFF, body: "" } : document(),
+      );
+      expect(failing.calls[0]).toBe("inboxGate");
+    } finally {
+      logged.mockRestore();
+    }
+  });
+
+  it("keeps a POST to a page route its 404", async () => {
+    const failing = failingStore(error);
+    const response = await harness(failing.stub).request("/settings", init("POST", BROWSER));
+    expect(await bytesOf(response)).toEqual(plain404());
+    expect(failing.calls).toEqual([]);
+  });
+});
 
 describe("500", () => {
   it("logs the failure as before", async () => {

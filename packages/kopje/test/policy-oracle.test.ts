@@ -356,58 +356,56 @@ describe("the policy fragments agree with the model of their rules", () => {
     const admin = adminOf(world);
     return admin === null ? null : accountId(admin);
   };
-  for (const [title, fragment, rule] of [
+  it.for([
     ["shownSql (R15)", shownSql, "shown"],
     ["notifiedSql (R15, R31)", notifiedSql, "notified"],
-  ] as const) {
-    it(title, () =>
-      agree(
-        (db, world) => {
-          const named = namer(world);
-          db.run(
-            `INSERT INTO account_warnings (target_account_id, action, created_at)
+  ] as const)("%s", ([, fragment, rule]) =>
+    agree(
+      (db, world) => {
+        const named = namer(world);
+        db.run(
+          `INSERT INTO account_warnings (target_account_id, action, created_at)
 						SELECT account_id, 'none', ? FROM local_accounts ORDER BY account_id`,
-            world.now,
-          );
-          return db
-            .all<{ r: string; type: string; sender: string; status: string | null; warned: string | null }>(
-              `SELECT nr0.account_id AS r, nt.value AS type, nf.id AS sender, ns.id AS status, nw.target AS warned
+          world.now,
+        );
+        return db
+          .all<{ r: string; type: string; sender: string; status: string | null; warned: string | null }>(
+            `SELECT nr0.account_id AS r, nt.value AS type, nf.id AS sender, ns.id AS status, nw.target AS warned
 							FROM local_accounts nr0 CROSS JOIN json_each(?1) nt CROSS JOIN accounts nf
 							CROSS JOIN (SELECT id FROM statuses UNION ALL SELECT NULL) ns
 							CROSS JOIN (SELECT id, target_account_id AS target FROM account_warnings UNION ALL SELECT NULL, NULL) nw
 							WHERE ${fragment("nr0.account_id", "nt.value", "nf.id", "ns.id", "?2", "?3", "nw.id")}`,
-              JSON.stringify(NOTIFICATION_TYPES),
-              world.now,
-              adminIdOf(world),
-            )
-            .map(
-              (row) =>
-                `${named(row.r)} ${row.type} ${named(row.sender)} ${row.status === null ? "-" : named(row.status)} ${row.warned === null ? "-" : named(row.warned)}`,
-            );
-        },
-        ({ world }) => {
-          const m = new PolicyModel(world, adminOf(world));
-          return accounts(m.world)
-            .filter((r) => m.world.accounts[r]?.local === true)
-            .flatMap((r) =>
-              NOTIFICATION_TYPES.flatMap((type) =>
-                accounts(m.world).flatMap((from) =>
-                  [null, ...statuses(m.world)].flatMap((s) =>
-                    [null, ...accounts(m.world).filter((x) => m.world.accounts[x]?.local === true)].flatMap((warned) =>
-                      m[rule](r, type, from, s, warned)
-                        ? [
-                            `${name(m.world, r)} ${type} ${name(m.world, from)} ${s === null ? "-" : m.status(s).name} ${warned === null ? "-" : name(m.world, warned)}`,
-                          ]
-                        : [],
-                    ),
+            JSON.stringify(NOTIFICATION_TYPES),
+            world.now,
+            adminIdOf(world),
+          )
+          .map(
+            (row) =>
+              `${named(row.r)} ${row.type} ${named(row.sender)} ${row.status === null ? "-" : named(row.status)} ${row.warned === null ? "-" : named(row.warned)}`,
+          );
+      },
+      ({ world }) => {
+        const m = new PolicyModel(world, adminOf(world));
+        return accounts(m.world)
+          .filter((r) => m.world.accounts[r]?.local === true)
+          .flatMap((r) =>
+            NOTIFICATION_TYPES.flatMap((type) =>
+              accounts(m.world).flatMap((from) =>
+                [null, ...statuses(m.world)].flatMap((s) =>
+                  [null, ...accounts(m.world).filter((x) => m.world.accounts[x]?.local === true)].flatMap((warned) =>
+                    m[rule](r, type, from, s, warned)
+                      ? [
+                          `${name(m.world, r)} ${type} ${name(m.world, from)} ${s === null ? "-" : m.status(s).name} ${warned === null ? "-" : name(m.world, warned)}`,
+                        ]
+                      : [],
                   ),
                 ),
               ),
-            );
-        },
-      ),
-    );
-  }
+            ),
+          );
+      },
+    ),
+  );
 
   // Every (viewer, status) with the quote the viewer is shown of it (R35): its state and quoted status, read as the
   // presenter reads them, and with the source asked for (the DELETE response).

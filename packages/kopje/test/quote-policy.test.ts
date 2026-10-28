@@ -278,133 +278,113 @@ describe("PUT /api/v1/statuses/:id quote_approval_policy", () => {
 });
 
 describe("PUT and PATCH /api/v1/statuses/:id/interaction_policy", () => {
-  for (const method of ["PUT", "PATCH"]) {
-    describe(method, () => {
-      it("stores each policy, and the default when none is sent, and answers with the status", async () => {
-        const h = await community(["alice"]);
-        const { alice } = h.users;
-        // A remote follower, so a Create (and any Update) of alice's status is recorded for delivery.
-        await remoteFollows(h.store, await remoteAccount(h.store, "rem"), alice.id);
-        const status = await post(h, alice, { status: "mine", quote_approval_policy: "nobody" });
-        const path = `/api/v1/statuses/${status.id}/interaction_policy`;
-        for (const [name, value] of CHOICES) {
-          const response = await send(h, alice.token, method, path, { quote_approval_policy: name });
-          expect(response.status).toBe(200);
-          const body = await response.json<PolicyStatus>();
-          expect(body.id).toBe(status.id);
-          expect(body.quote_approval).toEqual(approvalOf(value === 0 ? [] : [name]));
-          expect(await stored(h.store, status.id)).toBe(value);
-        }
-        // None sent, or a blank one: the account's default.
-        await setDefault(h, alice, "followers");
-        expect((await send(h, alice.token, method, path, { quote_approval_policy: "nobody" })).status).toBe(200);
-        expect((await send(h, alice.token, method, path)).status).toBe(200);
-        expect(await stored(h.store, status.id)).toBe(FOLLOWERS);
-        await setDefault(h, alice, "public");
-        expect((await send(h, alice.token, method, path, { quote_approval_policy: "" })).status).toBe(200);
-        expect(await stored(h.store, status.id)).toBe(PUBLIC);
-        // Each change is sent as an Update of the status (Notes carry the policy); the last supersedes those waiting.
-        expect((await outbound(h.store)).map((row) => row.activity.type)).toEqual(["Create", "Update"]);
-        expect(await sql(h.store, "SELECT edited_at FROM statuses WHERE id = ?", status.id)).toEqual([
-          { edited_at: null },
-        ]);
-      });
+  describe.for(["PUT", "PATCH"])("%s", (method) => {
+    it("stores each policy, and the default when none is sent, and answers with the status", async () => {
+      const h = await community(["alice"]);
+      const { alice } = h.users;
+      // A remote follower, so a Create (and any Update) of alice's status is recorded for delivery.
+      await remoteFollows(h.store, await remoteAccount(h.store, "rem"), alice.id);
+      const status = await post(h, alice, { status: "mine", quote_approval_policy: "nobody" });
+      const path = `/api/v1/statuses/${status.id}/interaction_policy`;
+      for (const [name, value] of CHOICES) {
+        const response = await send(h, alice.token, method, path, { quote_approval_policy: name });
+        expect(response.status).toBe(200);
+        const body = await response.json<PolicyStatus>();
+        expect(body.id).toBe(status.id);
+        expect(body.quote_approval).toEqual(approvalOf(value === 0 ? [] : [name]));
+        expect(await stored(h.store, status.id)).toBe(value);
+      }
+      // None sent, or a blank one: the account's default.
+      await setDefault(h, alice, "followers");
+      expect((await send(h, alice.token, method, path, { quote_approval_policy: "nobody" })).status).toBe(200);
+      expect((await send(h, alice.token, method, path)).status).toBe(200);
+      expect(await stored(h.store, status.id)).toBe(FOLLOWERS);
+      await setDefault(h, alice, "public");
+      expect((await send(h, alice.token, method, path, { quote_approval_policy: "" })).status).toBe(200);
+      expect(await stored(h.store, status.id)).toBe(PUBLIC);
+      // Each change is sent as an Update of the status (Notes carry the policy); the last supersedes those waiting.
+      expect((await outbound(h.store)).map((row) => row.activity.type)).toEqual(["Create", "Update"]);
+      expect(await sql(h.store, "SELECT edited_at FROM statuses WHERE id = ?", status.id)).toEqual([
+        { edited_at: null },
+      ]);
+    });
 
-      it("refuses any other value with 422 and keeps the policy", async () => {
-        const h = await community(["alice"]);
-        const status = await post(h, h.users.alice, { status: "mine", quote_approval_policy: "followers" });
+    it("refuses any other value with 422 and keeps the policy", async () => {
+      const h = await community(["alice"]);
+      const status = await post(h, h.users.alice, { status: "mine", quote_approval_policy: "followers" });
+      const response = await send(h, h.users.alice.token, method, `/api/v1/statuses/${status.id}/interaction_policy`, {
+        quote_approval_policy: "everyone",
+      });
+      expect(await refusal(response)).toEqual({ status: 422, body: { error: "Record invalid" } });
+      expect(await stored(h.store, status.id)).toBe(FOLLOWERS);
+    });
+
+    it("stores nobody for a private or direct status", async () => {
+      const h = await community(["alice", "bob"]);
+      for (const visibility of ["private", "direct"]) {
+        const status = await post(h, h.users.alice, { status: "@bob hi", visibility });
         const response = await send(
           h,
           h.users.alice.token,
           method,
           `/api/v1/statuses/${status.id}/interaction_policy`,
-          {
-            quote_approval_policy: "everyone",
-          },
+          { quote_approval_policy: "public" },
         );
-        expect(await refusal(response)).toEqual({ status: 422, body: { error: "Record invalid" } });
-        expect(await stored(h.store, status.id)).toBe(FOLLOWERS);
-      });
-
-      it("stores nobody for a private or direct status", async () => {
-        const h = await community(["alice", "bob"]);
-        for (const visibility of ["private", "direct"]) {
-          const status = await post(h, h.users.alice, { status: "@bob hi", visibility });
-          const response = await send(
-            h,
-            h.users.alice.token,
-            method,
-            `/api/v1/statuses/${status.id}/interaction_policy`,
-            { quote_approval_policy: "public" },
-          );
-          expect(response.status).toBe(200);
-          expect((await response.json<PolicyStatus>()).quote_approval).toEqual(
-            approvalOf([], visibility === "direct" ? "denied" : "automatic"),
-          );
-          expect(await stored(h.store, status.id)).toBe(0);
-        }
-      });
-
-      it("answers 403 for another's status the caller may see, before the value", async () => {
-        const h = await community(["alice", "bob"]);
-        const status = await post(h, h.users.bob, { status: "bob’s", quote_approval_policy: "public" });
-        const remote = await remoteAccount(h.store, "rem");
-        const theirs = await seedStatus(h.store, { accountId: remote, visibility: "public" });
-        for (const [id, body] of [
-          [status.id, { quote_approval_policy: "nobody" }],
-          [status.id, { quote_approval_policy: "everyone" }],
-          [theirs, { quote_approval_policy: "nobody" }],
-        ] as const) {
-          const response = await send(
-            h,
-            h.users.alice.token,
-            method,
-            `/api/v1/statuses/${id}/interaction_policy`,
-            body,
-          );
-          expect(await refusal(response)).toEqual({ status: 403, body: { error: "This action is not allowed" } });
-        }
-        expect(await stored(h.store, status.id)).toBe(PUBLIC);
-      });
-
-      it("answers 404 for a status the caller may not see, or none", async () => {
-        const h = await community(["alice", "bob"]);
-        const hidden = await post(h, h.users.bob, { status: "followers only", visibility: "private" });
-        for (const id of [hidden.id, "999999999999999999"]) {
-          const response = await send(h, h.users.alice.token, method, `/api/v1/statuses/${id}/interaction_policy`, {
-            quote_approval_policy: "everyone",
-          });
-          expect(response.status).toBe(404);
-        }
-        // Once alice follows bob she sees it, and it is still not hers.
-        await follow(h, h.users.alice, h.users.bob.id);
-        const response = await send(
-          h,
-          h.users.alice.token,
-          method,
-          `/api/v1/statuses/${hidden.id}/interaction_policy`,
-          {
-            quote_approval_policy: "public",
-          },
+        expect(response.status).toBe(200);
+        expect((await response.json<PolicyStatus>()).quote_approval).toEqual(
+          approvalOf([], visibility === "direct" ? "denied" : "automatic"),
         );
-        expect(response.status).toBe(403);
-      });
-
-      it("needs write:statuses (403 otherwise)", async () => {
-        const h = await community(["alice"]);
-        const status = await post(h, h.users.alice, { status: "mine", quote_approval_policy: "public" });
-        const path = `/api/v1/statuses/${status.id}/interaction_policy`;
-        for (const scope of ["read", "read:statuses", "write:accounts", "write:favourites"]) {
-          const token = await scopedToken(h, scope);
-          expect((await send(h, token, method, path, { quote_approval_policy: "nobody" })).status).toBe(403);
-        }
-        expect(await stored(h.store, status.id)).toBe(PUBLIC);
-        const token = await scopedToken(h, "write:statuses");
-        expect((await send(h, token, method, path, { quote_approval_policy: "nobody" })).status).toBe(200);
         expect(await stored(h.store, status.id)).toBe(0);
-      });
+      }
     });
-  }
+
+    it("answers 403 for another's status the caller may see, before the value", async () => {
+      const h = await community(["alice", "bob"]);
+      const status = await post(h, h.users.bob, { status: "bob’s", quote_approval_policy: "public" });
+      const remote = await remoteAccount(h.store, "rem");
+      const theirs = await seedStatus(h.store, { accountId: remote, visibility: "public" });
+      for (const [id, body] of [
+        [status.id, { quote_approval_policy: "nobody" }],
+        [status.id, { quote_approval_policy: "everyone" }],
+        [theirs, { quote_approval_policy: "nobody" }],
+      ] as const) {
+        const response = await send(h, h.users.alice.token, method, `/api/v1/statuses/${id}/interaction_policy`, body);
+        expect(await refusal(response)).toEqual({ status: 403, body: { error: "This action is not allowed" } });
+      }
+      expect(await stored(h.store, status.id)).toBe(PUBLIC);
+    });
+
+    it("answers 404 for a status the caller may not see, or none", async () => {
+      const h = await community(["alice", "bob"]);
+      const hidden = await post(h, h.users.bob, { status: "followers only", visibility: "private" });
+      for (const id of [hidden.id, "999999999999999999"]) {
+        const response = await send(h, h.users.alice.token, method, `/api/v1/statuses/${id}/interaction_policy`, {
+          quote_approval_policy: "everyone",
+        });
+        expect(response.status).toBe(404);
+      }
+      // Once alice follows bob she sees it, and it is still not hers.
+      await follow(h, h.users.alice, h.users.bob.id);
+      const response = await send(h, h.users.alice.token, method, `/api/v1/statuses/${hidden.id}/interaction_policy`, {
+        quote_approval_policy: "public",
+      });
+      expect(response.status).toBe(403);
+    });
+
+    it("needs write:statuses (403 otherwise)", async () => {
+      const h = await community(["alice"]);
+      const status = await post(h, h.users.alice, { status: "mine", quote_approval_policy: "public" });
+      const path = `/api/v1/statuses/${status.id}/interaction_policy`;
+      for (const scope of ["read", "read:statuses", "write:accounts", "write:favourites"]) {
+        const token = await scopedToken(h, scope);
+        expect((await send(h, token, method, path, { quote_approval_policy: "nobody" })).status).toBe(403);
+      }
+      expect(await stored(h.store, status.id)).toBe(PUBLIC);
+      const token = await scopedToken(h, "write:statuses");
+      expect((await send(h, token, method, path, { quote_approval_policy: "nobody" })).status).toBe(200);
+      expect(await stored(h.store, status.id)).toBe(0);
+    });
+  });
 });
 
 describe("quote_approval", () => {
