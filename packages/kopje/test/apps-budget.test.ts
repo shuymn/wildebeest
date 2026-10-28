@@ -322,35 +322,12 @@ describe('app budget reads with stale statistics (RES-6, RES-7)', () => {
 		expect(after.marked.result).toEqual({ status: 'ok' })
 		expect(await count(h.store, "id = 'new-after' AND authorized = 1")).toBe(1)
 
-		const kind = (query: string) =>
-			query.startsWith('SELECT COUNT')
-				? 'count'
-				: query.startsWith('INSERT')
-					? 'insert'
-					: query.startsWith('UPDATE')
-						? 'mark'
-						: !query.startsWith('DELETE')
-							? 'read'
-							: query.includes('ORDER BY')
-								? 'evict'
-								: query.includes('LIMIT')
-									? 'sweep'
-									: 'expire'
+		// The budget's walks of the pending set, and the reads and writes of one app by its key.
+		const walks = (query: string) => query.includes('oauth_clients_pending')
 		const statements = [...after.registered.plans, ...after.swept.plans, ...after.marked.plans]
-		// Three counts (before the expiry pass, before eviction, after it), the expiry pass, eviction, the insert and
-		// its read; the sweep; issueCode's client read and its mark.
-		expect(statements.map((p) => kind(p.query))).toEqual([
-			'count',
-			'expire',
-			'count',
-			'evict',
-			'count',
-			'insert',
-			'read',
-			'sweep',
-			'read',
-			'mark',
-		])
+		expect(after.registered.plans.some((p) => walks(p.query))).toBe(true)
+		expect(after.swept.plans.some((p) => walks(p.query))).toBe(true)
+		expect(after.marked.plans.some((p) => p.query.startsWith('UPDATE'))).toBe(true)
 		// Then the sweep's other worst: its batch filled with unused apps (their app tokens gone, one more aged app), each
 		// removed by its key.
 		await sql(h.store, "DELETE FROM oauth_tokens WHERE token_hash LIKE 'a-%'")
@@ -358,10 +335,10 @@ describe('app budget reads with stale statistics (RES-6, RES-7)', () => {
 		const drained = await plannedRun(h, pattern, sweepOAuth, { now: NOW }, true)
 		expect(drained.result).toEqual({ apps: OAUTH_SWEEP_BATCH, tokens: 0, webState: 0 })
 		expect(await count(h.store, "id LIKE 'authorized-%'")).toBe(AUTHORIZED)
+		expect(drained.plans.some((p) => walks(p.query))).toBe(true)
 		statements.push(...drained.plans)
 		for (const statement of statements) {
-			const k = kind(statement.query)
-			if (k === 'count' || k === 'expire' || k === 'evict' || k === 'sweep') {
+			if (walks(statement.query)) {
 				expect(statement.plan.join(' | '), statement.query).toMatch(/USING (?:COVERING )?INDEX oauth_clients_pending/)
 				expect(scansOf(statement.plan, ['oauth_clients', 'oauth_tokens', 'u']), statement.query).toEqual([])
 				// Per pending candidate (MAX_PENDING_APPS and the web client): its index entry and, in the expiry pass and

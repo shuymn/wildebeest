@@ -10554,14 +10554,7 @@ describe('0086_authorized_apps', () => {
 		})
 	})
 
-	it.each([
-		['2', 'UPDATE oauth_clients SET authorized = 2'],
-		['-1', 'UPDATE oauth_clients SET authorized = -1'],
-		['NULL', 'UPDATE oauth_clients SET authorized = NULL'],
-		['a real', 'UPDATE oauth_clients SET authorized = 0.5'],
-		['text', "UPDATE oauth_clients SET authorized = 'yes'"],
-		['a blob', "UPDATE oauth_clients SET authorized = X'01'"],
-	])('refuses %s, after admitting 0 and 1', async (_name, statement) => {
+	it('refuses any mark but the integer 0 or 1, after admitting them', async () => {
 		const store = freshStore()
 		await runInDurableObject(store, async (_instance, state) => {
 			expect(await kernel(state, MIGRATIONS.slice(0, at + 1)).upgrade()).toMatchObject({ ok: true })
@@ -10575,7 +10568,17 @@ describe('0086_authorized_apps', () => {
 				authorized: 0,
 				t: 'integer',
 			})
-			expect(() => sql.exec(statement)).toThrow(/constraint failed/)
+			for (const [name, value] of [
+				['2', '2'],
+				['-1', '-1'],
+				['NULL', 'NULL'],
+				['a real', '0.5'],
+				['text', "'yes'"],
+				['a blob', "X'01'"],
+			]) {
+				expect(() => sql.exec(`UPDATE oauth_clients SET authorized = ${value}`), name).toThrow(/constraint failed/)
+			}
+			expect(sql.exec('SELECT authorized FROM oauth_clients').one()).toEqual({ authorized: 0 })
 		})
 	})
 })
