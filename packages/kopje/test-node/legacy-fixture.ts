@@ -545,6 +545,8 @@ export async function buildLegacyFixture(options: FixtureOptions): Promise<Legac
       { type: "Hashtag", name: "﹟Small", href: "https://remote.example/tags/small" },
       { type: "Hashtag", name: "##Double", href: "https://remote.example/tags/double" },
       { type: "Hashtag", name: "Bare", href: "https://remote.example/tags/bare" },
+      // A single pass leaves U+1100 U+1161 U+11A8, which composes to U+AC01 (#1257).
+      { type: "Hashtag", name: "#\u1100-\u1161-\u11A8", href: "https://remote.example/tags/x" },
     ],
     attachment: [
       { type: "Document", mediaType: "video/mp4", url: "https://files.remote.example/m/1.mp4", name: "a clip" },
@@ -563,8 +565,9 @@ export async function buildLegacyFixture(options: FixtureOptions): Promise<Legac
     attachment: [attachedImage],
   });
   if (has("note_hashtags")) {
-    // Names as legacy took them from the text after #: a number sign left in them goes when the name is normalized.
-    for (const value of ["wildebeest", "ＷＩＬＤＥＢＥＥＳＴ", "＃Wide", "﹟Foo", "#Hash"]) {
+    // Names as legacy took them from the text after #: a number sign left in them goes when the name is normalized,
+    // and a mark between two jamo goes, which then compose (#1257).
+    for (const value of ["wildebeest", "ＷＩＬＤＥＢＥＥＳＴ", "＃Wide", "﹟Foo", "#Hash", "\u1100\u0301\u1161"]) {
       insert("note_hashtags", { value, object_id: publicNote.id, cdate: cdate(110) });
     }
   }

@@ -198,10 +198,11 @@ describe("convert and verify-conversion", () => {
     });
     expect(times("a reply to alice")).toEqual({ published_at: "2024-03-01T11:59:00.000Z", edited_at: null });
     expect(times("lost its original id")).toMatchObject({ edited_at: "2024-03-01T12:15:00.000Z" });
-    // Hashtags as Kopje names them (Mastodon's HashtagNormalizer), once each: NFKC, lowercase, folded to ASCII, and
-    // every number sign dropped, from a received Hashtag's name and from legacy's recorded names alike.
+    // Hashtags as Kopje names them (normalizeTag, Mastodon's HashtagNormalizer to its fixed point), once each: NFKC,
+    // lowercase, folded to ASCII, every number sign dropped, and what is left composed, from a received Hashtag's
+    // name and from legacy's recorded names alike.
     expect(value("SELECT group_concat(name) FROM (SELECT name FROM status_tags ORDER BY name)")).toBe(
-      "bare,cafe,cats,cats,double,foo,full,hash,small,wide,wildebeest",
+      "bare,cafe,cats,cats,double,foo,full,hash,small,wide,wildebeest,\uAC00,\uAC01",
     );
     // A hashtag is listed on hashtag timelines exactly when its status is public.
     expect(
