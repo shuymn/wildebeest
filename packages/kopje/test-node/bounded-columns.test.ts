@@ -44,7 +44,7 @@ import {
 
 type Bounded = { table: string; column: string; helpers: readonly string[] };
 
-export const BOUNDED: readonly Bounded[] = [
+const BOUNDED: readonly Bounded[] = [
   { table: "accounts", column: "username", helpers: ["usernameSql"] },
   { table: "accounts", column: "uri", helpers: ["actorUriSql"] },
   { table: "statuses", column: "uri", helpers: ["statusUriSql"] },
@@ -190,7 +190,7 @@ function readsOf(list: readonly string[], tables: Map<string, string>): string[]
 
 const WRITES = new Set(["INSERT", "UPDATE", "DELETE", "REPLACE"]);
 
-export function boundedReads(sql: string): string[] {
+function boundedReads(sql: string): string[] {
   const list = tokens(sql);
   const found: string[] = [];
   const write = list.some((t, i) => WRITES.has(t.toUpperCase()) && list[i - 1]?.toUpperCase() !== "DO");
@@ -383,7 +383,7 @@ const SAFE_INTERPOLATIONS = new Set([
   "remoteFieldLinksPastBoundSql",
   "remoteLinkBackPastBoundSql",
 
-  // A remote account's attachment, bounded as REMOTE_ATTACHMENT_SQL (domain/accounts.ts), cutSql within it.
+  // A remote account's attachment, bounded as REMOTE_ATTACHMENT_SQL (domain/account-columns.ts), cutSql within it.
   "remoteAttachmentSql",
   // Whether an Idempotency-Key's row is within its hour: a predicate over isoTimeSql (domain/statuses.ts).
   "keyFreshSql",
@@ -418,7 +418,7 @@ const SAFE_INTERPOLATIONS = new Set([
 const SQL_TEXT = /\b(?:SELECT|FROM|WHERE|RETURNING|INSERT|UPDATE)\b/i;
 
 // The findings of the file header; misuses are helper calls given a column the helper does not bound.
-export function scan(all: readonly Source[]): { reads: Finding[]; misuses: Finding[] } {
+function scan(all: readonly Source[]): { reads: Finding[]; misuses: Finding[] } {
   const local = new Map<string, [string, Literal]>();
   const global = new Map<string, [string, Literal] | null>();
   for (const source of all) {
@@ -594,25 +594,28 @@ const ALLOWED: Record<string, { count: number; reason: string }> = {
   "src/domain/web-pages/status.ts column au.username": { count: 1, reason: LOCAL },
   "src/domain/windows.ts interpolation highest": { count: 1, reason: WINDOW },
   "src/domain/windows.ts interpolation end": { count: 1, reason: WINDOW },
-  "src/domain/accounts.ts accounts.uri": { count: 4, reason: IDENTITY },
+  "src/domain/account-actions.ts accounts.uri": { count: 4, reason: IDENTITY },
   // remoteAttachmentSql's own parts: an attachment entry (cutSql's name and value) and its src, a fixed column name,
   // naming no bounded column.
-  "src/domain/accounts.ts interpolation entry": { count: 1, reason: REMOTE_ATTACHMENT },
-  "src/domain/accounts.ts interpolation eligibility ? ', c.src' : ''": { count: 1, reason: REMOTE_ATTACHMENT },
-  "src/domain/accounts.ts interpolation src": { count: 1, reason: REMOTE_ATTACHMENT },
-  "src/domain/accounts.ts interpolation REMOTE_FIELD_LINKS_BYTES": {
+  "src/domain/account-columns.ts interpolation entry": { count: 1, reason: REMOTE_ATTACHMENT },
+  "src/domain/account-columns.ts interpolation eligibility ? ', c.src' : ''": { count: 1, reason: REMOTE_ATTACHMENT },
+  "src/domain/account-columns.ts interpolation src": { count: 1, reason: REMOTE_ATTACHMENT },
+  "src/domain/account-columns.ts interpolation REMOTE_FIELD_LINKS_BYTES": {
     count: 1,
     reason: "a number constant (remote_field_links.links bound, REMOTE_VERIFIED_SQL), naming no column",
   },
-  "src/domain/activities.ts statuses.uri": { count: 5, reason: ACTIVITYPUB },
-  "src/domain/activities.ts accounts.uri": { count: 5, reason: ACTIVITYPUB },
+  "src/domain/activities.ts statuses.uri": { count: 2, reason: ACTIVITYPUB },
+  "src/domain/activities.ts accounts.uri": { count: 3, reason: ACTIVITYPUB },
+  "src/domain/local-notes.ts statuses.uri": { count: 3, reason: ACTIVITYPUB },
+  "src/domain/local-notes.ts accounts.uri": { count: 2, reason: ACTIVITYPUB },
   "src/domain/actor-update.ts accounts.uri": { count: 1, reason: ACTIVITYPUB },
   "src/domain/actors.ts accounts.uri": { count: 2, reason: ACTIVITYPUB },
   "src/domain/blocks.ts accounts.uri": { count: 2, reason: IDENTITY },
   // The fourth: a staged retraction compares a uri past TARGET_CHUNK_BYTES with the activity's named ones in SQL.
   "src/domain/deliveries.ts accounts.uri": { count: 4, reason: IDENTITY },
   "src/domain/featured-tags.ts accounts.uri": { count: 1, reason: IDENTITY },
-  "src/domain/inbox.ts accounts.uri": { count: 7, reason: IDENTITY },
+  "src/domain/inbox.ts accounts.uri": { count: 5, reason: IDENTITY },
+  "src/domain/remote-actors.ts accounts.uri": { count: 2, reason: IDENTITY },
   "src/domain/inbox.ts statuses.uri": { count: 2, reason: IDENTITY },
   "src/domain/local-emojis.ts accounts.uri": { count: 1, reason: IDENTITY },
   "src/domain/media.ts accounts.uri": { count: 1, reason: IDENTITY },
@@ -628,10 +631,11 @@ const ALLOWED: Record<string, { count: number; reason: string }> = {
   "src/domain/status-actions.ts statuses.uri": { count: 1, reason: IDENTITY },
   "src/domain/statuses.ts accounts.uri": { count: 5, reason: IDENTITY },
   "src/domain/statuses.ts statuses.uri": { count: 7, reason: IDENTITY },
+  "src/domain/account-actions.ts accounts.username": { count: 1, reason: LOCAL },
   "src/domain/accounts.ts accounts.username": {
-    count: 3,
-    reason: `${LOCAL}; and the username an address names as stored (addressRow), bounded by the address it matched and
-			stored only as contact_username, never presented`,
+    count: 2,
+    reason: `the username an address names as stored (addressRow), bounded by the address it matched and stored only as
+			contact_username, never presented`,
   },
   "src/domain/activities.ts accounts.username": { count: 1, reason: ACTIVITYPUB },
   "src/domain/actor-update.ts accounts.username": { count: 1, reason: ACTIVITYPUB },

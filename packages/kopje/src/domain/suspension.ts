@@ -5,6 +5,7 @@ import { type ReachedAccount, reachFollowers, reachFollowing, reachMentioned } f
 import type { Admin } from "./auth";
 import { beginStagedUpdate, endStaging, isDeliverableInbox, stageTargets } from "./deliveries";
 import { JOB_BOOKKEEPING_ROWS, MODERATION_JOBS, nextJob, REMOTE_MODERATION_JOBS, runJobItem } from "./job-attempts";
+import { REPORT_ROUND } from "./moderation-bounds";
 import { logAction } from "./moderation-log";
 import { writeOperation } from "./operation";
 import { remoteModerationRound } from "./remote-suspension";
@@ -48,21 +49,14 @@ import { forgetActorSnapshots } from "./snapshot";
 // Rows a tokens round writes at most (push deliveries, subscriptions and tokens, cascades included, its job, and its
 // retry state's row, job-attempts.ts JOB_BOOKKEEPING_ROWS).
 export const TOKEN_ROUND_ROWS = 200;
-// Reports a suspension round reads at most.
-export const REPORT_ROUND = 100;
 // Rows a staging round reads at most, and staged inboxes a writing round reads (and deletes) at most.
 export const REACH_ROUND = 500;
 // Reporters a staging round reads at most: a seek and an account read each, REACH_ROUND rows.
 export const REPORTER_ROUND = REACH_ROUND / 2;
 // AccountReachFinder's limits.
-export const STATUS_LIMIT = 200;
-export const RECENT_LIMIT = 2_000;
+const STATUS_LIMIT = 200;
+const RECENT_LIMIT = 2_000;
 export const RECENT_MS = 2 * 24 * 60 * 60 * 1000;
-// Rows any round writes at most: REACH_ROUND staged inboxes (or their deletion), the chunks they make, the job's own
-// rows (its update or delete, and its Update's release), and its retry state's row (JOB_BOOKKEEPING_ROWS). A staging or
-// writing round stays below it by construction (test/admin-suspension.test.ts measures it, a due retry's reset
-// included); a severing round reserves the row from its budget (remote-suspension.ts).
-export const MODERATION_ROUND_ROWS = 600;
 // Rounds one runModerationJobs call runs at most.
 export const MODERATION_ROUNDS = 4;
 
@@ -97,7 +91,7 @@ type Job = {
 // A job's persisted cursor and counts: the last report, follow, status or mention read, the oldest status the
 // mentions walk reads, and what each capped source has given.
 type JobState = {
-  cursor?: string | number;
+  cursor?: string | number | undefined;
   mention?: string | null;
   low?: string | null;
   statuses?: number;

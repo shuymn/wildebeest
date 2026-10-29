@@ -38,7 +38,7 @@ export type AuthorSignature = { activity: Record<string, unknown>; keyId: string
 
 // The bearer token's digest and the scope the route declares, set by the access middleware (mastodon/access.ts) on
 // every API route: null on a public route. It is not validated there; the Store validates it in the operation.
-export type RequestCredential = { tokenHash: string; scope: RequiredScope | null };
+type RequestCredential = { tokenHash: string; scope: RequiredScope | null };
 
 export type ApiEnv = { Bindings: Env; Variables: { credential: RequestCredential | null } };
 
@@ -111,7 +111,10 @@ export function authorized<O>(result: Authorized<O>): O {
 // Bearer challenge.
 function authError(failure: AuthFailure["status"]): HTTPException {
   const { status, message } = AUTH_ERRORS[failure];
-  return new HTTPException(status, { message, res: failure === "unauthenticated" ? invalidTokenError() : undefined });
+  return new HTTPException(status, {
+    message,
+    ...(failure === "unauthenticated" ? { res: invalidTokenError() } : {}),
+  });
 }
 
 // A request error the Worker found before calling the Store. Mastodon authenticates first, so a request with a bad

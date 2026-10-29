@@ -2,7 +2,8 @@ import { runInDurableObject } from "cloudflare:test";
 import { describe, expect, it } from "vitest";
 
 import { Db } from "../src/db/sql";
-import { MAX_RETRACTIONS_PER_ACTOR, PURGE_BATCH, purgeBatch, SWEEP_BATCH } from "../src/domain/inbox";
+import { MAX_RETRACTIONS_PER_ACTOR, PURGE_BATCH, purgeBatch } from "../src/domain/inbox";
+import { SWEEP_BATCH } from "../src/domain/remote-actors";
 import {
   BudgetExceededError,
   createSafeLoader,

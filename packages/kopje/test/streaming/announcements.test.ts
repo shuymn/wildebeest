@@ -9,7 +9,7 @@ import {
   unpublishAnnouncement,
   updateAnnouncement,
 } from "../../src/domain/announcements";
-import { streamAnnouncement } from "../../src/domain/streaming";
+import { streamAnnouncement } from "../../src/domain/stream-journal";
 import { sha256Hex } from "../../src/security/tokens";
 import { STREAM_LIMITS } from "../../src/stream-hub";
 import {
@@ -63,7 +63,7 @@ describe("announcement events on user", () => {
     expect(first).toMatchObject({ stream: ["user"], event: "announcement" });
     const listed = await getJson<Record<string, unknown>[]>(h, "/api/v1/announcements", h.users.alice.token);
     expect(JSON.parse(first!.payload!)).toEqual(unviewed(listed.body[0]!));
-    expect(Object.keys(JSON.parse(first!.payload!))).not.toContain("read");
+    expect(Object.keys(JSON.parse(first!.payload!) as object)).not.toContain("read");
     await inbox.next((m) => m.event === "announcement");
 
     // A reaction, then its removal: the count goes to 0 with no image.

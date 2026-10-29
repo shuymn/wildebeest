@@ -1,13 +1,8 @@
 import { describe, expect, it } from "vitest";
 
 import { selectSql } from "../src/db/columns";
-import {
-  ACCOUNT_COLUMN_MAP,
-  ACCOUNT_FROM,
-  type Field,
-  MAX_REMOTE_FIELDS,
-  REMOTE_FIELDS_BYTES,
-} from "../src/domain/accounts";
+import { ACCOUNT_COLUMN_MAP, MAX_REMOTE_FIELDS, REMOTE_FIELDS_BYTES } from "../src/domain/account-columns";
+import { ACCOUNT_FROM, type Field } from "../src/domain/accounts";
 import { ANSWER_BYTES } from "../src/domain/answer-budget";
 import { MAX_LIST_MEMBERS_ANSWERED } from "../src/domain/lists";
 import { utf8Length } from "../src/platform/dump-format";
@@ -110,7 +105,7 @@ describe("remote profile fields are projected bounded (RES-2)", () => {
       `/api/v1/accounts/${ALICE}/followers?limit=80`,
     );
     expect(page.body).toHaveLength(80);
-    expect(page.body.map((account) => account.fields.length).sort((x, y) => x - y)).toEqual([
+    expect(page.body.map((account) => account.fields.length).toSorted((x, y) => x - y)).toEqual([
       ...Array.from({ length: 40 }, () => 3),
       ...Array.from({ length: 40 }, () => MAX_REMOTE_FIELDS),
     ]);

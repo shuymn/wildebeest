@@ -9,3 +9,4 @@ lefthook-local.yml
 /.claude/skills/
 packages/kopje/browser/.pages/
 packages/kopje/browser/.results/
+/coverage/

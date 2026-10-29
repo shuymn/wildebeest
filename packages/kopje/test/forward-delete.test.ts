@@ -19,12 +19,12 @@ import {
   FORWARD_BODY_MAX,
   JOB_BATCHES_PER_RUN,
   MAX_FORWARD_OWNERS,
-  SWEEP_BATCH,
   PURGE_BATCH,
   purgeBatch,
-  type ReceiveResult,
   receiveActivity,
+  type ReceiveResult,
 } from "../src/domain/inbox";
+import { SWEEP_BATCH } from "../src/domain/remote-actors";
 import { verifyAuthorProof } from "../src/federation/author-proof";
 import { deliveryRound } from "../src/jobs/deliver";
 import { MAX_JSON_DEPTH, withinJsonBounds } from "../src/platform/json-bounds";
@@ -269,7 +269,7 @@ describe("the forward of a proven Delete through a local boost", () => {
     await jobs(w.t.store);
     const sent = await deliver(w);
     const forwarded = sent.filter((s) => s.json.type === "Delete");
-    expect(forwarded.map((s) => s.inbox).sort()).toEqual([`${FANS}/inbox`, `${MASTODON}/inbox`, RECEIPTS]);
+    expect(forwarded.map((s) => s.inbox).toSorted()).toEqual([`${FANS}/inbox`, `${MASTODON}/inbox`, RECEIPTS]);
     for (const s of forwarded) {
       expect(s.body).toBe(JSON.stringify(body));
       expect(s.signer).toBe(ALICE_URI);
@@ -680,7 +680,7 @@ describe("a forward has a subject of its own", () => {
       sent
         .filter((s) => s.json.id === first.id)
         .map((s) => s.inbox)
-        .sort(),
+        .toSorted(),
     ).toEqual([`${FANS}/inbox`, `${MASTODON}/inbox`, RECEIPTS]);
     expect(sent.filter((s) => s.json.id === second.id).map((s) => s.inbox)).toContain(`${FANS}/inbox`);
     expect(await sql(w.t.store, "SELECT count(*) AS n FROM deliveries")).toEqual([{ n: 0 }]);
@@ -713,7 +713,7 @@ describe("a forward has a subject of its own", () => {
     expect(await forwards(w.t.store, o.uri)).toMatchObject([{ staged: "", superseded: 0 }]);
     await jobs(w.t.store);
     const sent = (await deliver(w)).filter((s) => s.json.type === "Delete");
-    expect(sent.map((s) => s.inbox).sort()).toEqual([`${FANS}/inbox`, `${MASTODON}/inbox`, RECEIPTS]);
+    expect(sent.map((s) => s.inbox).toSorted()).toEqual([`${FANS}/inbox`, `${MASTODON}/inbox`, RECEIPTS]);
   });
 });
 
@@ -1069,7 +1069,9 @@ describe("the body from the request to the POST", () => {
     expect(await forwards(w.t.store, o.uri)).toHaveLength(1);
     await jobs(w.t.store);
     const sent = (await deliver(w)).filter((d) => d.json.type === "Delete");
-    expect(sent.map((d) => d.inbox).sort()).toEqual([`${FANS}/inbox`, `${MASTODON}/inbox`, personal, RECEIPTS].sort());
+    expect(sent.map((d) => d.inbox).toSorted()).toEqual(
+      [`${FANS}/inbox`, `${MASTODON}/inbox`, personal, RECEIPTS].toSorted(),
+    );
     for (const d of sent) {
       expect(d.body).toBe(s);
       const expected = { id: signed.id as string, actor: w.bob.uri, object: o.uri };
@@ -1095,7 +1097,9 @@ describe("the body from the request to the POST", () => {
     expect(JSON.parse((await forwards(w.t.store, o.uri))[0]!.body)).toMatchObject({ immutable: true });
     await jobs(w.t.store);
     const sent = (await deliver(w)).filter((d) => d.json.type === "Delete");
-    expect(sent.map((d) => d.inbox).sort()).toEqual([`${FANS}/inbox`, `${MASTODON}/inbox`, personal, RECEIPTS].sort());
+    expect(sent.map((d) => d.inbox).toSorted()).toEqual(
+      [`${FANS}/inbox`, `${MASTODON}/inbox`, personal, RECEIPTS].toSorted(),
+    );
     for (const d of sent) {
       expect(d.body).toBe(s);
     }
@@ -1686,7 +1690,7 @@ describe("forwards in a restored store whose intent keys are not positive", () =
     expect(JSON.parse((await jobBound(w.t.store, o.id))!)).toEqual({ forwards: [expected] });
     await jobs(w.t.store);
     const sent = (await deliver(w)).filter((d) => d.json.type === "Delete" && objectOf(d.json) === o.uri);
-    expect(sent.map((d) => d.inbox).sort()).toEqual([`${FANS}/inbox`, `${MASTODON}/inbox`, RECEIPTS]);
+    expect(sent.map((d) => d.inbox).toSorted()).toEqual([`${FANS}/inbox`, `${MASTODON}/inbox`, RECEIPTS]);
   });
 });
 

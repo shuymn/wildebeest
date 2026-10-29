@@ -1,6 +1,5 @@
+import type { CredentialChanges, ProfileImages } from "../domain/account-actions";
 import {
-  type CredentialChanges,
-  type ProfileImages,
   type FieldSource,
   MAX_ACCOUNTS_BY_ID,
   MAX_ATTRIBUTION_DOMAINS,
@@ -149,7 +148,7 @@ export function credentialChanges(p: Params): { changes: CredentialChanges; prob
 
 // Account::AttributionDomains' normalization: each value stripped of surrounding whitespace and of an http://,
 // https:// and *. prefix, blanks dropped, duplicates removed. Values are kept as written otherwise.
-export function normalizeAttributionDomains(values: readonly string[]): string[] {
+function normalizeAttributionDomains(values: readonly string[]): string[] {
   const domains = values
     .map((value) =>
       value
@@ -168,7 +167,7 @@ const DOMAIN_LABEL = /^[a-z0-9-]{1,63}$/;
 // DomainValidator#compliant?: the host, lowercased and IDNA-encoded, shorter than 256 characters, of labels of 1 to 63
 // letters, digits and hyphens (a trailing dot is allowed, as Ruby's split drops the empty label after it). A value
 // with a character a host cannot hold (Addressable::URI::InvalidURIError) is not compliant.
-export function compliantDomain(value: string): boolean {
+function compliantDomain(value: string): boolean {
   let host: string;
   if (/^[\x21-\x7e]*$/.test(value)) {
     host = value.toLowerCase();

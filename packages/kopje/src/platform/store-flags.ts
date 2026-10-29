@@ -17,12 +17,12 @@ import type { OperationKind } from "./store-kernel";
 //                    delivered before publication; only `publish` clears it
 //   published      : set by `publish`; a cutover can no longer be rolled back (docs/cutover-runbook.md)
 
-export type MaintenanceFlag = { mode: "readonly"; at: number };
+type MaintenanceFlag = { mode: "readonly"; at: number };
 
 export type DumpRecord = {
   id: string;
   // The client's own id for this start, so a start whose response was lost can be asked again (and aborted).
-  opId?: string;
+  opId?: string | undefined;
   startedAt: number;
   leaseMs: number;
   leaseUntil: number;
@@ -34,10 +34,10 @@ export type DumpRecord = {
   completed?: { trailer: DumpTrailer; trailerText: string };
 };
 
-export type VerifyProgress = { position: ScanPosition; results: TableResult[] };
+type VerifyProgress = { position: ScanPosition; results: TableResult[] };
 
 // resetting: the imported rows are being deleted (StoreAdmin.importReset); nothing else continues the import.
-export type ImportState = "receiving" | "finished" | "failed" | "resetting";
+type ImportState = "receiving" | "finished" | "failed" | "resetting";
 
 export type ImportRecord = {
   id: string;
@@ -95,7 +95,7 @@ export type OperatorFlags = {
 
 export type PublishedFlag = { at: number };
 
-export const FLAG_NAMES = [
+const FLAG_NAMES = [
   "maintenance",
   "dump",
   "import",

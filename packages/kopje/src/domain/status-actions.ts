@@ -1,4 +1,5 @@
 import type { Db } from "../db/sql";
+import { iso } from "../platform/iso-time";
 import type { Present } from "./accounts";
 import { featuredActivity, PIN_LIMIT, recordOutbound } from "./activities";
 import { announceFeatured } from "./actor-update";
@@ -6,7 +7,7 @@ import { requiresMention, type Visibility } from "./audience";
 import { userWriteOperation } from "./auth";
 import { allocateLocalId } from "./ids";
 import type { Status } from "./status-presenter";
-import { type Acted, iso, presented, viewable } from "./statuses";
+import { type Acted, presented, viewable } from "./statuses";
 
 // The status actions of Mastodon 4.5 that keep a viewer's own choice about a status (R31): pinning it to the
 // profile (Api::V1::Statuses::PinsController, StatusPin) and muting its conversation (Api::V1::Statuses::

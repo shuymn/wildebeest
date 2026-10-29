@@ -41,11 +41,11 @@ import { StoreUnavailableError, toStoreUnavailable } from "../platform/store-err
 // Nothing is ever deleted from R2. Every byte sent to the bucket is ciphertext (DATA-4), and neither secrets nor error
 // messages reach logs, the saved state or health: failures are recorded as fixed reason codes (DATA-5, DATA-9).
 
-export const DUMP_NAME = "dump.kopje.age";
-export const INDEX_NAME = "media-index.json.age";
-export const MANIFEST_NAME = "manifest.json.age";
-export const MANIFEST_FORMAT = "kopje-backup";
-export const INDEX_FORMAT = "kopje-backup-media-index";
+const DUMP_NAME = "dump.kopje.age";
+const INDEX_NAME = "media-index.json.age";
+const MANIFEST_NAME = "manifest.json.age";
+const MANIFEST_FORMAT = "kopje-backup";
+const INDEX_FORMAT = "kopje-backup-media-index";
 
 const MIB = 1024 * 1024;
 // S3 parts are at least 5 MiB except the last.
@@ -71,7 +71,7 @@ export const MAX_MEDIA_PER_RUN = 2000;
 const MAX_MEDIA_BYTES = 64 * MIB;
 const RETRY_MS = 60 * 60 * 1000;
 // Invocations that may die holding one run before it is recorded as failed.
-export const MAX_ATTEMPTS = 3;
+const MAX_ATTEMPTS = 3;
 
 export type BackupFaultPoint =
   | "dump-chunk"
@@ -111,7 +111,7 @@ export type BackupOutcome =
   | "paused"
   | "failed";
 
-export class BackupError extends Error {
+class BackupError extends Error {
   constructor(readonly code: string) {
     super(code);
     this.name = "BackupError";
@@ -130,7 +130,7 @@ class OutOfTime extends Error {}
 const SAFE_CODE = /^[a-z0-9-]{1,64}$/;
 
 // A failure as a fixed code: never an error message, which could carry a URL, a response or a secret.
-export function failureReason(error: unknown): string {
+function failureReason(error: unknown): string {
   if (error instanceof BackupError || error instanceof S3Error) {
     return SAFE_CODE.test(error.message) ? error.message : "unexpected";
   }
@@ -147,7 +147,7 @@ function refusal(prefix: string, code: unknown): BackupError {
   return new BackupError(SAFE_CODE.test(text) ? text : `${prefix}-refused`);
 }
 
-export function utcDate(ms: number): string {
+function utcDate(ms: number): string {
   return new Date(ms).toISOString().slice(0, 10);
 }
 
@@ -155,11 +155,11 @@ function randomHex(bytes: number): string {
   return toHex(crypto.getRandomValues(new Uint8Array(bytes)));
 }
 
-export function backupPrefix(config: BackupConfig): string {
+function backupPrefix(config: BackupConfig): string {
   return `${config.prefix}backups/`;
 }
 
-export function mediaPrefix(config: BackupConfig): string {
+function mediaPrefix(config: BackupConfig): string {
   return `${config.prefix}media/`;
 }
 
@@ -335,7 +335,7 @@ class BackupJob {
   async #fingerprint(): Promise<string> {
     const { endpoint, bucket, region, prefix, recipients } = this.#config;
     return sha256Of(
-      new TextEncoder().encode(JSON.stringify([endpoint, bucket, region, prefix, [...recipients].sort()])),
+      new TextEncoder().encode(JSON.stringify([endpoint, bucket, region, prefix, [...recipients].toSorted()])),
     );
   }
 
@@ -876,15 +876,15 @@ class BackupJob {
     const complete = [...runs]
       .filter(([, entry]) => entry.manifests.length > 0)
       .map(([id]) => id)
-      .sort()
-      .reverse();
+      .toSorted()
+      .toReversed();
     const oldestKept = complete[this.#config.retention - 1];
     if (oldestKept === undefined) {
       return 0;
     }
     await this.#save(() => {});
     let deleted = 0;
-    for (const [id, entry] of [...runs].sort(([a], [b]) => (a < b ? -1 : 1))) {
+    for (const [id, entry] of [...runs].toSorted(([a], [b]) => (a < b ? -1 : 1))) {
       if (id >= oldestKept) {
         continue;
       }

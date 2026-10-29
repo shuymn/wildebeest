@@ -237,9 +237,9 @@ describe("client shapes", () => {
     await quote(h.store, t, t2, "pending");
     const status = await shown(h, q, alice.token);
     const full = status.quote as Record<string, unknown>;
-    expect(Object.keys(full).sort()).toEqual(["quoted_status", "state"]);
+    expect(Object.keys(full).toSorted()).toEqual(["quoted_status", "state"]);
     const embedded = full.quoted_status as Record<string, unknown>;
-    expect(Object.keys(embedded.quote as object).sort()).toEqual(["quoted_status_id", "state"]);
+    expect(Object.keys(embedded.quote as object).toSorted()).toEqual(["quoted_status_id", "state"]);
     expect(embedded.quote).toEqual({ state: "pending", quoted_status_id: null });
     // Ice Cubes' Status: every non-optional field.
     for (const key of [
@@ -289,7 +289,7 @@ describe("GET /api/v1/statuses/:id/quotes", () => {
     }
     const pending = await seedStatus(h.store, { accountId: rem, visibility: "public" });
     await quote(h.store, pending, t, "pending");
-    const newest = [...quotes].reverse();
+    const newest = [...quotes].toReversed();
     expect(await list(h, `/api/v1/statuses/${t}/quotes`, alice.token)).toMatchObject({ status: 200, ids: newest });
     const first = await list(h, `/api/v1/statuses/${t}/quotes?limit=2`, alice.token);
     expect(first.ids).toEqual(newest.slice(0, 2));

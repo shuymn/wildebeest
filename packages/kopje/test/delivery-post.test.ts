@@ -248,7 +248,7 @@ describe("delivery rounds", () => {
     const { fetch, sent } = recordingFetch(() => new Response(null, { status: 202 }));
     const result = await deliveryRound(testEnv(new QueueSim()), roundDeps(h.store, fetch));
     expect(result).toEqual({ claimed: 2, settled: ["delivered", "delivered"], nextDueAt: null });
-    expect(sent.map((s) => s.url).sort()).toEqual(["https://fans.example/inbox", "https://other.example/inbox"]);
+    expect(sent.map((s) => s.url).toSorted()).toEqual(["https://fans.example/inbox", "https://other.example/inbox"]);
     for (const { request } of sent) {
       expect(await verifyRequestDetailed(request, { documentLoader: aliceLoader(LEGACY.pubkey) })).toMatchObject({
         verified: true,
@@ -266,7 +266,7 @@ describe("delivery rounds", () => {
       (request) => new Response(null, { status: new URL(request.url).origin === "https://fans.example" ? 503 : 202 }),
     );
     const result = await deliveryRound(testEnv(new QueueSim()), roundDeps(h.store, fetch));
-    expect(result.settled.sort()).toEqual(["delivered", "retry"]);
+    expect(result.settled.toSorted()).toEqual(["delivered", "retry"]);
     expect(result.nextDueAt).toBe(NOW + 60_000);
     expect(await sql(h.store, "SELECT inbox_url, state, last_status FROM deliveries")).toEqual([
       { inbox_url: "https://fans.example/inbox", state: "pending", last_status: 503 },

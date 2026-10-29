@@ -1,6 +1,7 @@
 import { selectSql } from "../db/columns";
 import { MEDIA_ID_INDEX } from "../db/indexes";
 import type { Db } from "../db/sql";
+import { iso } from "../platform/iso-time";
 import { storedApplicationId } from "../platform/stored-bounds";
 import type { Page, PageQuery } from "./accounts";
 import {
@@ -19,11 +20,8 @@ import { checkPoll, isPollInput, type PollInput } from "./polls";
 import { type MediaAttachment, type MediaRow, presentMedia, type Status } from "./status-presenter";
 import { MEDIA_COLUMN_MAP } from "./status-rows";
 import {
-  ABOVE_EVERY_ID,
-  BELOW_EVERY_ID,
   type CreateStatusInput,
   type CreateStatusResult,
-  iso,
   isPrepared,
   keyCutoff,
   keyFreshSql,
@@ -32,9 +30,9 @@ import {
   postNow,
   preparePost,
   refusedPost,
-  statusCursor,
   writePost,
 } from "./statuses";
+import { ABOVE_EVERY_ID, BELOW_EVERY_ID, statusCursor } from "./windows";
 
 // Scheduled statuses (Mastodon 4.5's ScheduledStatus, PostStatusService#schedule_status!,
 // Api::V1::ScheduledStatusesController and PublishScheduledStatusWorker). A post sent with a future scheduled_at is
@@ -47,12 +45,12 @@ import {
 // ScheduledStatus::TOTAL_LIMIT, DAILY_LIMIT and MINIMUM_OFFSET.
 export const TOTAL_LIMIT = 300;
 export const DAILY_LIMIT = 25;
-export const MINIMUM_OFFSET_MS = 5 * 60 * 1000;
+const MINIMUM_OFFSET_MS = 5 * 60 * 1000;
 
 // The bound of a stored params document (RES-1), as the schema checks it. What it holds is bounded before (the status
 // text's raw bound, at most four media ids, a parent id, a language tag) far under it, but for allowed_mentions, which
 // may be as long as the request: a document past the bound is refused as "Record invalid".
-export const MAX_PARAMS_BYTES = 128 * 1024;
+const MAX_PARAMS_BYTES = 128 * 1024;
 
 // At most this many scheduled statuses are published per cron run (RES-6), each in its own transaction.
 export const PUBLISH_ROUND = 25;
@@ -83,7 +81,7 @@ export type ScheduledParams = {
   quote_approval_policy: QuotePolicyName;
 };
 
-export type ScheduledPoll = { options: string[]; expires_in: string; multiple: boolean; hide_totals: boolean };
+type ScheduledPoll = { options: string[]; expires_in: string; multiple: boolean; hide_totals: boolean };
 
 // REST::ScheduledStatusSerializer.
 export type ScheduledStatus = {
@@ -301,7 +299,7 @@ function isTime(at: string): boolean {
   return /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/.test(at) && !Number.isNaN(Date.parse(at));
 }
 
-export type ScheduleInput = CreateStatusInput & { scheduledAt?: string };
+export type ScheduleInput = CreateStatusInput & { scheduledAt?: string | undefined };
 
 export type ScheduleResult = CreateStatusResult | { status: "scheduled"; value: ScheduledStatus };
 

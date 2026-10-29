@@ -66,6 +66,7 @@ import {
   tagName,
   TREND_HISTORY_ROWS,
 } from "./tags";
+import { TREND_LANGUAGES_JSON } from "./trend-languages";
 
 // Trends (migrations 0057_trends and 0071_link_trends), as Mastodon 4.5 works them out (app/models/trends/
 // {tags,statuses,links}.rb): the hashtags, statuses and links that trend, scored every 5 minutes by the cron's round
@@ -80,30 +81,6 @@ import {
 // public boosts by available accounts (VIS-12); a listed link shows its qualifying public copy's card. Deviations:
 // MD-5 (docs/mastodon-deviations.md).
 
-// SUPPORTED_LOCALES of Mastodon's LanguagesHelper (app/helpers/languages_helper.rb:4-226): ISO_639_1 (184 keys),
-// ISO_639_1_REGIONAL (4) and ISO_639_3 (22), the languages a status may trend in (valid_locale?). Not the list of
-// GET /api/v1/instance/languages, nor the Accept-Language preference.
-export const TREND_LANGUAGES: ReadonlySet<string> = new Set([
-  ..."aa ab ae af ak am an ar as av ay az ba be bg bh bi bm bn bo br bs ca ce ch co cr cs cu cv cy da de dv dz ee el en eo".split(
-    " ",
-  ),
-  ..."es et eu fa ff fi fj fo fr fy ga gd gl gu gv ha he hi ho hr ht hu hy hz ia id ie ig ii ik io is it iu ja jv ka kg ki".split(
-    " ",
-  ),
-  ..."kj kk kl km kn ko kr ks ku kv kw ky la lb lg li ln lo lt lu lv mg mh mi mk ml mn mn-Mong mr ms ms-Arab mt my na nb".split(
-    " ",
-  ),
-  ..."nd ne ng nl nn no nr nv ny oc oj om or os pa pi pl ps pt qu rm rn ro ru rw sa sc sd se sg si sk sl sn so sq sr ss st".split(
-    " ",
-  ),
-  ..."su sv sw ta te tg th ti tk tl tn to tr ts tt tw ty ug uk ur uz ve vi vo wa wo xh yi yo za zh zu".split(" "),
-  ..."zh-CN zh-HK zh-TW zh-YUE".split(" "),
-  ..."ast chr ckb cnr csb gsw jbo kab ldn lfn moh nds pdc sco sma smj szl tok vai xal zba zgh".split(" "),
-]);
-
-// The parameter value trendableStatusSql's `langs` takes.
-export const TREND_LANGUAGES_JSON = JSON.stringify([...TREND_LANGUAGES]);
-
 const HOUR_MS = 3_600_000;
 const DAY_MS = 24 * HOUR_MS;
 
@@ -114,13 +91,13 @@ export const TREND_TAGS_MAX_LIMIT = 20;
 export const TREND_STATUSES_LIMIT = 20;
 export const TREND_STATUSES_MAX_LIMIT = 40;
 // Trends::Tags and Trends::Statuses default_options (app/models/trends/tags.rb:8-14, statuses.rb:8-13).
-export const TAG_THRESHOLD = 5;
-export const TAG_COOLDOWN_MS = 2 * DAY_MS;
-export const TAG_HALFLIFE_MS = 4 * HOUR_MS;
-export const TAG_DECAY_THRESHOLD = 1;
-export const STATUS_THRESHOLD = 5;
-export const STATUS_HALFLIFE_MS = HOUR_MS;
-export const STATUS_DECAY_THRESHOLD = 0.3;
+const TAG_THRESHOLD = 5;
+const TAG_COOLDOWN_MS = 2 * DAY_MS;
+const TAG_HALFLIFE_MS = 4 * HOUR_MS;
+const TAG_DECAY_THRESHOLD = 1;
+const STATUS_THRESHOLD = 5;
+const STATUS_HALFLIFE_MS = HOUR_MS;
+const STATUS_DECAY_THRESHOLD = 0.3;
 // The round's windows (RES-7, MD-5): the newest TREND_WINDOW public originals with ids from yesterday 00:00 UTC; at
 // most MAX_STATUS_TAGS hashtag rows of each and TREND_TAG_ROWS in all, cut raw before any rule; the
 // TREND_TAG_CANDIDATES hashtags with the most accounts today; the TREND_STATUS_CANDIDATES statuses with the most boosts
@@ -131,13 +108,13 @@ export const TREND_TAG_ROWS = 8000;
 export const TREND_TAG_CANDIDATES = 400;
 export const TREND_TAG_GROUPS = TREND_TAG_ROWS / TAG_THRESHOLD;
 export const TREND_STATUS_CANDIDATES = 400;
-export const TREND_OBSERVED_MAX = 10_000_000;
+const TREND_OBSERVED_MAX = 10_000_000;
 
 // Trends::Links default_options (links.rb:8-14); review_threshold is unused (no e-mail, MD-5).
 export const LINK_THRESHOLD = 5;
-export const LINK_COOLDOWN_MS = 2 * DAY_MS;
-export const LINK_HALFLIFE_MS = 8 * HOUR_MS;
-export const LINK_DECAY_THRESHOLD = 1;
+const LINK_COOLDOWN_MS = 2 * DAY_MS;
+const LINK_HALFLIFE_MS = 8 * HOUR_MS;
+const LINK_DECAY_THRESHOLD = 1;
 // The round's link windows (RES-7, MD-5): the public boosts read (TREND_LINK_BOOSTS, TREND_LINK_BOOSTS_PER_STATUS of
 // each original), the TREND_LINK_CANDIDATES links with the most accounts today, and the TREND_LINK_COPIES newest
 // public copies of a link its qualifying copy is chosen among. At most TREND_WINDOW + TREND_LINK_BOOSTS contributions
@@ -191,12 +168,12 @@ export function tagReviewedSql(name: string): string {
 }
 
 // Whether the trend_tags row `t` is allowed: its review, else `byDefault` (an expression, 0 or 1).
-export function trendAllowedTagSql(t: string, byDefault: string): string {
+function trendAllowedTagSql(t: string, byDefault: string): string {
   return `coalesce((SELECT r.trendable FROM tag_trend_reviews r WHERE r.name = ${t}.name), ${byDefault}) = 1`;
 }
 
 // Whether the trend_statuses row `t` is allowed: the status's review, else its author's, else `byDefault`.
-export function trendAllowedStatusSql(t: string, byDefault: string): string {
+function trendAllowedStatusSql(t: string, byDefault: string): string {
   return `coalesce((SELECT r.trendable FROM status_trend_reviews r WHERE r.status_id = ${t}.status_id),
 		(SELECT r.trendable FROM account_trend_reviews r WHERE r.account_id = ${t}.account_id), ${byDefault}) = 1`;
 }
@@ -327,7 +304,7 @@ function keepPools<T extends ScoredRow>(
   const byKey = (a: T, b: T) => (a.key < b.key ? -1 : a.key > b.key ? 1 : 0);
   const allowedPool = survivors
     .filter(allowed)
-    .sort((a, b) => {
+    .toSorted((a, b) => {
       const first = Number(listed(b)) - Number(listed(a));
       if (first !== 0) {
         return first;
@@ -337,7 +314,7 @@ function keepPools<T extends ScoredRow>(
     .slice(0, TREND_ALLOWED_ROWS);
   const reviewPool = survivors
     .filter((t) => !allowed(t))
-    .sort((a, b) => Number(a.review !== null) - Number(b.review !== null) || b.score - a.score || byKey(a, b))
+    .toSorted((a, b) => Number(a.review !== null) - Number(b.review !== null) || b.score - a.score || byKey(a, b))
     .slice(0, TREND_REVIEW_POOL);
   return [...allowedPool, ...reviewPool];
 }
@@ -496,7 +473,7 @@ function roundStatuses(db: Db, now: number, byDefault: boolean): number {
       allowed: (c.status_review ?? c.account_review ?? (byDefault ? 1 : 0)) === 1,
     }))
     .filter((c) => c.score >= STATUS_DECAY_THRESHOLD)
-    .sort((a, b) => b.score - a.score || (a.id < b.id ? 1 : a.id > b.id ? -1 : 0));
+    .toSorted((a, b) => b.score - a.score || (a.id < b.id ? 1 : a.id > b.id ? -1 : 0));
   type Scored = (typeof scored)[number];
   // Each author's maximum (StatusTrend.allowed lists the author's top-scoring rows that are allowed): the rows tied at
   // it are its top group, met first. Its witness is the first allowed row of the group, else its first unreviewed row,
@@ -520,7 +497,7 @@ function roundStatuses(db: Db, now: number, byDefault: boolean): number {
   const kept: Scored[] = [];
   const fill = (rows: Scored[]) => {
     const allowed = rows.filter((c) => c.allowed);
-    const review = rows.filter((c) => !c.allowed).sort(order);
+    const review = rows.filter((c) => !c.allowed).toSorted(order);
     for (const [pool, list, cap] of [
       ["allowed", allowed, TREND_ALLOWED_ROWS],
       ["review", review, TREND_REVIEW_POOL],

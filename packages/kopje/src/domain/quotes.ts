@@ -1,5 +1,6 @@
 import { ACCOUNTS_ID_INDEX, QUOTES_STATUS_INDEX, STATUSES_ID_INDEX, STATUSES_URI_INDEX } from "../db/indexes";
 import type { Db } from "../db/sql";
+import { iso } from "../platform/iso-time";
 import {
   type QuoteRequestRef,
   quoteAnswerActivity,
@@ -20,7 +21,11 @@ import {
   mentionStatusSql,
   type Visibility,
 } from "./audience";
+import { localFollower } from "./follower-signer";
 import { NEW_GENERATION } from "./ids";
+import { JOB_BOOKKEEPING_ROWS, nextJob, QUOTE_REVOCATIONS, runJobItem } from "./job-attempts";
+import { notify } from "./notifications";
+import { readOperation, writeOperation } from "./operation";
 import {
   actorRevision,
   applyRefresh,
@@ -35,21 +40,21 @@ import {
   staleAccount,
   SWEEP_BATCH,
   upsertRemoteActor,
-} from "./inbox";
-import { JOB_BOOKKEEPING_ROWS, nextJob, QUOTE_REVOCATIONS, runJobItem } from "./job-attempts";
-import { notify } from "./notifications";
-import { readOperation, writeOperation } from "./operation";
-import { localFollower } from "./remote-collections";
+} from "./remote-actors";
 import {
   followersUri,
   type RemoteQuoteInput,
   type RemoteStatusInput,
   statusByUri,
-  storeRemoteStatus,
   visibilityOf,
-} from "./remote-statuses";
+} from "./remote-status-reads";
+import type { storeRemoteStatus } from "./remote-statuses";
 import { RowBudget } from "./row-budget";
-import { iso } from "./statuses";
+
+// How a received status is stored: remote-statuses.ts storeRemoteStatus, which its callers pass. Storing a status
+// records its quote here, and a quote fetches and stores its quoted status, at most QUOTE_HOPS deep; this module
+// takes the function rather than importing remote-statuses.ts, which builds on it.
+export type StoreRemoteStatus = typeof storeRemoteStatus;
 
 // Quote posts received from remote servers (Mastodon 4.5's Quote, ActivityPub::Parser::StatusParser's quote
 // properties, ActivityPub::VerifyQuoteService and the Delete of a QuoteAuthorization), stored and verified in the rows
@@ -159,6 +164,7 @@ export function recordQuote(
   quote: RemoteQuoteInput | null | undefined,
   arrival: QuoteArrival,
   ctx: { now: number; origin: string },
+  store: StoreRemoteStatus,
 ): void {
   const named = quote === undefined || quote === null || (!quote.tombstone && quote.uri === status.uri) ? null : quote;
   const existing = db.first<{
@@ -184,7 +190,7 @@ export function recordQuote(
     originOf(embedded.uri) === originOf(status.author.uri) &&
     db.first("SELECT 1 AS x FROM statuses WHERE uri = ?", embedded.uri) === undefined
   ) {
-    storeRemoteStatus(db, status.author, embedded, {
+    store(db, status.author, embedded, {
       now: ctx.now,
       origin: ctx.origin,
       deliveredTo: null,
@@ -244,13 +250,14 @@ export function refreshQuote(
   quote: RemoteQuoteInput | null | undefined,
   arrival: QuoteArrival,
   ctx: { now: number; origin: string },
+  store: StoreRemoteStatus,
 ): void {
   const stored = db.first<{ quoted_uri: string | null }>(
     "SELECT quoted_uri FROM quotes WHERE status_id = ?",
     status.id,
   );
   if (stored !== undefined && quote?.tombstone === false && quote.uri === stored.quoted_uri) {
-    recordQuote(db, status, quote, arrival, ctx);
+    recordQuote(db, status, quote, arrival, ctx, store);
   } else {
     promoteQuote(db, status.id, arrival, ctx.now);
   }
@@ -341,8 +348,8 @@ export type QuoteWork = {
   signer: string | null;
   // The work's generation: the stage's outcome applies only while it is unchanged.
   generation: number;
-  // The author stage's: the author's revision read before its fetch (inbox.ts DocumentRevision), which a refetched
-  // document is stored under (applyRefresh); null for the other stages.
+  // The author stage's: the author's revision read before its fetch (remote-actors.ts DocumentRevision), which a
+  // refetched document is stored under (applyRefresh); null for the other stages.
   authorRevision: DocumentRevision;
 };
 
@@ -610,7 +617,13 @@ function refreshQuoted(
 // refreshQuoted) and ends; one fetching the quoted status stores it, from that fresh fetch, once its author is known
 // and not stale (staleAccount), and otherwise records only the author's address (need_author) for the next stage.
 // Nothing fetched is kept between stages. Returns the linked status, or a stage's end.
-function storeQuoted(db: Db, row: QuoteRow, input: QuoteVerification, keep: QuoteState): Linked | QuoteVerified {
+function storeQuoted(
+  db: Db,
+  row: QuoteRow,
+  input: QuoteVerification,
+  keep: QuoteState,
+  store: StoreRemoteStatus,
+): Linked | QuoteVerified {
   const { now, origin } = input;
   const stored = row.need_author === null ? undefined : remoteAccount(db, row.need_author);
   if (input.author !== undefined && stored !== undefined) {
@@ -676,7 +689,7 @@ function storeQuoted(db: Db, row: QuoteRow, input: QuoteVerification, keep: Quot
   if (authorUri !== row.author_uri && !isDistributable(visibilityOf(status, followersUri(db, author.id)))) {
     return finish(db, row, keep, "done", now);
   }
-  storeRemoteStatus(db, author, status, {
+  store(db, author, status, {
     now,
     origin,
     deliveredTo: null,
@@ -693,7 +706,7 @@ function storeQuoted(db: Db, row: QuoteRow, input: QuoteVerification, keep: Quot
 // pending quote whose stamp is gone is rejected (Mastodon's VerifyQuoteService); one that fails a check stays pending,
 // its work done. Every failure that may pass charges an attempt, a fetch budget or deadline that ran out included,
 // except a stale stored author's refetch, which falls back to the stored account uncharged (refreshQuoted).
-export const completeQuote = writeOperation<QuoteVerification, QuoteVerified>((db, input) => {
+export function verifyQuote(db: Db, input: QuoteVerification, store: StoreRemoteStatus): QuoteVerified {
   const { now } = input;
   const row = quoteRow(db, input.statusId);
   if (
@@ -718,7 +731,7 @@ export const completeQuote = writeOperation<QuoteVerification, QuoteVerified>((d
   // What a stamp that is gone or invalid leaves: a pending quote rejected (gone) or still pending, an accepted one
   // revoked.
   const lost = (gone: boolean): QuoteState => (keep === "accepted" ? "revoked" : gone ? "rejected" : "pending");
-  const found = target ?? storeQuoted(db, row, input, keep);
+  const found = target ?? storeQuoted(db, row, input, keep, store);
   if ("done" in found) {
     return found;
   }
@@ -756,7 +769,7 @@ export const completeQuote = writeOperation<QuoteVerification, QuoteVerified>((d
     return failed(db, row, keep, stamp, input, null);
   }
   return finish(db, row, stampValid(stamp.value, row, quoted) ? "accepted" : lost(false), "done", now);
-});
+}
 
 // A job round's stage that failed in the Store itself (a document it could not store, as one past the row size
 // limit): charged as a failure that may pass, so it is given up after the last retry, and never stops the other quotes
@@ -944,7 +957,7 @@ export function continueRevocations(db: Db, left: () => number, now: number): bo
 
 // Leased pending quotes one relayed Delete marks at most: a bound on its writes, as only quotes whose fetch is in
 // flight match (at most a round's claim each).
-export const MAX_RECHECKED = 100;
+const MAX_RECHECKED = 100;
 
 // A Delete of a stamp relayed by another server without the author's proof (federation/inbound.ts): nothing is revoked
 // on its word, but the quotes of the actor's statuses that name the stamp and could still be accepted by it are checked
@@ -1088,6 +1101,7 @@ export function answerQuoteRequest(
   actor: { id: string; uri: string },
   request: QuoteRequestInput,
   ctx: { now: number; origin: string; deliveredTo: string | null; prefetched: RemoteStatusInput | null | undefined },
+  store: StoreRemoteStatus,
 ): QuoteRequestOutcome {
   const { now } = ctx;
   if (db.first("SELECT 1 AS x FROM quote_requests WHERE activity_uri = ?", request.id) !== undefined) {
@@ -1142,7 +1156,7 @@ export function answerQuoteRequest(
     if (document === null) {
       return { kind: "ignored", reason: "unfetchable" };
     }
-    const stored = storeRemoteStatus(db, actor, document, {
+    const stored = store(db, actor, document, {
       now,
       origin: ctx.origin,
       deliveredTo: ctx.deliveredTo,
@@ -1489,7 +1503,7 @@ function answeredQuote(db: Db, actor: { id: string }, ref: QuoteAnswerRef): Answ
 // so receivers treat it as implicit and recheck the stamp or its absence. Use a random id, never a clock; supersede
 // waiting Updates (deliveries.ts).
 function recordStampUpdate(db: Db, statusId: string, authorId: string, now: number): void {
-  const facts = statusFacts(db, statusId);
+  const facts = statusFacts(db, statusId, noteQuote);
   if (facts !== null) {
     recordOutbound(db, authorId, updateActivity(facts, `quote-${crypto.randomUUID()}`), now);
   }
@@ -1611,7 +1625,7 @@ function revokeLocalStamp(
     recordStampUpdate(db, row.status_id, row.author_id, now);
   }
   if (forward !== null) {
-    const reach = statusReach(db, row.status_id);
+    const reach = statusReach(db, row.status_id, noteQuote);
     recordOutbound(
       db,
       row.author_id,

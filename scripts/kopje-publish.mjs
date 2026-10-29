@@ -9,8 +9,9 @@ const { values, positionals } = parseArgs({
   allowPositionals: true,
   options: { tag: { type: "string" }, "dry-run": { type: "boolean", default: false } },
 });
-if (positionals.length !== 1 || values.tag === undefined) {
+const [tarball] = positionals;
+if (positionals.length !== 1 || tarball === undefined || values.tag === undefined) {
   console.error("usage: node scripts/kopje-publish.mjs <tarball> --tag <dist-tag> [--dry-run]");
   process.exit(2);
 }
-publish({ tarball: positionals[0], tag: values.tag, dryRun: values["dry-run"] });
+publish({ tarball, tag: values.tag, dryRun: values["dry-run"] });

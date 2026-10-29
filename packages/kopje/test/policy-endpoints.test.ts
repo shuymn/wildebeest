@@ -255,7 +255,7 @@ describe("the status read endpoints agree with the model of their rules", () => 
   });
 
   afterAll(() => {
-    expect([...shown].sort()).toEqual(
+    expect([...shown].toSorted()).toEqual(
       [
         "account search",
         "account statuses",
@@ -306,7 +306,7 @@ describe("the status read endpoints agree with the model of their rules", () => 
         "trend links",
         "trends",
         "trends, anonymous",
-      ].sort(),
+      ].toSorted(),
     );
   });
 
@@ -409,7 +409,7 @@ function check(sql: SqlStorage, c: Case): string[] {
     }
   };
 
-  const newestFirst = (statuses: number[]) => [...statuses].sort((a, b) => b - a);
+  const newestFirst = (statuses: number[]) => [...statuses].toSorted((a, b) => b - a);
   // A timeline paged every way (home, a list's): older pages by max_id, LIMIT at a time, and newer pages by min_id
   // from the oldest, two at a time, each page exactly the next of `expected` (newest first), so no page comes back
   // short while statuses remain; and the newest page (since_id) and the next page (min_id) above the middle status.
@@ -453,7 +453,7 @@ function check(sql: SqlStorage, c: Case): string[] {
     compare(
       "min_id",
       walk({ limit: 2, minId: "0" }, (page) => ({ limit: 2, minId: statusId(page[0] ?? 0) })),
-      chunks([...expected].reverse(), 2).map((page) => page.reverse()),
+      chunks([...expected].toReversed(), 2).map((page) => page.toReversed()),
     );
     const middle = expected[Math.floor(expected.length / 2)];
     if (middle !== undefined) {
@@ -664,7 +664,7 @@ function check(sql: SqlStorage, c: Case): string[] {
                 ? edges.favourites
                     .filter((f) => f.status === s && m.listedFor(f.account, null))
                     .map((f) => f.account)
-                    .reverse()
+                    .toReversed()
                 : m.threadQuotes(s);
           if (listed.length > 0) {
             shown.add(endpoint);
@@ -741,8 +741,10 @@ function check(sql: SqlStorage, c: Case): string[] {
           "pinned statuses",
         )?.items ?? []
       ).map((value) => status("pinned statuses", viewer, value, () => true));
-      const pins = world.pins.flatMap((p) => (p.account === a && expected.includes(p.status) ? [p.status] : []));
-      equal(`pinned statuses of ${world.accounts[a]?.name}`, viewer, pinned, pins.reverse());
+      const pins = world.pins
+        .flatMap((p) => (p.account === a && expected.includes(p.status) ? [p.status] : []))
+        .toReversed();
+      equal(`pinned statuses of ${world.accounts[a]?.name}`, viewer, pinned, pins);
       // The profile page's tabs, for a local account: its Posts tab is these statuses less replies to others (a
       // reply whose partner is not the author), boosts included (VIS-6), its first page led by the pins; Posts and
       // replies, its media tab (the posts with media they show) and a hashtag's tab list replies and no boosts. A
@@ -815,7 +817,7 @@ function check(sql: SqlStorage, c: Case): string[] {
         });
         const members = acceptedMembers(owner, direction);
         const expected = m.followListsShown(owner, viewer)
-          ? members.filter((x) => m.followListed(x, owner, viewer)).reverse()
+          ? members.filter((x) => m.followListed(x, owner, viewer)).toReversed()
           : [];
         if (JSON.stringify(actual) !== JSON.stringify(expected)) {
           problems.push(
@@ -833,7 +835,7 @@ function check(sql: SqlStorage, c: Case): string[] {
       const expected = m.endorsementsShown(owner)
         ? acceptedMembers(owner, "following")
             .filter((x) => account.local && m.endorsementListed(x))
-            .sort((a, b) => b - a)
+            .toSorted((a, b) => b - a)
         : [];
       const api = pages((page) =>
         ok<Page<Account> | null>(
@@ -920,7 +922,7 @@ function check(sql: SqlStorage, c: Case): string[] {
         const expected = shownTo
           ? acceptedMembers(owner, direction)
               .filter((x) => m.available(x))
-              .reverse()
+              .toReversed()
           : [];
         if (listed.length > 0) {
           shown.add(endpoint);
@@ -948,7 +950,7 @@ function check(sql: SqlStorage, c: Case): string[] {
       const expected = list
         .filter((e) => e.account === viewer && m.listable(e.status, viewer))
         .map((e) => e.status)
-        .reverse();
+        .toReversed();
       equal(endpoint, viewer, actual, expected);
     }
 
@@ -1066,7 +1068,7 @@ function check(sql: SqlStorage, c: Case): string[] {
       return accountIndex.get(account.id) ?? -1;
     });
     const findable = world.accounts.flatMap((_, x) => (m.findableBy(x, viewer) ? [x] : []));
-    if (JSON.stringify([...searched].sort((a, b) => a - b)) !== JSON.stringify(findable)) {
+    if (JSON.stringify([...searched].toSorted((a, b) => a - b)) !== JSON.stringify(findable)) {
       problems.push(
         `account search ${nameOf(viewer)}: finds [${searched.map(nameOf).join(" ")}], the model [${findable.map(nameOf).join(" ")}]`,
       );
@@ -1085,7 +1087,7 @@ function check(sql: SqlStorage, c: Case): string[] {
       for (const local of [false, true]) {
         const sequence = world.accounts
           .flatMap((account, x) => (c.discoverable[x] === 1 && (!local || account.local) ? [x] : []))
-          .sort((a, b) => (order === "active" ? lastStatus(b) - lastStatus(a) : 0) || b - a);
+          .toSorted((a, b) => (order === "active" ? lastStatus(b) - lastStatus(a) : 0) || b - a);
         const modelPage = (offset: number, limit: number) =>
           sequence
             .slice(0, DIRECTORY_WINDOW * (offset + limit))
@@ -1280,7 +1282,7 @@ function check(sql: SqlStorage, c: Case): string[] {
       .conversations(seededMention)
       .filter((c) => c.owner === viewer)
       .map((c) => ({ ...c, last: Math.max(...c.statuses) }))
-      .sort((a, b) => b.last - a.last)
+      .toSorted((a, b) => b.last - a.last)
       .map((c) => ({
         accounts: (c.participants.length > 0 ? c.participants : [viewer]).map(accountId),
         last_status: m.visible(c.last, viewer) ? statusId(c.last) : null,

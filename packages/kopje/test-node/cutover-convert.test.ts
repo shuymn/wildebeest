@@ -15,6 +15,7 @@ import {
   opened,
   tampered as tamperedIn,
   failing,
+  rewriteExport,
   verify as verifyWith,
   workspace,
 } from "./cutover-helpers.js";
@@ -453,7 +454,7 @@ describe("convert and verify-conversion", () => {
       legacy.exec(await readFile(join(exportPath, `${table}.sql`), "utf8"));
     }
     const db = await opened(dumpPath);
-    const hex = (sql: string, d: DatabaseSync) => (d.prepare(sql).all() as { k: string }[]).map((r) => r.k).sort();
+    const hex = (sql: string, d: DatabaseSync) => (d.prepare(sql).all() as { k: string }[]).map((r) => r.k).toSorted();
     expect(
       hex("SELECT hex(privkey) || ':' || hex(privkey_salt) || ':' || pubkey AS k FROM local_accounts", db),
     ).toEqual(hex("SELECT hex(privkey) || ':' || hex(privkey_salt) || ':' || pubkey AS k FROM users", legacy));
@@ -633,6 +634,31 @@ describe("domain blocks", () => {
     expect(failing(categories)).toEqual([]);
     expect(report).toMatchObject({ dropped: { "domain_blocks:invalid-domain": 1, accepted: true } });
     expect(verified).toBe(true);
+  });
+});
+
+describe("a legacy object without an internal id", () => {
+  // Legacy's objects.id is a TEXT PRIMARY KEY, which SQLite lets hold NULL. The row is still read, its addressing and
+  // author keyed by String(id) as the converter looks them up.
+  it("converts a remote public Note whose id is NULL, with its attachments", async () => {
+    const exportPath = await exportOf({ level: 39 });
+    const rewritten = await rewriteExport(exportPath, (text) => {
+      const line = text.split("\n").find((l) => l.startsWith('INSERT INTO "objects"') && l.includes("こんにちは"));
+      return line === undefined ? undefined : text.replace(line, line.replace(/VALUES\('[^']*'/, "VALUES(NULL"));
+    });
+    expect(rewritten).toBe(1);
+    // The boosts, favourite and bookmark of the Note name it by the id it lost, so they are dropped.
+    const { ok, dumpPath } = await convert(exportPath, { acceptDeletions: true });
+    expect(ok).toBe(true);
+    const db = await opened(dumpPath);
+    const rows = db
+      .prepare(
+        `SELECT s.visibility, count(m.id) AS media FROM statuses s LEFT JOIN media_attachments m ON m.status_id = s.id
+        WHERE s.content LIKE '%こんにちは%' GROUP BY s.id`,
+      )
+      .all();
+    db.close();
+    expect(rows).toEqual([{ visibility: "public", media: 2 }]);
   });
 });
 

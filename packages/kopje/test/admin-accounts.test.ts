@@ -111,13 +111,13 @@ type Ids = Awaited<ReturnType<typeof world>>["ids"];
 // The ids of a list answer, which must be newest first.
 function idsOf(body: unknown): string[] {
   const ids = (body as AdminAccountBody[]).map((account) => account.id);
-  expect(ids).toEqual([...ids].sort((a, b) => (BigInt(b) > BigInt(a) ? 1 : -1)));
+  expect(ids).toEqual([...ids].toSorted((a, b) => (BigInt(b) > BigInt(a) ? 1 : -1)));
   return ids;
 }
 
 // The named accounts' ids, newest first.
 const expected = (ids: Ids, names: (keyof Ids)[]) =>
-  names.map((name) => ids[name]).sort((a, b) => (BigInt(b) > BigInt(a) ? 1 : -1));
+  names.map((name) => ids[name]).toSorted((a, b) => (BigInt(b) > BigInt(a) ? 1 : -1));
 
 const logRows = (store: StoreStub) =>
   sql<{ account_id: string | null; action: string; target_type: string; target_id: string }>(

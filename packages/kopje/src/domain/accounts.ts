@@ -1,4 +1,4 @@
-import { type ColumnMap, fixedColumns, selectSql } from "../db/columns";
+import { selectSql } from "../db/columns";
 import { ACCOUNTS_ID_INDEX, LOCAL_ACCOUNTS_ID_INDEX } from "../db/indexes";
 import type { Db } from "../db/sql";
 import { DEFAULT_AVATAR, DEFAULT_HEADER } from "../platform/brand-assets";
@@ -7,30 +7,28 @@ import { boundedHref, httpUrl } from "../platform/http-url";
 import { ACTOR_URI_LIMIT, DOMAIN_BYTES, withinIdentityBound } from "../platform/identity-bounds";
 import {
   ACCOUNT_EMOJIS_BYTES,
-  boundedLocalFieldsSql,
-  EMOJI_CACHE_BYTES,
-  emojiCacheSql,
-  byteBoundSql,
-  byteCut,
   cutCodePoints,
   isIsoTime,
-  isoTimeSql,
   MAX_FIELD_NAME,
   MAX_FIELD_VALUE,
   MAX_FIELDS,
-  MOVED_TO_ID_BYTES,
   presentedCountSql,
-  presentedLocalFieldsSql,
-  REMOTE_FIELD_INDEXES,
-  REMOTE_FIELD_LINKS_BYTES,
   REMOTE_VERIFIED_SHOWN,
-  STATIC_URL_LIMIT,
-  storedDisplayName,
-  storedText,
 } from "../platform/stored-bounds";
 import { sanitizeRemoteHtml } from "../security/html";
-import { followActivity, followAnswerActivity, followUri, recordOutbound, undoFollowActivity } from "./activities";
-import { actorSnapshot, recordActorUpdate } from "./actor-update";
+import {
+  ACCOUNT_COLUMN_MAP,
+  FIELD_NAME_LIMIT,
+  FIELD_VALUE_RAW_LIMIT,
+  MOVED_ACCOUNT_COLUMNS,
+  MOVED_CREATED_AT_LIMIT,
+  MOVED_DISPLAY_NAME_LIMIT,
+  MOVED_EMOJIS_BYTES,
+  MOVED_LAST_STATUS_AT_LIMIT,
+  MOVED_URL_LIMIT,
+  REMOTE_FIELDS_BYTES,
+  remoteAttachmentSql,
+} from "./account-columns";
 import { adminAccountIdOnce } from "./admin-authority";
 import { admit, type Admitted, admittedPage, ANSWER_BYTES, ARRAY_ANSWER_BYTES, jsonBytes } from "./answer-budget";
 import {
@@ -41,12 +39,10 @@ import {
   domainBlocksSql,
   filteredForSql,
   findableBySql,
-  followableBySql,
   followListedSql,
   followListsShownSql,
   hidesCollectionsSql,
   type QuotePolicyName,
-  REACHES_FOLLOWERS_SQL,
   type ViewerContext,
 } from "./audience";
 import {
@@ -54,31 +50,18 @@ import {
   optionalUserReadOperation,
   OWNER_ROLE,
   type Role,
-  userMediaDeleteOperation,
   userReadOperation,
   userWriteOperation,
 } from "./auth";
-import { type CustomEmoji, emojiCacheOf, localEmojiSnapshot, presentEmojis, referencedEmojis } from "./custom-emojis";
-import { armFieldLinks } from "./field-links";
-import { REMOTE_FIELD_SOURCE_BYTES, remoteFieldLink } from "./field-verification";
-import { retractFollow } from "./inbox";
-import { applyProfileImage, PROFILE_IMAGES, type ProfileImage, profileUploadReady } from "./media";
-import { notify } from "./notifications";
+import { type CustomEmoji, emojiCacheOf, presentEmojis, referencedEmojis } from "./custom-emojis";
+import { remoteFieldLink } from "./field-verification";
 import { readOperation } from "./operation";
-import { htmlToPlainText, plainTextToHtml } from "./plain-text";
-import {
-  actorUriSql,
-  cutSql,
-  DISPLAY_NAME_LIMIT,
-  PROFILE_URL_LIMIT,
-  USERNAME_LIMIT,
-  usernameSql,
-} from "./profile-bounds";
+import { htmlToPlainText } from "./plain-text";
+import { actorUriSql, DISPLAY_NAME_LIMIT, PROFILE_URL_LIMIT, USERNAME_LIMIT, usernameSql } from "./profile-bounds";
 import { type CachedImages, cachedImagesOf, cachedImageUrls } from "./remote-media";
-import { accountSearchText, queryTerms } from "./search-text";
+import { queryTerms } from "./search-text";
 import { linkHtml, renderFieldValue } from "./status-text";
-import { unlockChanged } from "./unlock-accepts";
-import { readWindow, singleWindow, type Window, windowJson, windowPage } from "./windows";
+import { edgeRangeSql, readWindow, singleWindow, type Window, windowJson, windowPage } from "./windows";
 
 // Accounts as the Mastodon API (4.0.2) shows them: one presenter, and the account and relationship operations.
 // Every operation takes an account by its API id or by its legacy id (accounts.legacy_id); both resolve to the same
@@ -126,7 +109,7 @@ export type Account = {
 };
 
 // A role as REST::AccountSerializer::RoleSerializer presents it.
-export type AccountRole = Pick<Role, "id" | "name" | "color">;
+type AccountRole = Pick<Role, "id" | "name" | "color">;
 
 // Mastodon shows only a highlighted role (UserRole#highlighted?): OWNER_ROLE is, EVERYONE_ROLE is not.
 const OWNER_BADGE: AccountRole = { id: OWNER_ROLE.id, name: OWNER_ROLE.name, color: OWNER_ROLE.color };
@@ -230,194 +213,6 @@ export type AccountRow = {
   moved_to_account_id: string | null;
 };
 
-// Fields a remote profile shows: its PropertyValue attachments (ProcessAccountService#property_values), the name as
-// plain text and the value as sanitized HTML (HTML-1, its links http(s) only, HTML-3), as Mastodon renders them.
-// Kopje's bounds (RES-2): at most MAX_REMOTE_FIELDS, names cut at 255 code units, values at FIELD_VALUE_RAW_LIMIT
-// before sanitizing, and REMOTE_FIELDS_BYTES in all. Mastodon keeps more: 50 fields
-// (ActivityPub::ProcessAccountService::MAX_PROFILE_FIELDS) and 2,047 characters of each stripped name and value
-// (Account::Field::MAX_CHARACTERS_COMPAT).
-export const MAX_REMOTE_FIELDS = REMOTE_FIELD_INDEXES;
-const FIELD_NAME_LIMIT = 255;
-const FIELD_VALUE_RAW_LIMIT = 4096;
-// The most UTF-8 bytes of field JSON one account carries: read from SQLite (REMOTE_ATTACHMENT_SQL) and, again, shown
-// (remoteFields). An answer of N presented accounts thus carries at most N × 32 KiB of fields; an answer of many
-// (a list's members with limit=0, familiar followers) at most ANSWER_BYTES in all.
-export const REMOTE_FIELDS_BYTES = 32 * 1024;
-
-// A remote account's attachment as ACCOUNT_COLUMN_MAP projects it, chosen and cut in SQL so that the stored actor
-// document (up to the fetch budget, 2 MiB) never reaches the isolate: a JSON list of {name, value} entries in
-// document order, at most MAX_REMOTE_FIELDS of them, the name cut (cutSql) at FIELD_NAME_LIMIT and the value at
-// FIELD_VALUE_RAW_LIMIT code points, and only the leading entries whose JSON fits REMOTE_FIELDS_BYTES (size: the
-// list's length in bytes once each entry and the ones before it are included). The bound is in bytes because
-// escaping inflates characters up to six times. An entry counts when it is an object whose `type` is
-// 'PropertyValue' or a list holding it and whose name and value are strings; an attachment that is one object
-// counts as a list of one. SQLite counts code points where JavaScript counts code units, so remoteFields cuts again.
-// `eligibility` (ingestion only, remote-field-links.ts): each entry kept by the same filter, order, limit and window
-// (counted on the entry without it) also carries `src`, its original value before any cut, only when Mastodon would
-// read the field (ActivityPub::ProcessAccountService#property_values: an attachment that is an array, a type that is
-// exactly the text 'PropertyValue') and that value is text of at most REMOTE_FIELD_SOURCE_BYTES bytes with no NUL (so
-// within Account::Field::MAX_CHARACTERS_COMPAT, uncut); remoteFieldLink judges it.
-function remoteAttachmentSql({ eligibility }: { eligibility: boolean }): string {
-  const value = "e.value ->> '$.value'";
-  const src = eligibility
-    ? `, CASE WHEN json_type(a.raw, '$.attachment') = 'array' AND json_type(e.value, '$.type') = 'text'
-				AND e.value ->> '$.type' = 'PropertyValue' AND length(CAST(${value} AS BLOB)) <= ${REMOTE_FIELD_SOURCE_BYTES}
-				AND instr(CAST(${value} AS BLOB), x'00') = 0 THEN ${value} END AS src`
-    : "";
-  const entry = eligibility
-    ? "CASE WHEN k.src IS NULL THEN k.entry ELSE json_insert(k.entry, '$.src', k.src) END"
-    : "k.entry";
-  return `CASE WHEN a.domain IS NOT NULL THEN (
-		SELECT '[' || COALESCE(group_concat(${entry}, ',' ORDER BY k.key), '') || ']'
-		FROM (SELECT c.key, c.entry${eligibility ? ", c.src" : ""},
-				1 + sum(length(CAST(c.entry AS BLOB)) + 1) OVER (ORDER BY c.key) AS size
-			FROM (SELECT e.key, json_object('name', ${cutSql("e.value ->> '$.name'", FIELD_NAME_LIMIT)},
-					'value', ${cutSql(value, FIELD_VALUE_RAW_LIMIT)}) AS entry${src}
-				FROM json_each(CASE json_type(a.raw, '$.attachment') WHEN 'array' THEN a.raw -> '$.attachment'
-					ELSE json_array(a.raw -> '$.attachment') END) e
-				WHERE e.type = 'object' AND json_type(e.value, '$.name') = 'text' AND json_type(e.value, '$.value') = 'text'
-					AND json_type(e.value, '$.type') IN ('text', 'array')
-					AND EXISTS (SELECT 1 FROM json_each(e.value, '$.type') t WHERE t.type = 'text' AND t.value = 'PropertyValue')
-				ORDER BY e.key LIMIT ${MAX_REMOTE_FIELDS}) c) k
-		WHERE k.size <= ${REMOTE_FIELDS_BYTES}) END`;
-}
-const REMOTE_ATTACHMENT_SQL = remoteAttachmentSql({ eligibility: false });
-
-// A remote account's verification times (remote-field-links.ts, migration 0068), projected in SQL so that no stored
-// value past its bound reaches the Worker: the row's links when text of at most REMOTE_FIELD_LINKS_BYTES with no NUL
-// and valid JSON, then of its first REMOTE_VERIFIED_SHOWN entries those with an integer index from 0 to
-// REMOTE_FIELD_INDEXES - 1 and a 24-byte ISO time (isoTimeSql), as [index, time]: at most REMOTE_VERIFIED_JSON_BYTES
-// (test/status-bounds.test.ts derives it). By its key; null for a local account or a remote one with no row.
-export const REMOTE_VERIFIED_JSON_BYTES = 129;
-const REMOTE_VERIFIED_SQL = `CASE WHEN a.domain IS NOT NULL THEN (SELECT CASE WHEN typeof(r.links) = 'text'
-		AND length(CAST(r.links AS BLOB)) <= ${REMOTE_FIELD_LINKS_BYTES} AND instr(CAST(r.links AS BLOB), x'00') = 0
-		AND json_valid(r.links) AND json_type(r.links) = 'array'
-	THEN (SELECT json_group_array(json_array(rt.i, rt.t) ORDER BY rt.k) FROM (SELECT e.key AS k, e.value ->> '$[0]' AS i,
-			e.value ->> '$[2]' AS t FROM json_each(r.links) e
-			WHERE e.type = 'array' AND json_type(e.value, '$[0]') = 'integer' AND json_type(e.value, '$[2]') = 'text'
-			ORDER BY e.key LIMIT ${REMOTE_VERIFIED_SHOWN}) rt
-		WHERE rt.i BETWEEN 0 AND ${REMOTE_FIELD_INDEXES - 1} AND ${isoTimeSql("rt.t")} IS NOT NULL) END
-	FROM remote_field_links r WHERE r.account_id = a.id) END`;
-
-// RES-2: stored profile bounds: platform/stored-bounds.ts; username and actor id read projections: profile-bounds.ts;
-// fields: REMOTE_ATTACHMENT_SQL and remoteFields. Maxima: the account occurrence in docs/threat-model.md, "Maxima of
-// presented units".
-export const ACCOUNT_COLUMN_MAP = {
-  id: "a.id",
-  uri: actorUriSql("a.uri"),
-  username: usernameSql("a.username"),
-  domain: "a.domain",
-  actor_type: "a.actor_type",
-  display_name: "a.display_name",
-  note: "a.note",
-  url: "a.url",
-  avatar_url: "a.avatar_url",
-  header_url: "a.header_url",
-  avatar_static_url: "a.avatar_static_url",
-  header_static_url: "a.header_static_url",
-  locked: "a.locked",
-  discoverable: "a.discoverable",
-  indexable: "a.indexable",
-  followers_count: presentedCountSql("a.followers_count"),
-  following_count: presentedCountSql("a.following_count"),
-  statuses_count: presentedCountSql("a.statuses_count"),
-  created_at: "a.created_at",
-  available: availableJoinedSql("a", "l"),
-  last_status_at: lastStatusAtSql("a"),
-  local_fields: presentedLocalFieldsSql("l.fields"),
-  verified_links: `CASE WHEN ${boundedLocalFieldsSql("l.fields")} IS NOT NULL THEN l.verified_links END`,
-  hide_collections: "COALESCE(l.hide_collections, a.hide_collections)",
-  attachment: REMOTE_ATTACHMENT_SQL,
-  remote_verified: REMOTE_VERIFIED_SQL,
-  emojis: "a.emojis",
-  emoji_cache: emojiCacheSql("a.emojis", "a.domain"),
-  moved_to_account_id: "a.moved_to_account_id",
-} as const satisfies ColumnMap;
-
-// The date of the account `a`'s newest status its followers reach.
-function lastStatusAtSql(a: string): string {
-  return `(SELECT substr(s.published_at, 1, 10) FROM statuses s
-		WHERE s.account_id = ${a}.id AND s.visibility IN ${REACHES_FOLLOWERS_SQL} ORDER BY s.id DESC LIMIT 1)`;
-}
-
-// The account an account moved to, as it presents nested in Account#moved (docs/mastodon-deviations.md, "Accounts"):
-// its identity and counts, no note or fields, and of its emojis only those its cut display name references, so that
-// no target is read past what it shows (RES-3). Every text is cut in SQL by its raw UTF-8 bytes (an imported value
-// may be malformed UTF-8, which SQLite's substr counts as fewer characters), then by its decoded limit in the
-// presenter (presentMovedAccount): display_name at MOVED_DISPLAY_NAME_LIMIT code points (400 bytes read), username at
-// USERNAME_LIMIT (1,020 bytes read), created_at at 24 and last_status_at at 10 (96 and 40 bytes read). The uri and
-// URLs read as unset past MOVED_URL_LIMIT bytes (the statics past STATIC_URL_LIMIT, their stored bound), and are shown
-// only within MOVED_URL_LIMIT as JSON writes them; emojis are the stored snapshot (ACCOUNT_EMOJIS_BYTES, 0053's
-// trigger), shown within MOVED_EMOJIS_BYTES of JSON. A target whose domain passes DOMAIN_BYTES is not read (no
-// `moved`).
-export const MOVED_DISPLAY_NAME_LIMIT = 100;
-export const MOVED_URL_LIMIT = 512;
-export const MOVED_EMOJIS_BYTES = 2048;
-// The decoded limits of created_at and last_status_at, in code points (an ISO time, a date).
-export const MOVED_CREATED_AT_LIMIT = 24;
-export const MOVED_LAST_STATUS_AT_LIMIT = 10;
-// A code point is at most four UTF-8 bytes.
-const POINT_BYTES = 4;
-
-const movedFlag = (column: string) => `CASE ${column} WHEN 1 THEN 1 WHEN 0 THEN 0 END`;
-// byteCut of a NOT NULL column: substr of an empty BLOB is NULL, read as ''.
-const textCut = (column: string, bytes: number) => `coalesce(${byteCut(column, bytes)}, '')`;
-
-const MOVED_COLUMN_MAP = {
-  id: "m.id",
-  uri: actorUriSql("m.uri", MOVED_URL_LIMIT),
-  username: textCut(usernameSql("m.username"), POINT_BYTES * USERNAME_LIMIT),
-  domain: "m.domain",
-  actor_type: "CASE WHEN m.actor_type IN ('Service', 'Application', 'Group') THEN m.actor_type ELSE 'Person' END",
-  display_name: textCut("m.display_name", POINT_BYTES * MOVED_DISPLAY_NAME_LIMIT),
-  url: byteBoundSql("m.url", MOVED_URL_LIMIT),
-  avatar_url: byteBoundSql("m.avatar_url", MOVED_URL_LIMIT),
-  header_url: byteBoundSql("m.header_url", MOVED_URL_LIMIT),
-  avatar_static_url: byteBoundSql("m.avatar_static_url", STATIC_URL_LIMIT),
-  header_static_url: byteBoundSql("m.header_static_url", STATIC_URL_LIMIT),
-  locked: movedFlag("m.locked"),
-  discoverable: movedFlag("m.discoverable"),
-  indexable: movedFlag("m.indexable"),
-  followers_count: presentedCountSql("m.followers_count"),
-  following_count: presentedCountSql("m.following_count"),
-  statuses_count: presentedCountSql("m.statuses_count"),
-  created_at: textCut("m.created_at", POINT_BYTES * MOVED_CREATED_AT_LIMIT),
-  available: availableJoinedSql("m", "ml"),
-  last_status_at: byteCut(lastStatusAtSql("m"), POINT_BYTES * MOVED_LAST_STATUS_AT_LIMIT),
-  hide_collections: movedFlag("COALESCE(ml.hide_collections, m.hide_collections)"),
-  emojis: "m.emojis",
-  emoji_cache: emojiCacheSql("m.emojis", "m.domain"),
-} as const satisfies ColumnMap;
-
-// The most UTF-8 bytes each column of MOVED_COLUMN_MAP reads (0 for a number), which its row heap rests on.
-export const MOVED_ACCOUNT_CAPS: { readonly [K in keyof typeof MOVED_COLUMN_MAP]: number } = {
-  id: MOVED_TO_ID_BYTES,
-  uri: MOVED_URL_LIMIT,
-  username: POINT_BYTES * USERNAME_LIMIT,
-  domain: DOMAIN_BYTES,
-  actor_type: "Application".length,
-  display_name: POINT_BYTES * MOVED_DISPLAY_NAME_LIMIT,
-  url: MOVED_URL_LIMIT,
-  avatar_url: MOVED_URL_LIMIT,
-  header_url: MOVED_URL_LIMIT,
-  avatar_static_url: STATIC_URL_LIMIT,
-  header_static_url: STATIC_URL_LIMIT,
-  locked: 0,
-  discoverable: 0,
-  indexable: 0,
-  followers_count: 0,
-  following_count: 0,
-  statuses_count: 0,
-  created_at: POINT_BYTES * MOVED_CREATED_AT_LIMIT,
-  available: 0,
-  last_status_at: POINT_BYTES * MOVED_LAST_STATUS_AT_LIMIT,
-  hide_collections: 0,
-  emojis: ACCOUNT_EMOJIS_BYTES,
-  emoji_cache: EMOJI_CACHE_BYTES,
-};
-
-export const MOVED_ACCOUNT_COLUMNS = fixedColumns(MOVED_COLUMN_MAP, MOVED_ACCOUNT_CAPS);
-
 type MovedRow = Omit<
   AccountRow,
   "note" | "local_fields" | "verified_links" | "attachment" | "moved_to_account_id" | "locked"
@@ -459,7 +254,7 @@ function relatedOf(db: Db, rows: readonly AccountRow[]): Related {
   return { moved, cached: cachedImagesOf(db, [...rows.map((row) => row.id), ...moved.keys()]) };
 }
 
-export { DISPLAY_NAME_LIMIT, PROFILE_URL_LIMIT, USERNAME_LIMIT, usernameSql };
+export { DISPLAY_NAME_LIMIT, PROFILE_URL_LIMIT, USERNAME_LIMIT };
 
 export const ACCOUNT_FROM = "accounts a LEFT JOIN local_accounts l ON l.account_id = a.id";
 // ACCOUNT_FROM for a membership of ids: each account sought by its key (RES-7).
@@ -477,7 +272,7 @@ export const ANSWER_CHUNK = 50;
 // The presented accounts of `ids` (accounts' ids), in order, `chunk` at a time, each with its serialized size (and a
 // separator), an id with no account skipped: only the profiles asked for so far are read, so the attachment projection
 // runs for those alone.
-export function accountStream(
+function accountStream(
   db: Db,
   ids: readonly string[],
   present: Present,
@@ -1135,138 +930,6 @@ export const preferences = userReadOperation<object, Preferences | null>((db, _i
       };
 });
 
-export type CredentialChanges = {
-  displayName?: string;
-  note?: string;
-  locked?: boolean;
-  bot?: boolean;
-  discoverable?: boolean;
-  indexable?: boolean;
-  hideCollections?: boolean;
-  privacy?: Visibility;
-  sensitive?: boolean;
-  language?: string | null;
-  quotePolicy?: QuotePolicyName;
-  // Replaces every field; lengths and count are validated by the caller.
-  fields?: FieldSource[];
-  // Replaces every attribution domain; normalized and validated by the caller.
-  attributionDomains?: string[];
-};
-
-// The uploads (completed, unattached, media.ts) a credentials update makes the account's avatar or header.
-export type ProfileImages = Partial<Record<ProfileImage, string>>;
-
-export type CredentialsUpdated =
-  // accepting: the update unlocked the account, so the unlock job has pending requests to accept (unlock-accepts.ts).
-  | { status: "ok"; account: CredentialAccount; accepting: boolean }
-  | { status: "not_found" }
-  // An upload is no longer the viewer's own live upload (swept, deleted or attached since): nothing changed.
-  | { status: "upload_gone" };
-
-// Lengths and values are validated by the caller. display_name and the note are plain text: display_name is stored
-// as is (JSON consumers escape it), the note is stored as escaped paragraphs. Everything applies in this transaction,
-// images included, with one Update(Person), or nothing does (Mastodon's single update!). A media-delete operation:
-// replacing an image dooms the upload behind it (MEDIA-2).
-export const updateCredentials = userMediaDeleteOperation<
-  { changes: CredentialChanges; images?: ProfileImages; present: Present; now: number },
-  CredentialsUpdated
->((db, { changes, images = {}, present, now }, { accountId }) => {
-  const current = db.first<{
-    username: string;
-    display_name: string;
-    actor_type: string;
-    hide_collections: number;
-    locked: number;
-  }>(
-    `SELECT a.username, a.display_name, a.actor_type, l.hide_collections, a.locked
-		FROM accounts a JOIN local_accounts l ON l.account_id = a.id WHERE a.id = ?`,
-    accountId,
-  );
-  if (current === undefined) {
-    return { status: "not_found" };
-  }
-  const kinds = PROFILE_IMAGES.filter((kind) => images[kind] !== undefined);
-  if (kinds.some((kind) => !profileUploadReady(db, accountId, images[kind]!, now))) {
-    return { status: "upload_gone" };
-  }
-  const before = actorSnapshot(db, accountId);
-  for (const kind of kinds) {
-    applyProfileImage(db, accountId, kind, images[kind]!);
-  }
-  const changedName = changes.displayName === undefined ? null : storedDisplayName(changes.displayName);
-  const displayName = changedName ?? current.display_name;
-  const hide = bit(changes.hideCollections);
-  const actorType =
-    changes.bot === undefined || !["Person", "Service"].includes(current.actor_type)
-      ? current.actor_type
-      : changes.bot
-        ? "Service"
-        : "Person";
-  // An unchanged display name stays as stored (RES-2): read into the Worker and bound again, a legacy value of lone
-  // surrogate bytes would come back as three U+FFFD for each, past its bound.
-  db.run(
-    `UPDATE accounts SET display_name = COALESCE(?, display_name), note = COALESCE(?, note), locked = COALESCE(?, locked),
-			discoverable = COALESCE(?, discoverable), indexable = COALESCE(?, indexable), actor_type = ?, search_text = ?
-		WHERE id = ?`,
-    changedName,
-    changes.note === undefined ? null : plainTextToHtml(storedText(changes.note)),
-    bit(changes.locked),
-    bit(changes.discoverable),
-    bit(changes.indexable),
-    actorType,
-    accountSearchText(current.username, null, displayName),
-    accountId,
-  );
-  db.run(
-    `UPDATE local_accounts SET default_visibility = COALESCE(?, default_visibility),
-			default_sensitive = COALESCE(?, default_sensitive),
-			default_language = CASE WHEN ? THEN ? ELSE default_language END,
-			fields = COALESCE(?, fields), hide_collections = COALESCE(?, hide_collections),
-			attribution_domains = COALESCE(?, attribution_domains),
-			default_quote_policy = COALESCE(?, default_quote_policy)
-		WHERE account_id = ?`,
-    changes.privacy ?? null,
-    bit(changes.sensitive),
-    changes.language === undefined ? 0 : 1,
-    changes.language ?? null,
-    changes.fields === undefined ? null : JSON.stringify(changes.fields.slice(0, MAX_FIELDS)),
-    hide,
-    changes.attributionDomains === undefined ? null : JSON.stringify(changes.attributionDomains),
-    changes.quotePolicy ?? null,
-    accountId,
-  );
-  // Every save keeps the verification of the values it keeps and asks for a check of the others (Mastodon's
-  // UpdateAccountService#check_links, app/services/update_account_service.rb:30-34; domain/field-links.ts).
-  armFieldLinks(db, accountId, now);
-  // Every save takes the profile's local emoji again (custom-emojis.ts localEmojiSnapshot), from the stored display
-  // name, note and fields, as Mastodon's Account#emojis reads them (app/models/account.rb:450-451, 486-488).
-  const profile = db.first<{ display_name: string; note: string; fields: string }>(
-    "SELECT a.display_name, a.note, l.fields FROM accounts a JOIN local_accounts l ON l.account_id = a.id WHERE a.id = ?",
-    accountId,
-  );
-  const texts =
-    profile === undefined
-      ? []
-      : [
-          profile.display_name,
-          profile.note,
-          ...fieldSources(profile.fields).flatMap((field) => [field.name, field.value]),
-        ];
-  db.run("UPDATE accounts SET emojis = ? WHERE id = ?", localEmojiSnapshot(db, texts, ACCOUNT_EMOJIS_BYTES), accountId);
-  // Other servers learn of the change (Update(Person)), only if the published document changed, or if the account
-  // shows or hides its network: the document does not carry that, but a server that receives the Update fetches the
-  // collections again and learns it from them, as Mastodon's ProcessAccountService does.
-  const hideChanged = hide !== null && hide !== current.hide_collections;
-  recordActorUpdate(db, accountId, hideChanged ? null : before, now);
-  const accepting = unlockChanged(db, accountId, current.locked === 1, changes.locked);
-  const account = credentialAccount(db, accountId, present);
-  return account === null ? { status: "not_found" } : { status: "ok", account, accepting };
-});
-
-function bit(value: boolean | undefined): number | null {
-  return value === undefined ? null : value ? 1 : 0;
-}
-
 type RelationshipRow = {
   id: string;
   following: string | null;
@@ -1289,7 +952,7 @@ type RelationshipRow = {
 // read through its pair key, each account sought by id from the requested ids (RES-7). With `availableOnly`, an
 // unavailable account (R1) has no entry, read from the account's row and its local_accounts row by key
 // (availableJoinedSql).
-export function relationshipsOf(
+function relationshipsOf(
   db: Db,
   viewerId: string,
   accountIds: string[],
@@ -1461,7 +1124,7 @@ export type SearchInput = {
   present: Present;
   // The account resolve=true found (remote-statuses.ts resolveSearch), shown first, as Mastodon's
   // AccountSearchService puts the exact match first, when the viewer may find it and, with `following`, follows it.
-  resolvedAccountId?: string;
+  resolvedAccountId?: string | undefined;
 };
 
 // Local and known remote accounts whose search_text contains every term (in any of its variants). An exact username
@@ -1508,7 +1171,7 @@ export const ACCOUNT_RECENT_LIMIT = 5000;
 const PREFIX_END = "\u{10FFFF}";
 
 // The ids of the accounts the search finds, in its order.
-export function findAccountIds(db: Db, input: SearchInput, viewerId: string): string[] {
+function findAccountIds(db: Db, input: SearchInput, viewerId: string): string[] {
   // An address is read with the shared parser, so a Unicode domain finds the account stored under its punycode.
   const address = parseAddress(input.query.trim());
   const query = (address === null ? input.query : `${address.username}@${address.domain}`)
@@ -1567,14 +1230,6 @@ function escapeRegExp(text: string): string {
   return text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
-export type FollowInput = {
-  target: string;
-  reblogs?: boolean;
-  notify?: boolean;
-  languages?: string[] | null;
-  now: number;
-};
-
 export type RelationshipResult =
   | { status: "ok"; relationship: Relationship }
   | { status: "not_found" }
@@ -1582,191 +1237,16 @@ export type RelationshipResult =
   // The change cannot be recorded right now (answered 503).
   | { status: "unavailable" };
 
-export type FollowResult = RelationshipResult | { status: "invalid"; errors: string[] };
-
 // Mastodon's FollowLimitValidator, with its default MAX_FOLLOWS_THRESHOLD and MAX_FOLLOWS_RATIO: a local account may
 // follow up to FOLLOW_LIMIT accounts, and past that up to FOLLOW_LIMIT_RATIO times its followers. Like Mastodon it
 // counts accepted follows only (following_count), not pending requests.
 export const FOLLOW_LIMIT = 7_500;
-export const FOLLOW_LIMIT_RATIO = 1.1;
+const FOLLOW_LIMIT_RATIO = 1.1;
 
 export function followLimit(counts: { following_count: number; followers_count: number }): number {
   return counts.following_count < FOLLOW_LIMIT
     ? FOLLOW_LIMIT
     : Math.max(Math.round(counts.followers_count * FOLLOW_LIMIT_RATIO), FOLLOW_LIMIT);
-}
-
-// The validator's error for a new follow or request past the limit, or null while under it. It applies where Mastodon
-// creates a Follow or FollowRequest without bypass_limit: the follow API only. Authorizing a request (local or a remote
-// Accept) and a Move's follower transfer bypass it, as there. The following count is derived from the viewer's accepted
-// follows (the partial index follows_accepted, the viewer's own rows only), not the cached following_count, so a stale
-// cache cannot let a follow through; followers_count, for the ratio, is read from the row.
-function followLimitError(db: Db, accountId: string): string | null {
-  const counts = db.first<{ following_count: number; followers_count: number }>(
-    `SELECT (SELECT COUNT(*) FROM follows WHERE account_id = ?1 AND state = 'accepted') AS following_count,
-			${presentedCountSql("followers_count")} AS followers_count
-		FROM accounts WHERE id = ?1`,
-    accountId,
-  );
-  if (counts === undefined) {
-    return null;
-  }
-  const limit = followLimit(counts);
-  return counts.following_count >= limit ? `You cannot follow more than ${limit} people` : null;
-}
-
-type TargetRow = {
-  id: string;
-  domain: string | null;
-  locked: number;
-  available: number;
-  followable: number;
-};
-
-function followTarget(db: Db, viewerId: string, target: string): TargetRow | null {
-  const id = resolveAccountId(db, target);
-  if (id === null) {
-    return null;
-  }
-  return (
-    db.first<TargetRow>(
-      `SELECT a.id, a.domain, a.locked, ${availableSql("a.id")} AS available,
-				${followableBySql("a.id", "?1")} AS followable
-			FROM accounts a WHERE a.id = ?2`,
-      viewerId,
-      id,
-    ) ?? null
-  );
-}
-
-// Follows or updates the options of an existing follow. A local unlocked target is followed at once; a locked or
-// remote target gets a pending request (a remote Accept arrives over federation). A local target is notified
-// (follow, or follow_request when locked) in the same transaction; a remote target is sent a Follow (its id kept in
-// follows.uri, which the remote Accept must match) and stays pending until that Accept arrives (VIS-8, VIS-9). As
-// in Mastodon's FollowService, a suspended target is not found, and a block either way or a domain block of the
-// viewer forbids the follow. A new follow or request past the follow limit is refused (422); changing the options of
-// an existing one is not, as the validator runs on create only. The follow API and /authorize_interaction's follow
-// (domain/interaction.ts) both run it.
-export function followAccount(db: Db, input: FollowInput, viewerId: string): FollowResult {
-  const target = followTarget(db, viewerId, input.target);
-  if (target === null || target.available === 0) {
-    return { status: "not_found" };
-  }
-  if (target.followable === 0) {
-    return { status: "forbidden" };
-  }
-  // undefined keeps the current filter; null or an empty list means every language (no filter).
-  const languages =
-    input.languages === undefined
-      ? undefined
-      : input.languages === null || input.languages.length === 0
-        ? null
-        : JSON.stringify(input.languages);
-  const existing = db.first(
-    "SELECT 1 AS found FROM follows WHERE account_id = ? AND target_account_id = ?",
-    viewerId,
-    target.id,
-  );
-  if (existing === undefined) {
-    const limitError = followLimitError(db, viewerId);
-    if (limitError !== null) {
-      return { status: "invalid", errors: [limitError] };
-    }
-    const state = target.domain === null && target.locked === 0 ? "accepted" : "pending";
-    const edge = db.first<{ id: string }>(
-      `INSERT INTO follows (account_id, target_account_id, state, show_reblogs, notify, languages, created_at)
-			VALUES (?, ?, ?, ?, ?, ?, ?) RETURNING CAST(id AS TEXT) AS id`,
-      viewerId,
-      target.id,
-      state,
-      bit(input.reblogs ?? true),
-      bit(input.notify ?? false),
-      languages ?? null,
-      new Date(input.now).toISOString(),
-    );
-    if (target.domain === null) {
-      const type = state === "accepted" ? "follow" : "follow_request";
-      notify(db, { recipientId: target.id, type, fromId: viewerId, statusId: null, now: input.now });
-    } else if (edge !== undefined) {
-      const activity = remoteFollow(db, viewerId, target, edge.id, null);
-      db.run("UPDATE follows SET uri = ? WHERE id = CAST(? AS INTEGER)", activity.followUri, edge.id);
-      recordOutbound(db, viewerId, followActivity(activity), input.now);
-    }
-  } else {
-    db.run(
-      `UPDATE follows SET show_reblogs = COALESCE(?, show_reblogs), notify = COALESCE(?, notify),
-				languages = CASE WHEN ? THEN ? ELSE languages END
-			WHERE account_id = ? AND target_account_id = ?`,
-      bit(input.reblogs),
-      bit(input.notify),
-      languages === undefined ? 0 : 1,
-      languages ?? null,
-      viewerId,
-      target.id,
-    );
-  }
-  recountFollows(db, viewerId, target);
-  return relationshipResult(db, viewerId, target.id, input.now);
-}
-
-export const follow = userWriteOperation<FollowInput, FollowResult>((db, input, { accountId }) =>
-  followAccount(db, input, accountId),
-);
-
-export const unfollow = userWriteOperation<{ target: string; now: number }, RelationshipResult>(
-  (db, { target: targetId, now }, { accountId: viewerId }) => {
-    const target = followTarget(db, viewerId, targetId);
-    if (target === null) {
-      return { status: "not_found" };
-    }
-    const removed = db.first<{ id: string; uri: string | null }>(
-      "DELETE FROM follows WHERE account_id = ? AND target_account_id = ? RETURNING CAST(id AS TEXT) AS id, uri",
-      viewerId,
-      target.id,
-    );
-    // A remote follow, accepted or still requested, is undone there too (UnfollowService).
-    if (removed !== undefined && target.domain !== null) {
-      recordOutbound(
-        db,
-        viewerId,
-        undoFollowActivity(remoteFollow(db, viewerId, target, removed.id, removed.uri)),
-        now,
-      );
-    }
-    // The follow's notification goes with it, as Mastodon destroys a notification with its activity.
-    db.run(
-      "DELETE FROM notifications WHERE account_id = ? AND from_account_id = ? AND type IN ('follow', 'follow_request')",
-      target.id,
-      viewerId,
-    );
-    recountFollows(db, viewerId, target);
-    return relationshipResult(db, viewerId, target.id, now);
-  },
-);
-
-// The Follow of a remote follow edge. Migrated edges may have no stored uri; they get the id this instance would
-// have given them (a remote server matches an Undo by actor and object as well).
-function remoteFollow(db: Db, viewerId: string, target: TargetRow, edgeId: string, uri: string | null) {
-  const actorUri = db.first<{ uri: string }>("SELECT uri FROM accounts WHERE id = ?", viewerId)?.uri ?? "";
-  const targetUri = db.first<{ uri: string }>("SELECT uri FROM accounts WHERE id = ?", target.id)?.uri ?? "";
-  return { followUri: uri ?? followUri(actorUri, edgeId), actorUri, targetUri, targetId: target.id };
-}
-
-// Counts are recomputed from the edges in the transaction that changed them. A remote account's counts are the ones
-// its collections report (remote-collections.ts completeCollectionRead) and are left alone.
-function recountFollows(db: Db, viewerId: string, target: Pick<TargetRow, "id" | "domain">): void {
-  db.run(
-    `UPDATE accounts SET following_count =
-			(SELECT COUNT(*) FROM follows WHERE account_id = ?1 AND state = 'accepted') WHERE id = ?1`,
-    viewerId,
-  );
-  if (target.domain === null) {
-    db.run(
-      `UPDATE accounts SET followers_count =
-				(SELECT COUNT(*) FROM follows WHERE target_account_id = ?1 AND state = 'accepted') WHERE id = ?1`,
-      target.id,
-    );
-  }
 }
 
 // POST /api/v1/accounts/:id/note (Accounts::NotesController, AccountNote): the viewer's private note on any stored
@@ -1814,18 +1294,16 @@ export function relationshipResult(db: Db, viewerId: string, targetId: string, n
 // Keyset pages over an edge table's INTEGER id (a paging cursor only). max_id and since_id page backwards from the
 // newest; min_id pages forwards from the given cursor and is returned newest first as well. Cursors stay strings:
 // they are read with CAST(id AS TEXT) and compared in SQL, never as JS numbers (which are exact only up to 2^53).
-export type PageQuery = { maxId?: string; sinceId?: string; minId?: string; limit: number };
-
-// The cursor on an edge table's INTEGER id as a plain range, with `max` and `min` the cursor parameters (NULL for none):
-// no cursor is a REAL beyond either end of the INTEGER range, so every id is inside it (SQLite compares the two types by
-// value). A read in an index ending in the id then starts at the cursor, not at the newest.
-export function edgeRangeSql(column: string, max: string, min: string): string {
-  return `${column} < coalesce(CAST(${max} AS INTEGER), 1e19) AND ${column} > coalesce(CAST(${min} AS INTEGER), -1e19)`;
-}
+export type PageQuery = {
+  maxId?: string | undefined;
+  sinceId?: string | undefined;
+  minId?: string | undefined;
+  limit: number;
+};
 
 // A page of a list. `cut`: the read stopped at its candidate window (windows.ts) before the page filled, or an answer
 // without a page stopped at ANSWER_BYTES, so the next link is offered however few items it holds.
-export type Page<T> = { items: T[]; newest: string | null; oldest: string | null; cut?: boolean };
+export type Page<T> = { items: T[]; newest: string | null; oldest: string | null; cut?: boolean | undefined };
 
 export type ListFollowsInput = {
   account: string;
@@ -1849,7 +1327,7 @@ export function windowAccountIds(db: Db, window: Window, rule: string): { id: st
 
 // The account rows of `ids`, in their order, each by its key: the profiles an answer presents, built for its own
 // accounts only.
-export function accountRowsOf(db: Db, ids: readonly string[]): AccountRow[] {
+function accountRowsOf(db: Db, ids: readonly string[]): AccountRow[] {
   if (ids.length === 0) {
     return [];
   }
@@ -1905,8 +1383,8 @@ export const listFollows = optionalUserReadOperation<ListFollowsInput, Page<Acco
   (db, input, viewer) => listFollowsWithin(db, input, viewer, accountAnswerAdmission, "every")?.page ?? null,
 );
 
-// A page of a follow list, whether a continuation follows it (the page was full, or cut by its window or by bytes),
-// and whether the list is shown at all (followListsShownSql).
+// A page of a follow list, whether a continuation follows it (a row may lie past it, windowPage's `more`, or it was
+// cut by bytes), and whether the list is shown at all (followListsShownSql).
 export type FollowList = { page: Page<Account>; more: boolean; shown: boolean };
 
 // listFollows' read, its accounts admitted by `admission`. `members`: 'every' lists an unavailable member, presented
@@ -1959,7 +1437,7 @@ export function listFollowsWithin(
         );
   const shown = windowPage(window, rows, (row) => row.cursor, page.limit, ascending);
   const presented = accountPage(db, shown, ascending, (row) => row.cursor, present, admission);
-  return { page: presented, more: shown.rows.length >= page.limit || presented.cut === true, shown: true };
+  return { page: presented, more: shown.more || presented.cut === true, shown: true };
 }
 
 // Follow requests to the viewer (Mastodon's FollowRequestsController and AuthorizeFollowService/RejectFollowService).
@@ -1996,82 +1474,3 @@ export const listFollowRequests = userReadOperation<{ page: PageQuery; present: 
     return accountPage(db, shown, ascending, (row) => row.cursor, present);
   },
 );
-
-// Authorizes or rejects a pending follow of the viewer. A remote requester gets the Accept or Reject at its personal
-// inbox, named after its Follow (followAnswerActivity). The follow_request notification goes either way. An
-// unavailable requester (R1, R38) is not found, read in this transaction: a request authorized after its requester's
-// suspension would leave a follower its suspension never severed.
-export const answerFollowRequest = userWriteOperation<
-  { account: string; decision: "authorize" | "reject"; now: number },
-  RelationshipResult
->((db, { account, decision, now }, { accountId: viewerId }) => {
-  const requesterId = resolveAccountId(db, account);
-  if (requesterId === null) {
-    return { status: "not_found" };
-  }
-  const answered = answerPendingFollow(db, viewerId, requesterId, decision, now);
-  return answered === "ok" ? relationshipResult(db, viewerId, requesterId, now) : { status: answered };
-});
-
-// The answer to one pending follow of `viewerId` by `requesterId`, as POST /api/v1/follow_requests/:id/authorize and
-// /reject run it, and as the unlock job (unlock-accepts.ts) authorizes each request.
-export function answerPendingFollow(
-  db: Db,
-  viewerId: string,
-  requesterId: string,
-  decision: "authorize" | "reject",
-  now: number,
-): "ok" | "not_found" | "unavailable" {
-  const request = db.first<{ id: string; uri: string | null; requester_uri: string; remote: number }>(
-    `SELECT CAST(f.id AS TEXT) AS id, f.uri, a.uri AS requester_uri, a.domain IS NOT NULL AS remote
-		FROM follows f JOIN accounts a ON a.id = f.account_id
-		WHERE f.account_id = ?1 AND f.target_account_id = ?2 AND f.state = 'pending' AND ${availableSql("?1")}`,
-    requesterId,
-    viewerId,
-  );
-  if (request === undefined) {
-    return "not_found";
-  }
-  if (decision === "authorize") {
-    db.run("UPDATE follows SET state = 'accepted' WHERE id = CAST(? AS INTEGER)", request.id);
-  } else {
-    // A rejected remote Follow is recorded as retracted (retractFollow), so a redelivery of it does not ask again
-    // (ID-7); a Misskey pair id is not recorded, and its redelivery asks again (the pair limit). If it
-    // cannot be recorded (the requester's retraction cap), nothing changes.
-    if (request.remote === 1 && request.uri !== null && !retractFollow(db, request.requester_uri, request.uri, now)) {
-      return "unavailable";
-    }
-    db.run("DELETE FROM follows WHERE id = CAST(? AS INTEGER)", request.id);
-  }
-  db.run(
-    "DELETE FROM notifications WHERE account_id = ? AND from_account_id = ? AND type = 'follow_request'",
-    viewerId,
-    requesterId,
-  );
-  if (request.remote === 1) {
-    const viewerUri = db.first<{ uri: string }>("SELECT uri FROM accounts WHERE id = ?", viewerId)?.uri ?? "";
-    recordOutbound(
-      db,
-      viewerId,
-      followAnswerActivity(decision === "authorize" ? "Accept" : "Reject", {
-        localActorUri: viewerUri,
-        followerUri: request.requester_uri,
-        followerId: requesterId,
-        followUri: request.uri,
-        edgeId: request.id,
-      }),
-      now,
-    );
-  }
-  // The viewer's followers changed; an authorized local requester also follows one more account now.
-  if (decision === "authorize" && request.remote === 0) {
-    recountFollows(db, requesterId, { id: viewerId, domain: null });
-  } else {
-    db.run(
-      `UPDATE accounts SET followers_count =
-				(SELECT COUNT(*) FROM follows WHERE target_account_id = ?1 AND state = 'accepted') WHERE id = ?1`,
-      viewerId,
-    );
-  }
-  return "ok";
-}

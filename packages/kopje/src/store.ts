@@ -2,6 +2,7 @@ import { DurableObject } from "cloudflare:workers";
 
 import { MIGRATIONS } from "./db/migrations";
 import { Db } from "./db/sql";
+import * as accountActions from "./domain/account-actions";
 import * as invitations from "./domain/account-invitations";
 import * as accounts from "./domain/accounts";
 import * as activities from "./domain/activities";
@@ -61,6 +62,7 @@ import { retryParkedJobs } from "./domain/job-attempts";
 import * as linkCards from "./domain/link-cards";
 import * as lists from "./domain/lists";
 import * as localEmojis from "./domain/local-emojis";
+import * as localNotes from "./domain/local-notes";
 import * as markers from "./domain/markers";
 import * as media from "./domain/media";
 import * as mediaRebuild from "./domain/media-rebuild";
@@ -71,7 +73,9 @@ import * as notifications from "./domain/notifications";
 import * as oauth from "./domain/oauth";
 import * as polls from "./domain/polls";
 import * as push from "./domain/push";
+import * as quoteVerification from "./domain/quote-verification";
 import * as quotes from "./domain/quotes";
+import * as remoteActors from "./domain/remote-actors";
 import * as remoteCollections from "./domain/remote-collections";
 import * as remoteMedia from "./domain/remote-media";
 import { resolveSearch } from "./domain/remote-statuses";
@@ -381,7 +385,7 @@ export class Store extends DurableObject<Env> {
   journalSpool(
     callerBuild: string,
     entry: { digest: string; spooledAt: number; record: Uint8Array },
-    limits?: { entries?: number; bytes?: number },
+    limits?: { entries?: number | undefined; bytes?: number | undefined },
   ) {
     return this.#admin.journalSpool(callerBuild, entry, limits);
   }
@@ -544,8 +548,8 @@ export class Store extends DurableObject<Env> {
     try {
       return await this.#kernel.execute(callerBuild, inbox.receiveActivity, { ...input, storeNow: Date.now() });
     } catch (error) {
-      // Rolled back: a retryable refusal changes nothing (domain/inbox.ts, RetryLater).
-      if (error instanceof inbox.RetryLater) {
+      // Rolled back: a retryable refusal changes nothing (domain/remote-actors.ts, RetryLater).
+      if (error instanceof remoteActors.RetryLater) {
         return inbox.retryResult(error);
       }
       throw error;
@@ -615,8 +619,8 @@ export class Store extends DurableObject<Env> {
     return this.#kernel.execute(callerBuild, quotes.quoteWork, input);
   }
 
-  completeQuote(callerBuild: string, input: OperationInput<typeof quotes.completeQuote>) {
-    return this.#kernel.execute(callerBuild, quotes.completeQuote, input);
+  completeQuote(callerBuild: string, input: OperationInput<typeof quoteVerification.completeQuote>) {
+    return this.#kernel.execute(callerBuild, quoteVerification.completeQuote, input);
   }
 
   chargeQuote(callerBuild: string, input: OperationInput<typeof quotes.chargeQuote>) {
@@ -1018,8 +1022,8 @@ export class Store extends DurableObject<Env> {
     return this.#kernel.execute(callerBuild, accounts.userinfo, input);
   }
 
-  updateCredentials(callerBuild: string, input: OperationInput<typeof accounts.updateCredentials>) {
-    return this.#kernel.execute(callerBuild, accounts.updateCredentials, input);
+  updateCredentials(callerBuild: string, input: OperationInput<typeof accountActions.updateCredentials>) {
+    return this.#kernel.execute(callerBuild, accountActions.updateCredentials, input);
   }
 
   preferences(callerBuild: string, input: OperationInput<typeof accounts.preferences>) {
@@ -1038,20 +1042,20 @@ export class Store extends DurableObject<Env> {
     return this.#kernel.execute(callerBuild, accounts.searchAccounts, input);
   }
 
-  follow(callerBuild: string, input: accounts.FollowInput & { credential: UserCredential }) {
-    return this.#kernel.execute(callerBuild, accounts.follow, input);
+  follow(callerBuild: string, input: accountActions.FollowInput & { credential: UserCredential }) {
+    return this.#kernel.execute(callerBuild, accountActions.follow, input);
   }
 
   unfollow(callerBuild: string, input: { credential: UserCredential; target: string; now: number }) {
-    return this.#kernel.execute(callerBuild, accounts.unfollow, input);
+    return this.#kernel.execute(callerBuild, accountActions.unfollow, input);
   }
 
   listFollowRequests(callerBuild: string, input: OperationInput<typeof accounts.listFollowRequests>) {
     return this.#kernel.execute(callerBuild, accounts.listFollowRequests, input);
   }
 
-  answerFollowRequest(callerBuild: string, input: OperationInput<typeof accounts.answerFollowRequest>) {
-    return this.#kernel.execute(callerBuild, accounts.answerFollowRequest, input);
+  answerFollowRequest(callerBuild: string, input: OperationInput<typeof accountActions.answerFollowRequest>) {
+    return this.#kernel.execute(callerBuild, accountActions.answerFollowRequest, input);
   }
 
   listFollows(callerBuild: string, input: OperationInput<typeof accounts.listFollows>) {
@@ -2021,20 +2025,20 @@ export class Store extends DurableObject<Env> {
 
   // Local objects over ActivityPub (VIS-4).
 
-  localNote(callerBuild: string, input: OperationInput<typeof activities.getLocalNote>) {
-    return this.#kernel.execute(callerBuild, activities.getLocalNote, input);
+  localNote(callerBuild: string, input: OperationInput<typeof localNotes.getLocalNote>) {
+    return this.#kernel.execute(callerBuild, localNotes.getLocalNote, input);
   }
 
   legacyObject(callerBuild: string, input: OperationInput<typeof activities.getLegacyObject>) {
     return this.#kernel.execute(callerBuild, activities.getLegacyObject, input);
   }
 
-  outbox(callerBuild: string, input: OperationInput<typeof activities.getOutbox>) {
-    return this.#kernel.execute(callerBuild, activities.getOutbox, input);
+  outbox(callerBuild: string, input: OperationInput<typeof localNotes.getOutbox>) {
+    return this.#kernel.execute(callerBuild, localNotes.getOutbox, input);
   }
 
-  featured(callerBuild: string, input: OperationInput<typeof activities.getFeatured>) {
-    return this.#kernel.execute(callerBuild, activities.getFeatured, input);
+  featured(callerBuild: string, input: OperationInput<typeof localNotes.getFeatured>) {
+    return this.#kernel.execute(callerBuild, localNotes.getFeatured, input);
   }
 
   override async alarm(): Promise<void> {

@@ -57,8 +57,8 @@ describe("GET /api/v2/search", () => {
     expect(await statusIds("library")).toEqual(
       [own, boosted, favourited, bookmarked, mentioned]
         .map((s) => s.id)
-        .sort()
-        .reverse(),
+        .toSorted()
+        .toReversed(),
     );
     expect(await statusIds("library")).not.toContain(elsewhere.id);
     // AND terms, exclusion, and NFKC and kana variants.
@@ -185,7 +185,7 @@ describe("GET /api/v2/search", () => {
     await remoteAccount(h.store, "alicia", "remote.example");
     await post(h, h.users.alice, { status: "about alic #alicetag" });
     const all = await search("alic");
-    expect(all.accounts.map((a) => a.acct).sort()).toEqual(["alice", "alicia@remote.example"]);
+    expect(all.accounts.map((a) => a.acct).toSorted()).toEqual(["alice", "alicia@remote.example"]);
     expect(all.statuses).toHaveLength(1);
     expect(all.hashtags.map((t) => t.name)).toEqual(["alicetag"]);
     expect(await search("alic", "&type=lists")).toEqual({ accounts: [], statuses: [], hashtags: [] });

@@ -133,10 +133,9 @@ export function availableLocalSql(l: string): string {
   return `${l}.suspended_at IS NULL`;
 }
 
-// The same rule for an account `a` with its local_accounts row `l` LEFT JOINed (NULL for a remote account), read
-// from the two rows without another lookup of the account (domain coverage seeks the blocks only): account
-// presentation (accounts.ts ACCOUNT_COLUMN_MAP) and the admin's list of accounts (admin-accounts.ts) read both rows
-// anyway.
+// The same rule for an account `a` with its local_accounts row `l` LEFT JOINed (NULL for a remote account), read from
+// the two rows without another lookup of the account (domain coverage seeks the blocks only): account presentation
+// (account-columns.ts ACCOUNT_COLUMN_MAP) and the admin's list of accounts (admin-accounts.ts) read both rows anyway.
 export function availableJoinedSql(a: string, l: string): string {
   return `(${availableLocalSql(l)} AND ${a}.deleted_at IS NULL AND NOT ${individuallySuspendedSql(a)}
 		AND NOT ${guardedSql(domainCoveredSql(a))})`;
@@ -429,8 +428,8 @@ function remoteSql(viewer: string): string {
   return `EXISTS (SELECT 1 FROM main.accounts pv INDEXED BY ${ACCOUNTS_ID_INDEX} WHERE pv.id = ${viewer} AND pv.domain IS NOT NULL)`;
 }
 
-// R41 (Trends::Statuses#eligible?, app/models/trends/statuses.rb:91-115): whether the status row `s` may trend at
-// `now` (an ISO time), `langs` a JSON array of the languages Mastodon supports (trends.ts TREND_LANGUAGES): a public
+// R41 (Trends::Statuses#eligible?, app/models/trends/statuses.rb:91-115): whether the status row `s` may trend at `now`
+// (an ISO time), `langs` a JSON array of the languages Mastodon supports (trend-languages.ts TREND_LANGUAGES): a public
 // original that is not a reply (an unresolved reply too), without a content warning (ASCII-trimmed) and not sensitive,
 // in a supported language, published by `now` (its published_at read as the 24-byte ISO form, isoTimeSql), by an
 // available and discoverable author whom anyone may see (R2 with no viewer), and quoting nothing or a status its quote
@@ -588,12 +587,12 @@ export type StatusRule = "visible" | "listable" | "homeFilter";
 // go before or after it, so the terms keep the order (and the plan) a hand-written query would give them.
 export type StatusSelect = {
   // Tables before `statuses s`, ending with the join to it (`bookmarks e JOIN`).
-  readonly from?: string;
+  readonly from?: string | undefined;
   // What follows `statuses s`: the ON of that join, and further joins.
-  readonly join?: string;
+  readonly join?: string | undefined;
   // Conditions before the rule, and after it.
   readonly where?: string;
-  readonly and?: string;
+  readonly and?: string | undefined;
   // ORDER BY, LIMIT and OFFSET.
   readonly tail?: string;
 };
@@ -1167,8 +1166,9 @@ export function scheduledOwnSql(ss: string, viewer: string): string {
 
 // R27 (PollPolicy#vote?): whether `voter` may vote in the poll of the status `s`: may see the status by itself (R3),
 // and blocks neither its author (an author who blocks the voter hides the status already) nor the author's domain, to
-// which a remote poll's vote would not be delivered (R23 leaves such an account out). Votes are their voters'
-// own: polls.ts alone reads poll_votes, and shows a poll's counts and a viewer's own votes, never who voted.
+// which a remote poll's vote would not be delivered (R23 leaves such an account out). Votes are their voters' own
+// (POLL-2, which names the modules that read poll_votes): only a poll's counts and a viewer's own votes are shown,
+// never who voted.
 export function mayVoteSql(s: string, voter: string): string {
   return `(${viewableSql(s, voter)} AND NOT ${blockedSql(voter, `${s}.account_id`)})`;
 }

@@ -45,7 +45,7 @@ export type StatusTabKind = "replies" | "reblogs" | "favourites" | "quotes";
 
 // What the page shows beside the status: one tab at the request's cursor, or nothing (the embed, and the ActivityPub
 // form of the status page, which forwards to the object endpoint).
-export type StatusTab = { kind: StatusTabKind; cursor: PageCursor };
+type StatusTab = { kind: StatusTabKind; cursor: PageCursor };
 
 export type StatusInput = { handle: string; id: string; now: number; tab: StatusTab | null };
 
@@ -164,7 +164,7 @@ function tabList(
       const list = statusList(budget, { size: pageItemBytes, afterHead });
       const read = statusRepliesWithin(
         db,
-        { id, page: { limit: REPLIES_PAGE_SIZE, ...(cursor ?? {}) }, present: options },
+        { id, page: { limit: REPLIES_PAGE_SIZE, ...cursor }, present: options },
         options.viewer,
         list.admission,
       );
@@ -175,12 +175,11 @@ function tabList(
     }
     case "quotes": {
       const list = statusList(budget, { afterHead });
-      const page = { limit: QUOTES_PAGE_SIZE, ...(cursor ?? {}) };
+      const page = { limit: QUOTES_PAGE_SIZE, ...cursor };
       const read = statusQuotesWithin(db, { id, page, present: options }, options.viewer, false, list.admission);
       return {
         list: { kind, statuses: read.items, stub: list.stub(), parents: listParents(db, budget, read.items) },
-        // For quotes, more when the window held `limit` candidates or the page was cut.
-        paging: pagingOf({ newest: read.newest, oldest: read.oldest, more: read.candidates >= page.limit }),
+        paging: pagingOf({ newest: read.newest, oldest: read.oldest, more: read.more }),
       };
     }
     case "reblogs":
@@ -190,7 +189,7 @@ function tabList(
         {
           id,
           kind: kind === "reblogs" ? "reblogged_by" : "favourited_by",
-          page: { limit: INTERACTORS_PAGE_SIZE, ...(cursor ?? {}) },
+          page: { limit: INTERACTORS_PAGE_SIZE, ...cursor },
           present: options,
         },
         options.viewer,

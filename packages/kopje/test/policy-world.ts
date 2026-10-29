@@ -439,7 +439,7 @@ export const worldArb: fc.Arbitrary<World> = fc
       // Local accounts following the world's hashtag, drawn from bits already drawn (a new field would change the
       // worlds the fixed seeds of the other properties give): about one local account in four.
       tagFollowers: Array.from({ length: LOCALS }, (_, x) => x).filter(
-        (x) => raw.follows[x]?.showReblogs === true && raw.follows[x]?.notify === true,
+        (x) => raw.follows[x]?.showReblogs === true && raw.follows[x]?.notify,
       ),
       // Quotes, drawn from bits already drawn (a new field would change the worlds the fixed seeds of the other
       // properties give): about one original in three quotes another original (with one bit, one of its author's own

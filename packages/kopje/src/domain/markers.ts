@@ -21,7 +21,7 @@ export type MarkerTimeline = (typeof MARKER_TIMELINES)[number];
 export const MAX_LAST_READ_ID = 255;
 
 // REST::MarkerSerializer.
-export type Marker = { last_read_id: string; version: number; updated_at: string };
+type Marker = { last_read_id: string; version: number; updated_at: string };
 
 export type Markers = Partial<Record<MarkerTimeline, Marker>>;
 

@@ -270,7 +270,7 @@ describe("instance contact read from a value past its bound", () => {
   it("answers 200 with no contact for a value that bypassed the triggers", async () => {
     const h = await configured();
     await sql(h.store, "DROP TRIGGER instance_settings_contact_insert");
-    for (const value of [new Uint8Array([97, 108, 105, 99, 101]).buffer, `${"a".repeat(600)}`, "a@b@c", "al ice"]) {
+    for (const value of [new Uint8Array([97, 108, 105, 99, 101]).buffer, "a".repeat(600), "a@b@c", "al ice"]) {
       await sql(
         h.store,
         "INSERT OR REPLACE INTO instance_settings (name, value) VALUES ('contact_username', ?)",

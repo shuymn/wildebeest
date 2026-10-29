@@ -3,7 +3,7 @@ import fc from "fast-check";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import { Db, type Savepoint } from "../src/db/sql";
-import { updateCredentials } from "../src/domain/accounts";
+import { updateCredentials } from "../src/domain/account-actions";
 import { API_VISIBILITIES, type ApiVisibility } from "../src/domain/audience";
 import { backfillConversations } from "../src/domain/conversation-rows";
 import {
@@ -451,7 +451,7 @@ describe("the write paths agree with the model of the outbound and notification 
   });
 
   afterAll(() => {
-    expect([...seen].sort()).toEqual([...SCENARIOS].sort());
+    expect([...seen].toSorted()).toEqual([...SCENARIOS].toSorted());
   });
 
   for (const { name, scenarios, case: c } of WITNESSES) {
@@ -1306,7 +1306,7 @@ function check(sql: SqlStorage, c: Case, saw: Set<Scenario>, savepoint: Savepoin
           problems.push(`${what}: hosts ${JSON.stringify(target.domains)} behind ${target.inbox}`);
         } else if (!staged && !target.many) {
           // The host of each actor id as domain blocks read it: lowercased, without a trailing dot.
-          const hosts = [...new Set(listed.map((x) => new URL(uriOf(x!)).hostname.replace(/\.$/, "")))].sort();
+          const hosts = [...new Set(listed.map((x) => new URL(uriOf(x!)).hostname.replace(/\.$/, "")))].toSorted();
           if (JSON.stringify(target.domains) !== JSON.stringify(hosts)) {
             problems.push(`${what}: hosts ${JSON.stringify(target.domains)} behind ${target.inbox}`);
           }
@@ -1549,11 +1549,11 @@ function check(sql: SqlStorage, c: Case, saw: Set<Scenario>, savepoint: Savepoin
         account_id: accountId(c.owner),
         thread: c.thread,
         participants: JSON.stringify(c.participants.map(accountId)),
-        last_status_id: [...c.statuses].sort().at(-1)!,
+        last_status_id: [...c.statuses].toSorted().at(-1)!,
         unread: c.unread ? 1 : 0,
-        statuses: JSON.stringify([...c.statuses].sort()),
+        statuses: JSON.stringify([...c.statuses].toSorted()),
       }))
-      .sort((a, b) => JSON.stringify(a).localeCompare(JSON.stringify(b)));
+      .toSorted((a, b) => JSON.stringify(a).localeCompare(JSON.stringify(b)));
     const actualConversations = sql
       .exec<(typeof expectedConversations)[number]>(
         `SELECT c.account_id, c.thread, c.participants, c.last_status_id, c.unread,
@@ -1562,7 +1562,7 @@ function check(sql: SqlStorage, c: Case, saw: Set<Scenario>, savepoint: Savepoin
 				FROM conversations c`,
       )
       .toArray()
-      .sort((a, b) => JSON.stringify(a).localeCompare(JSON.stringify(b)));
+      .toSorted((a, b) => JSON.stringify(a).localeCompare(JSON.stringify(b)));
     if (JSON.stringify(actualConversations) !== JSON.stringify(expectedConversations)) {
       problems.push(
         `${label}: conversations ${JSON.stringify(actualConversations)}, the model ${JSON.stringify(expectedConversations)}`,

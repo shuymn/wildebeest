@@ -3,9 +3,10 @@ import { describe, expect, it, vi } from "vitest";
 
 import { Db } from "../src/db/sql";
 import { PURGE_BATCH, purgeBatch } from "../src/domain/inbox";
+import { REPORT_ROUND } from "../src/domain/moderation-bounds";
 import { MAX_PUSH_BACKLOG, streamedNotification } from "../src/domain/notifications";
 import { createReport } from "../src/domain/reports";
-import { MODERATION_ROUNDS, REPORT_ROUND } from "../src/domain/suspension";
+import { MODERATION_ROUNDS } from "../src/domain/suspension";
 import { pushRound } from "../src/jobs/push";
 import type { StoreStub } from "../src/platform/store-client";
 import { adminClaims, adminHarness, adminTeam, setTeamAccess } from "./access-helpers";

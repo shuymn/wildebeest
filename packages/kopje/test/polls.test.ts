@@ -4,15 +4,15 @@ import { describe, expect, it, vi } from "vitest";
 import { Db } from "../src/db/sql";
 import { EXPANSION_STEP } from "../src/domain/deliveries";
 import { deleteStatusBatch, PURGE_BATCH, purgeBatch } from "../src/domain/inbox";
+import type { Poll } from "../src/domain/poll-presenter";
 import {
-  pollRound,
-  STALE_SWEEP,
   MAX_EXPIRATION_S,
   MAX_OPTION_CHARS,
   MAX_OPTIONS,
   MIN_EXPIRATION_S,
-  type Poll,
   POLL_ROUND,
+  pollRound,
+  STALE_SWEEP,
   UPDATE_DELAY_MS,
 } from "../src/domain/polls";
 import { endPolls } from "../src/jobs/scheduled";

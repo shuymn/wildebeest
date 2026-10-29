@@ -64,18 +64,22 @@ function blobHex(literal) {
 
 /**
  * A media meta value in comparison form: full and preview sizes, null where absent.
- * @param {any} meta
+ * @param {unknown} meta
  */
 function sizesOf(meta) {
   if (typeof meta !== "object" || meta === null) {
     return null;
   }
+  const m =
+    /** @type {{ original?: { width?: unknown, height?: unknown } | null, small?: { width?: unknown, height?: unknown } | null }} */ (
+      meta
+    );
   /** @type {unknown[]} */
   const sizes = [
-    meta.original?.width ?? null,
-    meta.original?.height ?? null,
-    meta.small?.width ?? null,
-    meta.small?.height ?? null,
+    m.original?.width ?? null,
+    m.original?.height ?? null,
+    m.small?.width ?? null,
+    m.small?.height ?? null,
   ];
   return sizes;
 }
@@ -254,11 +258,11 @@ export function actualFromDump(text) {
         const uri = status(t("status_id"))?.uri ?? "";
         emojiRows.status_edits += row.emojis === undefined || row.emojis === "NULL" ? 0 : 1;
         // The attachments a version shows, as its media_json presents them.
-        /** @type {any[]} */
+        /** @type {({ url?: unknown, preview_url?: unknown, description?: unknown, meta?: unknown } | null)[]} */
         let shown = [];
         try {
-          const parsed = JSON.parse(t("media_json") ?? "[]");
-          shown = Array.isArray(parsed) ? parsed : [];
+          const parsed = /** @type {unknown} */ (JSON.parse(t("media_json") ?? "[]"));
+          shown = Array.isArray(parsed) ? /** @type {typeof shown} */ (parsed) : [];
         } catch {
           shown = [];
         }
@@ -279,10 +283,10 @@ export function actualFromDump(text) {
         }
         // Local media served from R2, as `convert --images` makes it from Cloudflare Images.
         if (row.file_token !== undefined && row.file_token !== "NULL") {
-          /** @type {any} */
+          /** @type {unknown} */
           let meta = null;
           try {
-            meta = JSON.parse(t("meta") ?? "null");
+            meta = /** @type {unknown} */ (JSON.parse(t("meta") ?? "null"));
           } catch {
             meta = null;
           }
@@ -388,17 +392,17 @@ export function actualFromDump(text) {
   for (const [id, entry] of statuses) {
     const target = reblogOf.get(id);
     if (target !== undefined) {
-      const boostRecipients = (mentions.get(id) ?? []).sort((a, b) => (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0));
+      const boostRecipients = (mentions.get(id) ?? []).toSorted((a, b) => (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0));
       put("boosts", entry.uri, [entry.author, statuses.get(target)?.uri, entry.visibility, boostRecipients]);
       continue;
     }
     put("threads", entry.uri, entry.thread);
     put("statuses", entry.uri, [
       ...entry.record,
-      (tags.get(id) ?? []).sort((a, b) => (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0)),
+      (tags.get(id) ?? []).toSorted((a, b) => (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0)),
     ]);
     tags.delete(id);
-    const recipients = (mentions.get(id) ?? []).sort((a, b) => (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0));
+    const recipients = (mentions.get(id) ?? []).toSorted((a, b) => (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0));
     const open = entry.visibility === "public" || entry.visibility === "unlisted";
     put("audience", entry.uri, [entry.visibility, recipients, open ? null : entry.author]);
     const parent = parentOf.get(id);
@@ -425,12 +429,12 @@ export function actualFromDump(text) {
       participants = null;
     }
     const others = Array.isArray(participants)
-      ? participants.map((x) => account(String(x))?.uri ?? `unknown account ${String(x)}`).sort()
+      ? participants.map((x) => account(String(x))?.uri ?? `unknown account ${String(x)}`).toSorted()
       : ["(not a list)"];
-    const members = (conversationStatuses.get(id) ?? []).sort();
+    const members = (conversationStatuses.get(id) ?? []).toSorted();
     const newest = members.at(-1);
     put("conversations", `${owner} ${c.thread} ${others.join(" ")}`, [
-      members.map((m) => statuses.get(m)?.uri ?? `no status ${m}`).sort(),
+      members.map((m) => statuses.get(m)?.uri ?? `no status ${m}`).toSorted(),
       c.last === newest,
       c.unread === (status(newest ?? null)?.author !== owner ? 1 : 0),
     ]);
@@ -455,7 +459,7 @@ export function actualFromDump(text) {
     put(
       "attachments",
       uri,
-      items.sort((a, b) => a[0] - b[0]).map(([, value]) => value),
+      items.toSorted((a, b) => a[0] - b[0]).map(([, value]) => value),
     );
   }
   return out;
@@ -470,7 +474,7 @@ async function sha256(text) {
 /** @param {Record<string, string>} records @param {string[]} keys */
 function canonical(records, keys) {
   return keys
-    .sort()
+    .toSorted()
     .map((key) => `${JSON.stringify(key)}\t${records[key]}\n`)
     .join("");
 }

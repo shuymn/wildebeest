@@ -69,7 +69,7 @@ describe("dump and import of values at the platform limits", () => {
       state.storage.sql.exec("UPDATE accounts SET note = CAST(X'6180FF62' AS TEXT) WHERE id = ?", ACCOUNT);
     });
     const { text, target, report } = await roundTrip(source);
-    expect(text).toContain(`CAST(X'61${"80FF"}62' AS TEXT)`);
+    expect(text).toContain(`CAST(X'6180FF62' AS TEXT)`);
     expect(report).toMatchObject({ ok: true });
     const hex = (store: StoreStub) =>
       runInDurableObject(

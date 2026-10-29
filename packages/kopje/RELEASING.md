@@ -5,11 +5,11 @@ A tag `kopje-v<version>` on a commit of `main` releases the `kopje` npm package.
 
 1. checks that the tag is `kopje-v<semver>` and points at a commit of `main`, and that `CHANGELOG.md` has a section
    `## [<version>]`, which becomes the release notes;
-2. runs the kopje lint, type checks and tests unless CI (`.github/workflows/ci.yml`) passed on the tagged commit
-   as a push to `main` (`scripts/kopje-main-ci.mjs`). That run compares the commit with the last `main` run that
-   passed and runs the checks the difference can affect, so its success covers the whole tree. The check waits up to
-   20 minutes for a run still queued or in progress, and 2 minutes for one not yet listed; when the run failed, was
-   cancelled or never ran, it runs the lint, the type checks and every kopje suite itself;
+2. runs the repository's lint and kopje's type checks and tests unless CI (`.github/workflows/ci.yml`) passed on the
+   tagged commit as a push to `main` (`scripts/kopje-main-ci.mjs`). That run compares the commit with the last `main`
+   run that passed and runs the checks the difference can affect, so its success covers the whole tree. The check
+   waits up to 20 minutes for a run still queued or in progress, and 2 minutes for one not yet listed; when the run
+   failed, was cancelled or never ran, it runs the lint, the type checks and every kopje suite itself;
 3. packs the package with the tag's version (the repository keeps `0.0.0`) and checks it with
    `pnpm run check:kopje-package`: the packed manifest and files, the `deploy/` template's dry run against the tarball,
    the template running in workerd, and an npm install of the tarball (the `kopje-admin` bin and the types);
@@ -94,12 +94,12 @@ A pull request adds its notes under `## [Unreleased]` in `CHANGELOG.md`; a relea
 3. Watch the workflow. If it fails in the check job, nothing was published: fix the cause on `main`, delete the tag
    and tag again.
 4. Update the template: bump `kopje` in `deploy/package.json` to the new version (Renovate opens this pull request as
-   soon as a stable version is on npm; bump it by hand for a release candidate the template should install), and, if the release notes say so, change
-   `deploy/wrangler.jsonc` the same way. The template must name a published version: CI dry-runs it against the packed
-   package, not against npm, so it passes even when the Deploy to Cloudflare button would fail to install. This step is
-   what makes the button install the new version. To try the button from a branch before merging, open
-   `https://deploy.workers.cloudflare.com/?url=https://github.com/shuymn/kopje/tree/<branch>/deploy`; the branch
-   name must not contain `/`, or the button cannot tell it from the directory path.
+   soon as a stable version is on npm; bump it by hand for a release candidate the template should install), and, if the
+   release notes say so, change `deploy/wrangler.jsonc` the same way. The template must name a published version: CI
+   dry-runs it against the packed package, not against npm, so it passes even when the Deploy to Cloudflare button would
+   fail to install. This step is what makes the button install the new version. To try the button from a branch before
+   merging, open `https://deploy.workers.cloudflare.com/?url=https://github.com/shuymn/kopje/tree/<branch>/deploy`; the
+   branch name must not contain `/`, or the button cannot tell it from the directory path.
 
 ### If the publish or release job fails
 

@@ -7,11 +7,21 @@ import { useUi } from "../ui";
 import { Html } from "./html";
 
 // The page frame: the skip link, the site header, main#content and the footer. Every page but the embed
-// renders in it; `chrome: null` is /setup's, before the instance has a domain to show.
+// renders in it; `chrome: null` is a page that reads nothing of the site from the Store (app.ts's error pages, OAuth
+// and /setup).
 
 // Whether the page loads the L1 bundle: its route sets it together with the CSP that names the bundle
 // (l1Page in app/public-pages.tsx), so a page has both or neither.
 export const L1Context = createContext(false);
+
+// The host a page without the chrome is served on, which its route sets from the request (onHost, in the page helpers
+// of app/error-pages.tsx, app/authorize.tsx and app/setup.tsx): the instance's domain, as the consent page's account
+// address takes it, without a Store read. Null only outside a request, where the header names the product.
+export const HostContext = createContext<string | null>(null);
+
+export function onHost(url: string, page: Child) {
+  return <HostContext.Provider value={new URL(url).host}>{page}</HostContext.Provider>;
+}
 
 // The instance facts the header and footer show, which every page read loads with its page.
 export type Chrome = Site;
@@ -23,16 +33,17 @@ type Current = "about";
 const MARK_SIZE = 20;
 const SiteMark: FC = () => <img src={FAVICON_48} width={MARK_SIZE} height={MARK_SIZE} alt="" />;
 
-export const SiteHeader: FC<{ chrome: Chrome | null; current?: Current }> = ({ chrome, current }) => {
+const SiteHeader: FC<{ chrome: Chrome | null; current?: Current | undefined }> = ({ chrome, current }) => {
   const { m } = useUi();
+  const host = useContext(HostContext);
   return (
     <header class="bar">
       {chrome === null ? (
-        // Without the site's facts (the Store-free error pages, OAuth and /setup), the product's name leads to the
-        // site's root, so no page is a dead end.
+        // Without the site's facts, the host leads to the site's root: no page is a dead end, and the consent page
+        // names the server it authorizes.
         <a class="site quiet-link" href="/">
           <SiteMark />
-          <span>{m.site.product}</span>
+          <span>{host ?? m.site.product}</span>
         </a>
       ) : (
         <a class="site quiet-link" href="/about" aria-current={current === "about" ? "page" : undefined}>
@@ -44,7 +55,7 @@ export const SiteHeader: FC<{ chrome: Chrome | null; current?: Current }> = ({ c
   );
 };
 
-export const SiteFooter: FC<{ chrome: Chrome | null; current?: Current }> = ({ chrome, current }) => {
+const SiteFooter: FC<{ chrome: Chrome | null; current?: Current | undefined }> = ({ chrome, current }) => {
   const { m } = useUi();
   return (
     <footer class="foot">

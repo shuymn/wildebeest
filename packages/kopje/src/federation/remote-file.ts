@@ -84,7 +84,7 @@ export type RemoteFileDeps = {
   now: () => number;
 };
 
-export type RemoteStill = { type: ImageType; bytes: Uint8Array };
+type RemoteStill = { type: ImageType; bytes: Uint8Array };
 
 export type RemoteFile =
   | {
@@ -111,7 +111,7 @@ export type RemoteFile =
       hosts: string[];
     };
 
-export type RemoteFileFailureKind =
+type RemoteFileFailureKind =
   | WebPageFailure["kind"]
   | "kind"
   | "type"

@@ -38,7 +38,7 @@ async function mediaKeysIn(prefixes: string[]): Promise<string[]> {
   for (const prefix of prefixes) {
     found.push(...(await env.MEDIA.list({ prefix })).objects.map((o) => o.key));
   }
-  return found.sort();
+  return found.toSorted();
 }
 
 async function rowKeys(store: StoreStub): Promise<string[]> {

@@ -243,7 +243,7 @@ describe("retractions against outstanding deliveries (VIS-3)", () => {
     const otherCreate = leased.deliveries.find((d) => d.inbox === "https://other.example/inbox");
     await complete(h.store, otherCreate?.id ?? "", "a", NOW, OK);
     const again = await claim(h.store, NOW + deliveries.LEASE_MS, "b");
-    expect(again.deliveries.map((d) => (JSON.parse(d.body) as { type: string }).type).sort()).toEqual([
+    expect(again.deliveries.map((d) => (JSON.parse(d.body) as { type: string }).type).toSorted()).toEqual([
       "Create",
       "Delete",
     ]);

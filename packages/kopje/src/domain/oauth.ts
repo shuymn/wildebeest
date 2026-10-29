@@ -5,7 +5,7 @@ import { withinScopes } from "../security/scopes";
 import { constantTimeEqual } from "../security/tokens";
 import { type Authorized, authorize, type Credential, CREDENTIAL_EPOCH_SQL } from "./auth";
 import { readOperation, sessionOperation, writeOperation } from "./operation";
-import { sweepWebState } from "./web-session";
+import { sweepWebState } from "./web-state";
 
 // OAuth state: clients, authorization codes and access tokens. Codes and tokens are stored as the
 // sha256 of their opaque value, which the Worker computes; the values never reach the Store. Login writes are
@@ -13,7 +13,7 @@ import { sweepWebState } from "./web-session";
 
 export const OOB_REDIRECT_URI = "urn:ietf:wg:oauth:2.0:oob";
 
-export const CODE_LIFETIME_MS = 10 * 60 * 1000;
+const CODE_LIFETIME_MS = 10 * 60 * 1000;
 
 export type Client = { id: string; name: string; website: string | null; redirectUris: string[]; scopes: string[] };
 
@@ -270,25 +270,39 @@ export const sweepOAuth = writeOperation<{ now: number }, { apps: number; tokens
 
 // instance_settings names written by /setup step 3.
 export const ACCESS_TEAM_DOMAIN = "access_team_domain";
-export const ACCESS_AUD = "access_aud";
+const ACCESS_AUD = "access_aud";
+const INSTANCE_DOMAIN = "domain";
 
-// What /oauth/authorize needs before it can verify the Access assertion: the Access settings and the client.
+// What /oauth/authorize needs before it can verify the Access assertion: the instance domain (WEB-1), the Access
+// settings and the client.
 export const authorizeContext = readOperation<
   { clientId: string },
-  { access: { teamDomain: string; aud: string } | null; client: Client | null; firstParty: boolean }
+  {
+    domain: string | null;
+    access: { teamDomain: string; aud: string } | null;
+    client: Client | null;
+    firstParty: boolean;
+  }
 >((db, { clientId }) => {
   const settings = new Map(
     db
       .all<{
         name: string;
         value: string;
-      }>("SELECT name, value FROM instance_settings WHERE name IN (?, ?)", ACCESS_TEAM_DOMAIN, ACCESS_AUD)
+      }>(
+        "SELECT name, value FROM instance_settings WHERE name IN (?, ?, ?)",
+        INSTANCE_DOMAIN,
+        ACCESS_TEAM_DOMAIN,
+        ACCESS_AUD,
+      )
       .map((row) => [row.name, row.value]),
   );
+  const domain = settings.get(INSTANCE_DOMAIN);
   const teamDomain = settings.get(ACCESS_TEAM_DOMAIN);
   const aud = settings.get(ACCESS_AUD);
   const client = clientRow(db, clientId);
   return {
+    domain: domain ?? null,
     access: teamDomain === undefined || aud === undefined ? null : { teamDomain, aud },
     client: client === undefined ? null : toClient(client),
     // The web UI's own login (domain/web-session.ts): the consent page reads as signing in.
@@ -325,7 +339,7 @@ export function loginAccount(db: Db, email: string): LoginAccount {
     : { status: "suspended" };
 }
 
-export type AuthorizationRequest = {
+type AuthorizationRequest = {
   clientId: string;
   redirectUri: string;
   scopes: string[];

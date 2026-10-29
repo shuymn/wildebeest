@@ -36,7 +36,7 @@ function tokens(css: string): Map<string, { light: string; dark: string }> {
 // A hex colour's channels (#rgb or #rrggbb), for the contrast ratio (contrast.ts).
 function channels(hex: string): number[] {
   const digits =
-    hex.length === 4 ? [...hex.slice(1)].map((d) => d + d) : [hex.slice(1, 3), hex.slice(3, 5), hex.slice(5, 7)];
+    hex.length === 4 ? Array.from(hex.slice(1), (d) => d + d) : [hex.slice(1, 3), hex.slice(3, 5), hex.slice(5, 7)];
   return digits.map((d) => parseInt(d, 16));
 }
 
@@ -746,7 +746,7 @@ function selectorClasses(css: string): string[] {
     ...new Set(
       fullSelectors(css).flatMap((selector) => [...selector.matchAll(/\.([a-zA-Z][\w-]*)/g)].map((m) => m[1]!)),
     ),
-  ].sort();
+  ].toSorted();
 }
 
 // What names a class: a JSX `class` or `className` attribute, a `class:` or `className:` property (a component's
@@ -938,9 +938,9 @@ describe("the stylesheet’s publication", () => {
   });
 
   it("keeps the previous release’s stylesheet and no older one", () => {
-    const kept = ASSET_NAMES.filter((name) => /^kopje(\.[0-9a-f]{10})?\.css$/.test(name)).sort();
+    const kept = ASSET_NAMES.filter((name) => /^kopje(\.[0-9a-f]{10})?\.css$/.test(name)).toSorted();
     const expected = [STYLESHEET, PREVIOUS_STYLESHEET].map((path) => path.slice("/assets/".length));
-    expect(kept).toEqual([...new Set(expected)].sort());
+    expect(kept).toEqual([...new Set(expected)].toSorted());
   });
 
   it("is what scripts/build-assets.mjs writes", () => {

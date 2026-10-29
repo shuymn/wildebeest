@@ -130,7 +130,7 @@ function listUrl(c: ApiContext, path: string, names: readonly string[], p: Param
     }),
     ...Object.entries(cursor),
   ];
-  for (const [name, value] of entries.sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))) {
+  for (const [name, value] of entries.toSorted(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))) {
     url.searchParams.append(name, value);
   }
   return url.toString();
@@ -255,7 +255,7 @@ const STATUSES: readonly string[] = [...V1_STATUSES, "sensitized"] satisfies Adm
 
 const TOO_BROAD = "search term too broad; add a filter or a longer prefix";
 
-export type ParsedAccountFilter = { filter: AdminAccountFilter; names: readonly string[] } | { error: string };
+type ParsedAccountFilter = { filter: AdminAccountFilter; names: readonly string[] } | { error: string };
 
 // The request's filter as AccountFilter reads it after each controller's translated_filter_params, with the names the
 // Link URLs carry. A parameter sent blank is not sent (`value.present?`). v1 lists local accounts that are active
@@ -267,7 +267,7 @@ export type ParsedAccountFilter = { filter: AdminAccountFilter; names: readonly 
 // role_ids) is sent, v2 reads them as v1 would, except that it keeps no default: exactly one of local and remote gives
 // the origin, exactly one of the five states gives the status (several give none, as Fedilab's "all" means), and staff
 // gives the staff. A deliberate difference from Mastodon, for the one client that sends these names to v2.
-export function accountFilter(version: 1 | 2, p: Params): ParsedAccountFilter {
+function accountFilter(version: 1 | 2, p: Params): ParsedAccountFilter {
   const sent = (name: string) => {
     const value = p.get(name);
     return value !== undefined && value.trim() !== "" ? value : undefined;
@@ -529,7 +529,12 @@ export const createDomainBlock: ApiHandler = async (c, deps) => {
   if (p instanceof Response) {
     return p;
   }
-  const input = { credential: optionalCredential(c, deps), domain: p.get("domain"), ...blockRequest(p) };
+  const domain = p.get("domain");
+  const input = {
+    credential: optionalCredential(c, deps),
+    ...(domain === undefined ? {} : { domain }),
+    ...blockRequest(p),
+  };
   return domainBlockResponse(authorized(await storeCall(c, deps, (s, b) => s.createAdminDomainBlock(b, input))), c);
 };
 

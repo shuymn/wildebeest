@@ -12,6 +12,23 @@
   },
   "packageRules": [
     {
+      "description": "One pull request for every stable minor and patch update, which the shared preset automerges",
+      "matchUpdateTypes": ["minor", "patch"],
+      "matchCurrentVersion": "!/^v?0+\\./",
+      "groupName": "non-major dependencies"
+    },
+    {
+      "description": "One pull request for pre-1.0 minor and patch updates, kept apart from the automerged group",
+      "matchUpdateTypes": ["minor", "patch"],
+      "matchCurrentVersion": "/^v?0+\\./",
+      "groupName": "pre-1.0 dependencies"
+    },
+    {
+      "description": "Group Vitest and its packages, whose versions must match exactly",
+      "groupName": "vitest",
+      "matchPackageNames": ["vitest", "@vitest/**"]
+    },
+    {
       "description": "Group the oxc tools, which change what lint and format report together",
       "groupName": "oxc",
       "matchPackageNames": ["oxlint", "oxlint-tsgolint", "oxfmt", "@oxlint/**"]
@@ -21,6 +38,13 @@
       "matchPackageNames": ["kopje"],
       "matchFileNames": ["deploy/package.json"],
       "minimumReleaseAge": null
+    },
+    {
+      "description": "lefthook 2.2.2 was published without the provenance its earlier releases carry, and pnpm refuses it as a trust downgrade; skip it until a release with provenance",
+      "matchPackageNames": ["lefthook"],
+      "allowedVersions": "!/^2\\.2\\.2$/"
     }
-  ]
+  ],
+  "separateMultipleMinor": false,
+  "separateMinorPatch": false
 }

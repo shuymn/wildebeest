@@ -171,7 +171,7 @@ describe("reset", () => {
       const fresh = admin(state, { resetBatchRows: 5 });
       expect(await fresh.importProgress(ACCESS, id)).toMatchObject({ progress: { state: "resetting" } });
       expect(await fresh.config()).toEqual({
-        values: Object.fromEntries(before.map((row) => row.split(/=(.*)/s).slice(0, 2))),
+        values: Object.fromEntries(before.map((row) => row.split(/=(.*)/s).slice(0, 2) as [string, string])),
       });
       let done = false;
       for (let i = 0; i < 1000 && !done; i++) {

@@ -1,4 +1,5 @@
 {
+  "extends": "../tsconfig.base.json",
   "compilerOptions": {
     "target": "es2024",
     "lib": ["es2024", "dom"],
@@ -8,10 +9,7 @@
     "allowJs": true,
     "checkJs": true,
     "noEmit": true,
-    "allowImportingTsExtensions": true,
-    "strict": true,
-    "noUncheckedIndexedAccess": true,
-    "skipLibCheck": true
+    "allowImportingTsExtensions": true
   },
   "include": ["**/*.js"]
 }

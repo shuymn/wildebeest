@@ -13,10 +13,10 @@ import { severFollow } from "./blocks";
 import { supersedeEarlier } from "./deliveries";
 import { EXPANSION_STEP } from "./delivery-bounds";
 import { FRESH_ATTEMPTS_SQL, JOB_BOOKKEEPING_ROWS, nextJob, REMOTE_MODERATION_JOBS, runJobItem } from "./job-attempts";
+import { MODERATION_ROUND_ROWS, REPORT_ROUND } from "./moderation-bounds";
 import { logAction } from "./moderation-log";
 import { actionBound, reportBound, resolveSuspensionReports } from "./reports";
 import { RowBudget } from "./row-budget";
-import { MODERATION_ROUND_ROWS, REPORT_ROUND } from "./suspension";
 
 // The instance suspension of remote accounts (R38, VIS-30), migration 0045_remote_suspension: of one account
 // (Mastodon's Admin::AccountAction with type suspend and SuspendAccountService#reject_remote_follows!,
@@ -46,12 +46,12 @@ import { MODERATION_ROUND_ROWS, REPORT_ROUND } from "./suspension";
 //   - clear: the suspended accounts by id (accounts_suspended, which holds every mark, whatever the account's domain is
 //     now), CLEAR_ROUND a round; a mark no block covers any more is cleared.
 //   - mark (only while a suspend block exists): every account by id, MARK_WINDOW a round (the predicate per remote
-//     account, MARK_ACCOUNTS covered ones at most); a covered account not individually suspended is marked if it is
-//     not yet, and severed both ways up to the follow bound, marked or not, so a follow made while an earlier block was
-//     lifted is severed too. An individually suspended account is skipped: its local follows are kept.
-// No account is stored or moves into a covered domain (inbox.ts upsertRemoteActor), so the walk after the last reset
-// finds every covered account; marks and severing then agree with the blocks whatever the order of transitions and
-// rounds. A permitted refresh of a marked account clears its stale mark (upsertRemoteActor).
+// account, MARK_ACCOUNTS covered ones at most); a covered account not individually suspended is marked if it is not
+// yet, and severed both ways up to the follow bound, marked or not, so a follow made while an earlier block was lifted
+// is severed too. An individually suspended account is skipped: its local follows are kept. No account is stored or
+// moves into a covered domain (remote-actors.ts upsertRemoteActor), so the walk after the last reset finds every
+// covered account; marks and severing then agree with the blocks whatever the order of transitions and rounds. A
+// permitted refresh of a marked account clears its stale mark (upsertRemoteActor).
 //
 // Severing an account (sever): out, its follows of local accounts (follows_pair, by target), then in, local
 // accounts' follows of it (follows_target, by state and id), each up to the follow bound. A remote follower's accepted
@@ -59,7 +59,7 @@ import { MODERATION_ROUND_ROWS, REPORT_ROUND } from "./suspension";
 // one), as Mastodon sends it; its request is deleted without one; a local follower's follow or request ends with its
 // Undo (blocks.ts severFollow). Row existence decides, so an Undo, a purge, a user's domain block cleanup or another
 // job that removed the follow first sends nothing more. Every round reads at most SEVER_ROUND follows and writes at
-// most MODERATION_ROUND_ROWS rows (suspension.ts, counted with total_changes). Ending a follow has two parts:
+// most MODERATION_ROUND_ROWS rows (moderation-bounds.ts, counted with total_changes). Ending a follow has two parts:
 //   - preparatory steps (prepared), each bounded by the round's room above SEVER_ROWS: every write of variable size
 //     that ending the follow would cascade to. These are its follow notification's push deliveries (the notification's
 //     delete cascades to them) and, for an activity that names the follow by id (the Reject of an accepted follow, the
@@ -295,7 +295,7 @@ function prepared(db: Db, follow: Severed, room: () => number): boolean {
   const local = db.first<{ uri: string }>("SELECT uri FROM accounts WHERE id = ? AND domain IS NULL", follow.follower);
   const [signer, object] =
     local !== undefined
-      ? [follow.follower, follow.uri ?? followUri(local.uri, String(follow.id))]
+      ? [follow.follower, follow.uri ?? followUri(local.uri, follow.id)]
       : [follow.target, follow.state === "accepted" ? follow.uri : null];
   if (object === null) {
     return true;

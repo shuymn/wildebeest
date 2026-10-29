@@ -53,7 +53,7 @@ import {
   MAX_FILTER_TEXT,
 } from "./filters";
 import { htmlToPlainText } from "./plain-text";
-import { type Poll, presentPolls, withStatusEmojis } from "./polls";
+import { type Poll, presentPolls, withStatusEmojis } from "./poll-presenter";
 import { cachedImageUrls } from "./remote-media";
 import { MEDIA_URL_JSON_BYTES, MEDIA_URL_LIMIT } from "./status-bounds";
 import {
@@ -71,7 +71,7 @@ import {
   TAG_COLUMN_MAP,
   VIEWER_FLAG_COLUMNS,
 } from "./status-rows";
-import { TREND_LANGUAGES } from "./trends";
+import { TREND_LANGUAGES } from "./trend-languages";
 
 // The Status entity as Mastodon 4.0.2's REST::StatusSerializer shows it. One presenter for every read path: it takes
 // a list of ids and the viewer and reads the related rows kind by kind (statuses and reblogged originals, accounts,
@@ -92,9 +92,9 @@ import { TREND_LANGUAGES } from "./trends";
 // them (filters.ts); a boost and its original carry the same. Nothing is left out for a filter: the client decides by
 // context.
 
-export type MediaSize = { width: number; height: number; size: string; aspect: number };
+type MediaSize = { width: number; height: number; size: string; aspect: number };
 
-export type MediaMeta = { original?: MediaSize; small?: MediaSize; focus?: { x: number; y: number } };
+type MediaMeta = { original?: MediaSize; small?: MediaSize; focus?: { x: number; y: number } };
 
 export type MediaAttachment = {
   id: string;
@@ -109,9 +109,9 @@ export type MediaAttachment = {
   blurhash: string | null;
 };
 
-export type Mention = { id: string; username: string; url: string; acct: string };
+type Mention = { id: string; username: string; url: string; acct: string };
 
-export type Tag = { name: string; url: string };
+type Tag = { name: string; url: string };
 
 // Mastodon's Quote, with the quoted status embedded, and ShallowQuote, with its id.
 export type Quote = { state: ApiQuoteState; quoted_status: Status | null };
@@ -121,7 +121,7 @@ export type ShallowQuote = { state: ApiQuoteState; quoted_status_id: string | nu
 // Mastodon's QuoteApproval (REST::StatusSerializer#quote_approval): the flags of the status's automatic and manual
 // policy, and what the policy answers the viewer. Ice Cubes decodes all three fields, and current_user only as one of
 // these four values, or drops the whole status.
-export type QuoteApproval = {
+type QuoteApproval = {
   automatic: QuotePolicyFlag[];
   manual: QuotePolicyFlag[];
   current_user: "automatic" | "manual" | "unknown" | "denied";
@@ -163,7 +163,7 @@ export type PreviewCard = {
 export const CARD_JSON_MAX = 9_899;
 
 // Mastodon's REST::StatusSerializer application (ApplicationSerializer): the app a local status was posted through.
-export type StatusApplication = { name: string; website: string | null };
+type StatusApplication = { name: string; website: string | null };
 
 export type Status = {
   id: string;
@@ -352,16 +352,13 @@ function filterTextUnits(db: Db, ids: readonly string[]): Map<string, number> {
   );
 }
 
-let unitsSql: string | undefined;
-
 // The figure of each status of ?1 (a JSON list), one seek of statuses by key each: the stored measure
-// (filter_text_units), else filterTextBoundSql; coalesce evaluates the bound only for a row without one. Built on
-// first use: MAX_FILTER_TEXT comes through filters.ts, which imports this module's importers.
-export function filterTextUnitsSql(): string {
-  unitsSql ??= `SELECT j.value AS id,
+// (filter_text_units), else filterTextBoundSql; coalesce evaluates the bound only for a row without one.
+const UNITS_SQL = `SELECT j.value AS id,
 	min(COALESCE(s.filter_text_units, ${filterTextBoundSql("s")}), ${MAX_FILTER_TEXT}) AS units
 FROM json_each(?1) j CROSS JOIN statuses s INDEXED BY ${STATUSES_ID_INDEX} ON s.id = j.value`;
-  return unitsSql;
+export function filterTextUnitsSql(): string {
+  return UNITS_SQL;
 }
 
 // Whether a status `s` (a statuses row in scope) has an input to its searchable text that is not text, after
@@ -614,7 +611,7 @@ function mediaOf(db: Db, ids: string): Map<string, MediaRow[]> {
 		WHERE m.id IN (SELECT x.id FROM (${STATUS_IDS}) j CROSS JOIN media_attachments x ON x.id IN (${shownMediaSql("j.value")}))`,
     ids,
   );
-  return groupBy(rows.sort((a, b) => a.position - b.position || byCodePoints(a.id, b.id)));
+  return groupBy(rows.toSorted((a, b) => a.position - b.position || byCodePoints(a.id, b.id)));
 }
 
 type TextRow = Pick<StatusRow, "spoiler_text" | "content" | "source_text" | "author_domain">;
@@ -683,7 +680,7 @@ function hydrate(
 				CROSS JOIN accounts a INDEXED BY ${ACCOUNTS_ID_INDEX} WHERE a.id IN (${SHOWN_MENTIONS_SQL})`,
         notBoostsJson,
       )
-      .sort((a, b) => byCodePoints(a.id, b.id)),
+      .toSorted((a, b) => byCodePoints(a.id, b.id)),
   );
   // The attached card of each status but a boost (one row at most, by its key).
   // A quoted status shows none (presentCard), so only the statuses and the boosts' originals are read.
@@ -702,7 +699,7 @@ function hydrate(
         `SELECT ${selectSql(TAG_COLUMN_MAP)} FROM (${STATUS_IDS}) j CROSS JOIN status_tags t WHERE ${SHOWN_TAGS_SQL}`,
         notBoostsJson,
       )
-      .sort((a, b) => byCodePoints(a.name, b.name)),
+      .toSorted((a, b) => byCodePoints(a.name, b.name)),
   );
   const flags = viewerFlags(db, viewerId, all);
   // R36 for the viewer, of every status presented by its own row (a boost answers denied: its original's is shown).
@@ -918,7 +915,7 @@ export type CardRow = {
 
 // A card image's URL as presented (HTML-3): the served file of a stored token (media-files.ts mediaUrl) on the
 // instance origin, through presentedMediaUrl, within CARD_IMAGE_URL_BYTES and that plus 2 as a JSON string; else null.
-export function presentedCardImageUrl(origin: string, token: unknown): string | null {
+function presentedCardImageUrl(origin: string, token: unknown): string | null {
   if (typeof token !== "string" || !FILE_TOKEN.test(token)) {
     return null;
   }
@@ -935,8 +932,7 @@ export function presentedCardImageUrl(origin: string, token: unknown): string | 
 // stored-bounds.ts embedSrcAttribute), a width or height omitted when the iframe had none, allowtransparency dropped
 // and the fixed sandbox added. The one html a card presents (HTML-3): an oEmbed video's iframe is rendered from the
 // same template, never from its markup.
-export const CARD_IFRAME_SANDBOX =
-  "allow-scripts allow-same-origin allow-popups allow-popups-to-escape-sandbox allow-forms";
+const CARD_IFRAME_SANDBOX = "allow-scripts allow-same-origin allow-popups allow-popups-to-escape-sandbox allow-forms";
 export function cardIframe(src: string, width: number | null, height: number | null): string {
   const size = `${width === null ? "" : ` width="${width}"`}${height === null ? "" : ` height="${height}"`}`;
   return `<iframe src="${embedSrcAttribute(src)}"${size} allowfullscreen="true" scrolling="no" frameborder="0" sandbox="${CARD_IFRAME_SANDBOX}"></iframe>`;

@@ -2,7 +2,8 @@ import { runInDurableObject } from "cloudflare:test";
 import { describe, expect, it } from "vitest";
 
 import { Db } from "../src/db/sql";
-import { ANSWER_CHUNK, MOVED_ACCOUNT_COLUMNS, partialAccountsOf, presentAccountById } from "../src/domain/accounts";
+import { MOVED_ACCOUNT_COLUMNS } from "../src/domain/account-columns";
+import { ANSWER_CHUNK, partialAccountsOf, presentAccountById } from "../src/domain/accounts";
 import {
   CACHED_IMAGE_BYTES,
   CACHED_IMAGE_COLUMNS,
@@ -200,9 +201,7 @@ describe("the status row bound (status-rows.ts statusRowBoundSql)", () => {
     const both = await bound();
     await sql(w.t.store, "UPDATE accounts SET moved_to_account_id = ? WHERE id = ?", target.id, author.id);
     expect((await bound()) - both).toBe(
-      2 * String(target.id).length +
-        MOVED_ACCOUNT_COLUMNS.rowHeap +
-        CACHED_IMAGE_KINDS.length * CACHED_IMAGE_COLUMNS.rowHeap,
+      2 * target.id.length + MOVED_ACCOUNT_COLUMNS.rowHeap + CACHED_IMAGE_KINDS.length * CACHED_IMAGE_COLUMNS.rowHeap,
     );
   });
 });

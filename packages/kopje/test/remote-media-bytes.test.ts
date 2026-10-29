@@ -702,7 +702,7 @@ describe("verifyRemoteImage: WebP frames", () => {
     }
     // The first frame has ALPH then VP8; reversed in the second frame.
     const reversed = animatedWebp([first, first], size, {
-      frameChunks: (chunks, i) => (i === 1 ? [...chunks].reverse() : chunks),
+      frameChunks: (chunks, i) => (i === 1 ? [...chunks].toReversed() : chunks),
     });
     expect(refusal(reversed)).toBe("malformed");
   });

@@ -15,7 +15,7 @@ import { FOLLOW_DIALOG, RemoteDialog } from "./remote";
 
 // Profile fields as a description list; each value is sanitized at its sink and its links keep rel="me". An account
 // records no language, so its name, bio and fields are in an unknown one (lang=""), not the page's.
-export const Fields: FC<{ fields: FieldView[] }> = ({ fields }) =>
+const Fields: FC<{ fields: FieldView[] }> = ({ fields }) =>
   fields.length === 0 ? null : (
     <dl class="fields" lang="">
       {fields.map((field) => (
@@ -32,7 +32,7 @@ export const Fields: FC<{ fields: FieldView[] }> = ({ fields }) =>
 type FollowLinks = Record<"following" | "followers", string>;
 
 // The counts; a local account's following and followers link to its follow lists (`follows`), another server's do not.
-export const Stats: FC<{ stats: AccountView["stats"]; follows?: FollowLinks }> = ({ stats, follows }) => {
+const Stats: FC<{ stats: AccountView["stats"]; follows?: FollowLinks | undefined }> = ({ stats, follows }) => {
   const { m, f } = useUi();
   return (
     <ul class="stats" role="list">

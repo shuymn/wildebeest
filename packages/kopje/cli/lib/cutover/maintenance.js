@@ -33,7 +33,7 @@ import { snapshotIn, WORKER_FILE, workerSource } from "./worker-file.js";
 
 export { WORKER_FILE };
 
-export const DEFAULT_BUNDLE_DIR = fileURLToPath(new URL("../../../dist/", import.meta.url));
+const DEFAULT_BUNDLE_DIR = fileURLToPath(new URL("../../../dist/", import.meta.url));
 
 /** @param {string} text */
 function sha256(text) {
@@ -57,10 +57,10 @@ export function checkSnapshotKeys(snapshot, users) {
     if (!key.startsWith("path:")) {
       continue;
     }
-    /** @type {any} */
+    /** @type {{ id?: unknown, publicKey?: { id?: unknown, owner?: unknown, publicKeyPem?: unknown } } | null} */
     let json;
     try {
-      json = JSON.parse(document.body);
+      json = /** @type {typeof json} */ (JSON.parse(document.body));
     } catch {
       throw new ExportError("snapshot-key-mismatch");
     }
@@ -96,11 +96,12 @@ export function checkSnapshotKeys(snapshot, users) {
 async function renderSnapshot({ exportPath, domain, env, bundleDir, report }) {
   /** @type {string} */
   let bundle;
-  /** @type {{ renderMaintenanceSnapshot: (input: unknown) => Promise<Snapshot> }} */
+  /** @typedef {{ renderMaintenanceSnapshot: (input: unknown) => Promise<Snapshot> }} Renderer */
+  /** @type {Renderer} */
   let renderer;
   try {
     bundle = readFileSync(join(bundleDir, "maintenance-worker.js"), "utf8");
-    renderer = await import(pathToFileURL(join(bundleDir, "maintenance-render.js")).href);
+    renderer = /** @type {Renderer} */ (await import(pathToFileURL(join(bundleDir, "maintenance-render.js")).href));
   } catch {
     throw new ExportError("bundle-missing");
   }
@@ -117,7 +118,7 @@ async function renderSnapshot({ exportPath, domain, env, bundleDir, report }) {
     acceptDeletions: true,
   });
   report.source = { level: source.level, line: source.line };
-  const users = /** @type {any[]} */ (
+  const users = /** @type {import("./kek.js").LegacyUser[]} */ (
     legacy.prepare("SELECT actor_id, privkey, privkey_salt, pubkey FROM users ORDER BY rowid").all()
   ).map((u) => ({ uri: String(u.actor_id), privkey: u.privkey, salt: u.privkey_salt, pubkey: String(u.pubkey) }));
   const kek = await checkKeks(users, env);
@@ -142,7 +143,8 @@ async function renderSnapshot({ exportPath, domain, env, bundleDir, report }) {
     }
     const snapshot = await renderer.renderMaintenanceSnapshot({
       domain: summary.domain,
-      sql: (/** @type {string} */ query, /** @type {any[]} */ params) => kopje.prepare(query).all(...params),
+      sql: (/** @type {string} */ query, /** @type {import("node:sqlite").SQLInputValue[]} */ params) =>
+        kopje.prepare(query).all(...params),
     });
     checkSnapshotKeys(snapshot, users);
     // What was captured, as digests: the actors, their keys and profiles (the documents), for the check before the
@@ -153,7 +155,7 @@ async function renderSnapshot({ exportPath, domain, env, bundleDir, report }) {
     report.keysSha256 = sha256(
       users
         .map((u) => `${u.uri}\n${pemBody(u.pubkey)}`)
-        .sort()
+        .toSorted()
         .join("\n"),
     );
     return { snapshot, bundle };
@@ -165,9 +167,9 @@ async function renderSnapshot({ exportPath, domain, env, bundleDir, report }) {
 /** @param {Snapshot} snapshot */
 function snapshotDigest(snapshot) {
   const documents = Object.keys(snapshot.documents)
-    .sort()
+    .toSorted()
     .map((key) => [key, snapshot.documents[key]]);
-  return sha256(JSON.stringify([snapshot.domain, [...snapshot.inboxes].sort(), documents]));
+  return sha256(JSON.stringify([snapshot.domain, [...snapshot.inboxes].toSorted(), documents]));
 }
 
 /** @param {unknown} error */

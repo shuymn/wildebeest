@@ -256,6 +256,7 @@ export const STRINGS: Messages = {
     invalidRequestTitle: "Invalid request",
     unregisteredRedirect: "The redirect URI is not registered for this application.",
     foreignForm: "The form was not submitted from this server.",
+    otherHost: (domain) => `Sign in at ${domain}, this server's own address.`,
     changed: "The application or its redirect URI changed. Start again.",
     noAccountTitle: "No account",
     noAccount: "There is no account for this sign-in on this server.",

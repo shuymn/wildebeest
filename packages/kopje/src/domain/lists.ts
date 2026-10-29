@@ -14,8 +14,7 @@ import { ANSWER_BYTES } from "./answer-budget";
 import { availableSql } from "./audience";
 import { userReadOperation, userWriteOperation } from "./auth";
 import { allocateLocalId } from "./ids";
-import { ABOVE_EVERY_ID, BELOW_EVERY_ID, statusCursor } from "./statuses";
-import { readWindow, singleWindow, windowPage } from "./windows";
+import { ABOVE_EVERY_ID, BELOW_EVERY_ID, readWindow, singleWindow, statusCursor, windowPage } from "./windows";
 
 // Lists (Mastodon 4.5's List and ListAccount, Api::V1::ListsController, Lists::AccountsController and
 // Accounts::ListsController). A list belongs to a local account and holds accounts its owner follows or has asked to
@@ -27,13 +26,13 @@ import { readWindow, singleWindow, windowPage } from "./windows";
 
 // List::PER_ACCOUNT_LIMIT and List::TITLE_LENGTH_LIMIT.
 export const MAX_LISTS = 50;
-export const MAX_LIST_TITLE = 256;
+const MAX_LIST_TITLE = 256;
 
 // GET /api/v1/lists/:id/accounts with limit=0 answers every member (Lists::AccountsController#unlimited?). Kopje stops
 // at this many, the newest by account id, and at ANSWER_BYTES (RES-3).
 export const MAX_LIST_MEMBERS_ANSWERED = 1_000;
 
-export const REPLIES_POLICIES = ["followed", "list", "none"] as const;
+const REPLIES_POLICIES = ["followed", "list", "none"] as const;
 
 export type RepliesPolicy = (typeof REPLIES_POLICIES)[number];
 
@@ -66,7 +65,11 @@ export const getList = userReadOperation<{ id: string }, List | null>((db, { id 
 
 // The attributes a create or an update sets; undefined leaves one as it is (on create: its default). repliesPolicy is
 // the parameter as sent, checked here.
-export type ListChanges = { title?: string; repliesPolicy?: string; exclusive?: boolean };
+export type ListChanges = {
+  title?: string | undefined;
+  repliesPolicy?: string | undefined;
+  exclusive?: boolean | undefined;
+};
 
 export type ListResult =
   | { status: "ok"; list: List }
@@ -192,8 +195,8 @@ export function ownedAccountsPage(
 
 // One page of an owned account list (ownedAccountsPage, paged): one window of readWindow(limit) candidates from the
 // cursor (below `from` without one), `rule` applied to those outside the window's LIMIT, the accounts admitted by
-// `admission` (an API answer's by default); and whether a continuation follows it (the page was full, or cut by its
-// window or by bytes).
+// `admission` (an API answer's by default); and whether a continuation follows it (a row may lie past it,
+// windowPage's `more`, or it was cut by bytes).
 export function ownedAccountsWindow(
   db: Db,
   owner: string,
@@ -211,7 +214,7 @@ export function ownedAccountsWindow(
   const window = singleWindow(db, candidates(ascending ? "ASC" : "DESC"), size, owner, max, min, size);
   const shown = windowPage(window, windowAccountIds(db, window, rule), key, page.limit, ascending);
   const presented = accountPage(db, shown, ascending, key, present, admission);
-  return { page: presented, more: shown.rows.length >= page.limit || presented.cut === true };
+  return { page: presented, more: shown.more || presented.cut === true };
 }
 
 // GET /api/v1/lists/:id/accounts: the members, unavailable accounts left out (Account.without_suspended), by account
@@ -219,7 +222,7 @@ export function ownedAccountsWindow(
 // `from`, up to MAX_LIST_MEMBERS_ANSWERED and within ANSWER_BYTES (ownedAccountsPage). A pending member is
 // listed too. Null when the list is not the viewer's.
 export const listAccounts = userReadOperation<
-  { id: string; page: PageQuery | null; from?: string; present: Present },
+  { id: string; page: PageQuery | null; from?: string | undefined; present: Present },
   Page<Account> | null
 >((db, { id, ...query }, { accountId }) => {
   if (ownList(db, accountId, id) === undefined) {

@@ -258,7 +258,7 @@ describe("kopje-admin", () => {
         account_id,
       );
     });
-    const listed = JSON.parse((await cli(["deliveries"], { fetch })).out);
+    const listed: unknown = JSON.parse((await cli(["deliveries"], { fetch })).out);
     expect(listed).toMatchObject({
       backlog: { gaveUp: 1, pending: 0 },
       gaveUp: [{ id: "7", inbox: "https://remote.example/inbox", activityType: "Create", lastStatus: 410 }],
@@ -343,7 +343,9 @@ describe("kopje-admin", () => {
     });
     // An empty value removes.
     expect((await cli(["instance", "title="], { fetch })).code).toBe(0);
-    expect(JSON.parse((await cli(["instance"], { fetch })).out).values).not.toHaveProperty("title");
+    expect((JSON.parse((await cli(["instance"], { fetch })).out) as { values: unknown }).values).not.toHaveProperty(
+      "title",
+    );
     // A refused value exits 1; malformed arguments and the import token exit 2 before any request.
     expect((await cli(["instance", "title= "], { fetch })).code).toBe(1);
     const count = seen.length;
@@ -398,7 +400,7 @@ describe("kopje-admin", () => {
     expect(JSON.parse((await cli(["health"], { fetch })).out)).toMatchObject({
       oauthAdmin: { status: "ok", username: "alice" },
     });
-    const log = JSON.parse((await cli(["moderation-log"], { fetch })).out);
+    const log = JSON.parse((await cli(["moderation-log"], { fetch })).out) as { entries: { id: string }[] };
     expect(log).toMatchObject({
       entries: [
         {
@@ -411,7 +413,7 @@ describe("kopje-admin", () => {
       ],
       next: null,
     });
-    expect(JSON.parse((await cli(["moderation-log", "--before", log.entries[0].id], { fetch })).out)).toEqual({
+    expect(JSON.parse((await cli(["moderation-log", "--before", log.entries[0]!.id], { fetch })).out)).toEqual({
       entries: [],
       next: null,
     });

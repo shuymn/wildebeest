@@ -23,7 +23,7 @@ const IPV4_LITERAL = /^\d{1,3}(\.\d{1,3}){3}$/;
 // does Web Push registration before it stores an endpoint (PUSH-2).
 export type PublicShapeViolation = "scheme" | "credentials" | "ip-literal" | "local-host";
 
-export function publicShapeViolation(url: URL): PublicShapeViolation | null {
+function publicShapeViolation(url: URL): PublicShapeViolation | null {
   if (url.protocol !== "https:") {
     return "scheme";
   }
@@ -105,7 +105,7 @@ export function boundedHref(value: string | null, limit: number): string | null 
 
 // The longest fetch target a Store answer prepares (store.ts, the rule): the longest identity fetched, a status uri, in
 // serialized URL characters, which are ASCII bytes.
-export const FETCH_TARGET_LIMIT = STATUS_URI_LIMIT;
+const FETCH_TARGET_LIMIT = STATUS_URI_LIMIT;
 
 // The serialized form of a URL the document loader would request (NET-1's shape, federation/loader.ts) within
 // FETCH_TARGET_LIMIT, else null. Both the Worker's hint and the Store's preparation judge a target with it, so a

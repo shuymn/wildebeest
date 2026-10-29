@@ -59,8 +59,8 @@ export const InlineText: FC<{ text: Inline[] }> = ({ text }) => (
 export const Who: FC<{
   account: AuthorView;
   size: 40 | 44;
-  heading?: "h1";
-  when?: { iso: string; text: string; link: Link | null; edited: boolean };
+  heading?: "h1" | undefined;
+  when?: { iso: string; text: string; link: Link | null; edited: boolean } | undefined;
   action?: Child;
 }> = ({ account, size, heading, when, action }) => {
   const { m } = useUi();
@@ -296,7 +296,7 @@ export const PollOptions: FC<{ options: PollOptionView[]; lang: string }> = ({ o
 
 // A poll (POLL-2): its choices, then how many took part and when it ends or that it has; an open poll whose
 // counts are hidden says when they appear.
-export const Poll: FC<{ poll: PollView; lang: string }> = ({ poll, lang }) => {
+const Poll: FC<{ poll: PollView; lang: string }> = ({ poll, lang }) => {
   const { m, f } = useUi();
   return (
     <div class="poll">
@@ -324,11 +324,7 @@ export const Poll: FC<{ poll: PollView; lang: string }> = ({ poll, lang }) => {
 // The post a post quotes: nested, with its author, date, content, media and poll, or its state as text
 // (R35: the presenter embeds only a post the viewer may see by itself). `ofPage`: the quote is of the page's own post
 // (its Quotes tab), named in one line rather than nested again.
-export const Quote: FC<{ quote: QuoteView; playback: boolean; ofPage?: boolean }> = ({
-  quote,
-  playback,
-  ofPage = false,
-}) => {
+const Quote: FC<{ quote: QuoteView; playback: boolean; ofPage?: boolean }> = ({ quote, playback, ofPage = false }) => {
   const { m, f } = useUi();
   if (ofPage && quote.state === "accepted") {
     return (
@@ -361,7 +357,7 @@ export const Quote: FC<{ quote: QuoteView; playback: boolean; ofPage?: boolean }
 
 // A quoting post's content hides its fallback line (`RE: <link>`, class quote-inline), as clients that show the quote
 // do.
-export const PostBody: FC<{ post: PostView; lcp: boolean; playback: boolean; quotesPage?: boolean }> = ({
+const PostBody: FC<{ post: PostView; lcp: boolean; playback: boolean; quotesPage?: boolean }> = ({
   post,
   lcp,
   playback,
@@ -401,7 +397,7 @@ const COUNT_ICONS: Record<CountKind, IconName> = {
 // A linked count is named by its label, which contains the visible number; an unlinked one shows the number to sight
 // and the label to assistive technology.
 // `actions`: controls after the counts, at the row's end (the focal post's dialogs on the status page).
-export const Counts: FC<{ items: CountView[]; actions?: Child[] }> = ({ items, actions = [] }) => {
+const Counts: FC<{ items: CountView[]; actions?: Child[] }> = ({ items, actions = [] }) => {
   const { m, f } = useUi();
   return (
     <div class="counts">
@@ -434,9 +430,9 @@ export const Counts: FC<{ items: CountView[]; actions?: Child[] }> = ({ items, a
 export const PostCard: FC<{
   post: PostView;
   variant: "feed" | "focal" | "embed";
-  label?: { icon: IconName; text: Child };
+  label?: { icon: IconName; text: Child } | undefined;
   playback?: boolean;
-  history?: string;
+  history?: string | undefined;
   actions?: Child[];
   action?: Child;
   quotesPage?: boolean;
@@ -548,7 +544,7 @@ export const PostFeed: FC<{
   empty: boolean;
   emptyText: string;
   pager: PagerLinks;
-  texts?: PagerTexts;
+  texts?: PagerTexts | undefined;
   children?: Child;
 }> = ({ empty, emptyText, pager, texts, children }) => {
   const { m } = useUi();

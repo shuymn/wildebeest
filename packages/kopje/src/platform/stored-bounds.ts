@@ -1369,14 +1369,16 @@ export const MAX_FIELD_VALUE = 255;
 // JSON escapes to six bytes: test/field-links.test.ts computes it), and at most LOCAL_FIELDS elements. Only a converted
 // or imported row can hold more; it is never verified, and its fields are presented by fieldSources' rule.
 export const LOCAL_FIELDS_BYTES = 16_384;
+/** @alias */
 export const LOCAL_FIELDS = MAX_FIELDS;
 // A verifiable value, in UTF-8 bytes: the value limit (Account::Field::MAX_CHARACTERS_LOCAL) of printable ASCII, one
 // byte each.
+/** @alias */
 export const FIELD_LINK_VALUE_BYTES = MAX_FIELD_VALUE;
 // local_accounts.verified_links: NULL, or a JSON array of 1 to VERIFIED_LINKS [value, verified at] pairs, one per
 // distinct value, within VERIFIED_LINKS_BYTES (at most 4 × (2 + 2 × 255 + 3 + 26) + 5 = 2,169 bytes of JSON when every
 // value character escapes to two bytes).
-export const VERIFIED_LINKS = MAX_FIELDS;
+const VERIFIED_LINKS = MAX_FIELDS;
 export const VERIFIED_LINKS_BYTES = 4096;
 // local_accounts.links_attempts: claims of an account's links since the last finish (domain/field-links.ts).
 export const FIELD_LINK_MAX_ATTEMPTS = 2;
@@ -1506,7 +1508,7 @@ export function fieldLinkChecksMigrationSql(): string {
 // the card's fields (Mastodon's PreviewCard and PreviewCardsStatus, as one copy per status). Bounds, each in its unit:
 // url, author_url and provider_url in UTF-8 bytes (a serialized URL is ASCII; url is web-page.ts WEB_PAGE_URL_LIMIT,
 // test/link-cards.test.ts pins them equal); the texts as JSON-escaped UTF-8 bytes with their quotes, so a stored text
-// is at most two fewer raw bytes; language in UTF-8 bytes (mn-Mong, the longest of trends.ts TREND_LANGUAGES).
+// is at most two fewer raw bytes; language in UTF-8 bytes (mn-Mong, the longest of trend-languages.ts TREND_LANGUAGES).
 // Mastodon bounds only the url (PreviewCard validates no text); the others are Kopje's, set so a status with its cards
 // stays within RES-3's budgets (test/status-bounds.test.ts, the table of maxima).
 export const CARD_URL_LIMIT = 2048;
@@ -1792,8 +1794,8 @@ export function statusCardsMigrationSql(): string {
 
 // remote_field_links (domain/remote-field-links.ts): one row per remote account with a field link to verify, holding
 // what the cron's round checks and what it found. Bounds, each in its unit:
-// - REMOTE_FIELD_INDEXES: the fields a remote account shows (accounts.ts MAX_REMOTE_FIELDS; test pins them equal),
-//   an entry's index among them from 0;
+// - REMOTE_FIELD_INDEXES: the fields a remote account shows (account-columns.ts MAX_REMOTE_FIELDS; test pins them
+//   equal), an entry's index among them from 0;
 // - REMOTE_VERIFIED_SHOWN: the entries `links` holds, the first candidates in shown order;
 // - REMOTE_FIELD_LINK_BYTES: an href, in UTF-8 bytes of printable ASCII: the longest X of Mastodon's shortest
 //   double-quoted anchor `<a href="X">X</a>` within Account::Field::MAX_CHARACTERS_COMPAT, floor((2047 - 15) / 2);
@@ -2284,6 +2286,7 @@ export const CARD_IMAGE_BODY_LIMIT = 8 * 1024 * 1024;
 export const CARD_IMAGE_PIXELS = 230_400;
 export const CARD_DECODE_PIXELS = 262_144;
 export const CARD_GIF_MATRIX_LIMIT = 921_600;
+/** @alias */
 export const CARD_IMAGE_EDGE_MAX = CARD_DIMENSION_MAX;
 export const CARD_IMAGE_OUTPUT_LIMIT = 512 * 1024;
 export const CARD_IMAGE_TOKEN_MIN_BYTES = 32;
@@ -2703,11 +2706,12 @@ export function activityMigrationSql(): string {
   ].join("\n\n")}\n`;
 }
 
-// ---- Actor document revisions: migration 0073_actor_document_revision (domain/inbox.ts upsertRemoteActor)
+// ---- Actor document revisions: migration 0073_actor_document_revision (domain/remote-actors.ts upsertRemoteActor)
 
 // accounts.document_revision: an integer from 0 to DOCUMENT_REVISION_MAX, a JavaScript safe integer so it crosses RPC
 // whole. The Store issues a new one with every store of a remote actor's document (ID-1); a row the upgrade or a
 // converted dump carries holds 0.
+/** @alias */
 export const DOCUMENT_REVISION_MAX = SAFE_INTEGER_MAX;
 
 // True when `row` holds a revision past its stored bound: not an integer (INTEGER affinity has already stored numeric

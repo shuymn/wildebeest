@@ -93,6 +93,34 @@ describe("config", () => {
     expect((await post(adminClaims(), "/admin/config", { values: { title: "x" } })).status).toBe(400);
   });
 
+  it("stores the domain as setup does, lowercase and IDNA to ASCII, and refuses a value that is not a domain", async () => {
+    const store = await migratedStore();
+    await setTeamAccess(store, team);
+    const { post, as } = adminHarness(store, team);
+    const domain = async () =>
+      (await (await as(adminClaims(), "/admin/config")).json<{ values: Record<string, string> }>()).values.domain;
+    for (const [given, stored] of [
+      [" Kopje.EXAMPLE ", "kopje.example"],
+      ["köpje.example", "xn--kpje-5qa.example"],
+    ] as const) {
+      expect((await post(adminClaims(), "/admin/config", { values: { domain: given } })).status, given).toBe(200);
+      expect(await domain(), given).toBe(stored);
+    }
+    for (const given of [
+      "192.0.2.1",
+      "kopje.example:8443",
+      "kopje.example/",
+      "kopje.example.",
+      "kopje",
+      "a b.example",
+    ]) {
+      const refused = await post(adminClaims(), "/admin/config", { values: { domain: given } });
+      expect(refused.status, given).toBe(400);
+      expect(await refused.text(), given).toContain("domain must be a domain name");
+      expect(await domain(), given).toBe("xn--kpje-5qa.example");
+    }
+  });
+
   it("accepts IMPORT_TOKEN only while admin access is not usable, checked inside the Store", async () => {
     const store = await migratedStore();
     const { request } = adminHarness(store, team, { IMPORT_TOKEN });

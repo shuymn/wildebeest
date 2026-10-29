@@ -7,8 +7,8 @@ import { accessAdminRefusal } from "./admin-authority";
 import { availableLocalSql, availableSql, followListsShownSql } from "./audience";
 import { type EmojiTag, localEmojiTags } from "./custom-emojis";
 import { taggedUrl } from "./featured-tags";
+import type { FollowerSigner } from "./follower-signer";
 import { readOperation, writeOperation } from "./operation";
-import type { FollowerSigner } from "./remote-collections";
 import { listedTagName, listedTagNameSql } from "./tag-bounds";
 
 // What the federation layer needs from the Store to publish local actors: profiles, wrapped keys, collections, and
@@ -141,7 +141,7 @@ function signingKeyOf(db: Db, username: string): FetchSigner | null {
   return row === undefined ? null : { username: row.username, key: storedKey(row) };
 }
 
-// The key of a local account that signs a fetch on a remote account's behalf (FollowerSigner in remote-collections.ts),
+// The key of a local account that signs a fetch on a remote account's behalf (FollowerSigner in follower-signer.ts),
 // with its username: only while the local account is available and follows the remote account (an accepted follow),
 // and the remote account is available; null otherwise.
 function followerKeyOf(db: Db, { follower, of }: FollowerSigner): FetchSigner | null {
@@ -306,7 +306,7 @@ export type CollectionPage = {
   hidden: boolean;
 };
 
-export const COLLECTION_PAGE_SIZE = 40;
+const COLLECTION_PAGE_SIZE = 40;
 
 // Accepted follows of a local actor, newest first, one page (1-based) at a time. page null asks for the count only.
 // A suspended actor has none, as its outbox has none. A remote server fetches these without a viewer, so an actor that

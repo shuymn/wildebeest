@@ -28,7 +28,7 @@ import {
   splitStatements,
 } from "./sql-script.js";
 
-export const FINGERPRINT_FORMAT = "kopje-fingerprint/2";
+const FINGERPRINT_FORMAT = "kopje-fingerprint/2";
 const SEQUENCE_TABLE = "sqlite_sequence";
 const NOTIFICATIONS = "actor_notifications";
 
@@ -124,7 +124,7 @@ export function fingerprintExport(exportPath) {
         }
         const cells = columns
           .map((column, i) => /** @type {[string, string[]]} */ ([column, typed(row[i])]))
-          .sort((x, y) => (x[0] < y[0] ? -1 : x[0] > y[0] ? 1 : 0));
+          .toSorted((x, y) => (x[0] < y[0] ? -1 : x[0] > y[0] ? 1 : 0));
         list.push(
           createHash("sha256")
             .update(JSON.stringify([parsed.table, cells]))
@@ -157,8 +157,8 @@ export function fingerprintExport(exportPath) {
   }
   /** @type {Fingerprint['tables']} */
   const tables = {};
-  for (const name of [...hashes.keys()].sort()) {
-    const rows = /** @type {string[]} */ (hashes.get(name)).sort();
+  for (const name of [...hashes.keys()].toSorted()) {
+    const rows = /** @type {string[]} */ (hashes.get(name)).toSorted();
     tables[name] = { rows: rows.length, sha256: createHash("sha256").update(rows.join("\n")).digest("hex") };
   }
   return { format: FINGERPRINT_FORMAT, tables, notificationSequence };
@@ -202,10 +202,12 @@ export function parseFingerprint(value) {
  * @returns {{ rowsLoaded: Record<string, number>, notificationSequence: string | null }}
  */
 export function parseManifest(value) {
-  const m = /** @type {Record<string, any>} */ (value);
+  const m = /** @type {{ tool?: { command?: unknown } | null, result?: unknown,
+    source?: { rowsLoaded?: unknown, notificationSequence?: unknown } | null } | null} */ (value);
   const tool = m?.tool;
   const source = m?.source;
   const rowsLoaded = source?.rowsLoaded;
+  const sequence = source?.notificationSequence;
   if (
     typeof m !== "object" ||
     m === null ||
@@ -216,11 +218,11 @@ export function parseManifest(value) {
     Array.isArray(rowsLoaded) ||
     Object.keys(rowsLoaded).length === 0 ||
     !Object.values(rowsLoaded).every((n) => Number.isSafeInteger(n) && n >= 0) ||
-    (source.notificationSequence !== null && typeof source.notificationSequence !== "string")
+    (sequence !== null && typeof sequence !== "string")
   ) {
     throw new FingerprintError("not-a-conversion-manifest");
   }
-  return { rowsLoaded, notificationSequence: source.notificationSequence };
+  return { rowsLoaded: /** @type {Record<string, number>} */ (rowsLoaded), notificationSequence: sequence };
 }
 
 // Tables the converter's count map does not cover: its own bookkeeping.
@@ -269,8 +271,8 @@ export function compareFingerprints(first, second, manifest) {
     result: changed.length === 0 && exportDiffers.length === 0 ? "PASS" : "FAIL",
     tables: tables.length,
     rows: tables.reduce((sum, t) => sum + t.rows, 0),
-    changed: changed.sort(),
-    ...(manifest === undefined ? {} : { exportDiffers: exportDiffers.sort() }),
+    changed: changed.toSorted(),
+    ...(manifest === undefined ? {} : { exportDiffers: exportDiffers.toSorted() }),
   };
 }
 

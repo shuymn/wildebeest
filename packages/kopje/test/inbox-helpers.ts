@@ -1,7 +1,7 @@
 import { exportSpki, signRequest } from "@fedify/fedify";
 import { Temporal } from "temporal-polyfill";
 
-import type { RemoteActorInput } from "../src/domain/inbox";
+import type { RemoteActorInput } from "../src/domain/remote-actors";
 import { RSA_ALGORITHM } from "../src/security/key-wrap";
 import { NOW } from "./app-helpers";
 

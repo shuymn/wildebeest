@@ -1,6 +1,6 @@
 import { FetchError } from "@fedify/fedify";
 
-import type { DocumentRevision, RemoteActorInput } from "../domain/inbox";
+import type { DocumentRevision, RemoteActorInput } from "../domain/remote-actors";
 import type { Resolved } from "../domain/remote-statuses";
 import { readConfig, userKek } from "../platform/config";
 import { hostDomain, normalizeDomain, parseAddress } from "../platform/domain-name";
@@ -27,10 +27,10 @@ import { ACTOR_TYPES, idOf, parseRemoteStatus } from "./remote-status";
 // mastodon/search.ts checks the token first).
 //
 // As Mastodon's ResolveURLService and ResolveAccountService, with these differences: a URL must answer with an
-// ActivityPub document itself (an HTML page's alternate link is not followed), and an address is stored under the
-// host of the actor its WebFinger names (no second WebFinger round trip to confirm a split domain). An actor's
-// revision is read from the Store before its document is fetched (a URL naming an actor is fetched again after that
-// read, actorAfterRevision), and the document is stored only while it holds (ID-1, domain/inbox.ts DocumentRevision):
+// ActivityPub document itself (an HTML page's alternate link is not followed), and an address is stored under the host
+// of the actor its WebFinger names (no second WebFinger round trip to confirm a split domain). An actor's revision is
+// read from the Store before its document is fetched (a URL naming an actor is fetched again after that read,
+// actorAfterRevision), and the document is stored only while it holds (ID-1, domain/remote-actors.ts DocumentRevision):
 // the probe, and the WebFinger that follows the fetch on a host another server may name, can delay the store past a
 // newer one.
 

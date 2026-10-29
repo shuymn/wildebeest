@@ -329,7 +329,7 @@ describe("statusReads, the id brands and the presenter guard", () => {
       // `visible` takes no time; `listable` takes it at ?4.
       const read = statusReads(viewer, { viewer: "?1" });
       const timed = statusReads(viewer, { viewer: "?1", now: "?4" });
-      const ids = (rows: { id: string }[]) => rows.map((row) => row.id).sort();
+      const ids = (rows: { id: string }[]) => rows.map((row) => row.id).toSorted();
       const params = [booster, boost, hidden];
       const both = { where: "s.id IN (?2, ?3)" };
       expect(ids(read.select(db, "visible", both, ...params))).toEqual([boost]);

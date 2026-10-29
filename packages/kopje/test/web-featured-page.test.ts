@@ -36,10 +36,11 @@ import { blockDomain } from "./domain-block-helpers";
 import { accountAtCap } from "./emoji-fixtures";
 import { BUILD } from "./helpers";
 import { fullestFields, MAX_BIO, movedAtCaps } from "./profile-fixtures";
-import { shownAccounts, viaRoute, walkPages, walkProfile } from "./profile-page-helpers";
+import { expectFullPages, shownAccounts, viaRoute, walkPages, walkProfile } from "./profile-page-helpers";
 import { observedSql, type PlannedStatement, plannedSql, scansOf, staleStatistics } from "./read-helpers";
 import { community } from "./status-helpers";
 import { accessibleName, attr, closest, one, parseHtml, query, text } from "./web-dom";
+import { render } from "./web-fixtures";
 import { countedHarness } from "./web-helpers";
 
 // The profile's Featured tab: /@user/featured shows a local account's featured hashtags and the accounts it endorses,
@@ -175,15 +176,15 @@ function within(h: Harness, answerBytes: number) {
     const url = new URL(path, "https://kopje.test");
     const page = await readWithin(h, path, answerBytes);
     expect(jsonBytes({ ...page, site: SITE })).toBeLessThanOrEqual(answerBytes);
-    return String(
-      await jsx(FeaturedPage, {
+    return await render(
+      jsx(FeaturedPage, {
         account: page.account,
         tags: page.tags,
         accounts: page.accounts,
         cursor: pageCursor(url.searchParams.get("max_id"), url.searchParams.get("min_id")),
         paging: page.paging,
         site: SITE,
-      }).toString(),
+      }),
     );
   };
 }
@@ -339,6 +340,30 @@ describe("the Featured tab’s endorsed accounts (R28)", () => {
       expect(shown(html).tags.map((tag) => tag.name)).toEqual(["#Cats"]);
     }
   }, 120_000);
+});
+
+describe("the Featured tab’s endorsed accounts at their ends", () => {
+  it("offer a side only when an account lies there, at both ends of exact pages", async () => {
+    const h = await community(["alice"]);
+    await sql(
+      h.store,
+      `WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < ?2)
+			INSERT INTO accounts (id, uri, username, domain, display_name)
+			SELECT printf('%d', CAST(?1 AS INTEGER) + i), 'https://exact.example/users/u' || i, 'u' || i, 'exact.example', '' FROM n`,
+      String(nextAccount),
+      2 * ENDORSEMENTS_PAGE_SIZE,
+    );
+    nextAccount += BigInt(2 * ENDORSEMENTS_PAGE_SIZE + 1);
+    for (const table of ["follows", "account_pins"]) {
+      await sql(
+        h.store,
+        `INSERT INTO ${table} (account_id, target_account_id${table === "follows" ? ", state" : ""})
+				SELECT ?1, id${table === "follows" ? ", 'accepted'" : ""} FROM accounts WHERE domain = 'exact.example' ORDER BY id`,
+        h.users.alice.id,
+      );
+    }
+    expectFullPages(await walk(viaRoute(h), "/@alice/featured"), ENDORSEMENTS_PAGE_SIZE, 2);
+  });
 });
 
 describe("the Featured tab’s hashtags", () => {

@@ -32,7 +32,7 @@ const NO_FRAMING = "frame-ancestors 'none'";
 
 const CSP = csp(null, false, NO_FRAMING);
 
-export const PRELOAD = `<${STYLESHEET}>; rel=preload; as=style`;
+const PRELOAD = `<${STYLESHEET}>; rel=preload; as=style`;
 
 const FRAMING = { "content-security-policy": CSP, "x-frame-options": "DENY", "x-content-type-options": "nosniff" };
 

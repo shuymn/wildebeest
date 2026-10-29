@@ -120,7 +120,7 @@ const grouped = (body: unknown) =>
 describe("routes answer the Link of a page cut at its window", () => {
   it("pages notifications, followers, following and interactors through 1,000 muted accounts by the next link", async () => {
     const { h, alice, bob, status } = await world(1_000);
-    const expected = [...ids(NEWER_BASE, NEWER).reverse(), ...ids(OLDER_BASE, OLDER).reverse()];
+    const expected = [...ids(NEWER_BASE, NEWER).toReversed(), ...ids(OLDER_BASE, OLDER).toReversed()];
     for (const [path, accounts, reader] of [
       ["/api/v1/notifications", notified, alice],
       [`/api/v1/accounts/${alice.id}/followers`, listed, bob],
@@ -138,7 +138,10 @@ describe("routes answer the Link of a page cut at its window", () => {
   it("pages grouped notifications through 2,000 hidden ones in both directions", async () => {
     const { h, alice } = await world(2_000);
     const older = await follow(h, alice.token, "/api/v2/notifications", "next", grouped);
-    expect(older.pages.flat()).toEqual([...ids(NEWER_BASE, NEWER).reverse(), ...ids(OLDER_BASE, OLDER).reverse()]);
+    expect(older.pages.flat()).toEqual([
+      ...ids(NEWER_BASE, NEWER).toReversed(),
+      ...ids(OLDER_BASE, OLDER).toReversed(),
+    ]);
     expect(older.empty).toBeGreaterThan(0);
     // Walking up from just above the older notifications: the hidden range, then the newer ones.
     const lastOlder = (
@@ -152,7 +155,7 @@ describe("routes answer the Link of a page cut at its window", () => {
       )
     )[0]?.id;
     const newer = await follow(h, alice.token, `/api/v2/notifications?min_id=${lastOlder}`, "prev", grouped);
-    expect(newer.pages.flat().sort()).toEqual(ids(NEWER_BASE, NEWER));
+    expect(newer.pages.flat().toSorted()).toEqual(ids(NEWER_BASE, NEWER));
     expect(newer.empty).toBeGreaterThan(0);
   }, 120_000);
 });
@@ -298,7 +301,7 @@ describe("the quotes list never answers an id of a quote the reader may not see"
         seen.push(...body.map((status) => status.id));
         next = linkOf(response, "next");
       }
-      expect(seen).toEqual([...visible].reverse());
+      expect(seen).toEqual([...visible].toReversed());
     }
   }, 60_000);
 });
@@ -393,7 +396,7 @@ describe("limit=0 answers the whole of a list the viewer keeps", () => {
         alice.id,
       );
     });
-    const expected = ids(OLDER_BASE, 5).reverse();
+    const expected = ids(OLDER_BASE, 5).toReversed();
     for (const path of [`/api/v1/lists/${list}/accounts?limit=0`, "/api/v1/endorsements?limit=0"]) {
       const response = await h.request(path, bearer(alice.token));
       expect(response.status).toBe(200);

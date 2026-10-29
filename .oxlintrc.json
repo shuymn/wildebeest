@@ -42,6 +42,9 @@
     "eslint/prefer-spread": "error",
     "eslint/symbol-description": "error",
     "import/export": "error",
+    // A module read at load before its cycle partner has initialized sees undefined (esbuild turns top-level const
+    // into var), so no value import may close a cycle; a type import is erased (test-node/lint-config.test.ts).
+    "import/no-cycle": ["error", { "ignoreTypes": true }],
     "import/no-duplicates": "error",
     "import/no-mutable-exports": "error",
     "oxc/branches-sharing-code": "error",
@@ -94,7 +97,7 @@
     "eslint/no-underscore-dangle": "off",
     // `[...text]` counts code points, as Mastodon does.
     "typescript/no-misused-spread": "off",
-    // Exhaustive `switch`es end without a return; tsc reports a missing one.
+    // tsc's `noImplicitReturns` covers it, and accepts exhaustive `switch`es that end without a return.
     "typescript/consistent-return": "off",
     // `db.first<T>()` and its kin let the caller name the row type.
     "typescript/no-unnecessary-type-parameters": "off",
@@ -109,18 +112,7 @@
     "vitest/no-standalone-expect": "off",
     // Prose comments that start with "it (" read as commented-out tests.
     "vitest/no-commented-out-tests": "off",
-    "vitest/require-mock-type-parameters": "off",
-
-    // Off until their findings are fixed; each is a mechanical rewrite.
-    "typescript/no-unnecessary-boolean-literal-compare": "off",
-    "typescript/no-unnecessary-template-expression": "off",
-    "typescript/no-unnecessary-type-arguments": "off",
-    "typescript/no-unnecessary-type-conversion": "off",
-    "unicorn/no-array-reverse": "off",
-    "unicorn/no-array-sort": "off",
-    "unicorn/no-useless-fallback-in-spread": "off",
-    "unicorn/no-useless-spread": "off",
-    "unicorn/prefer-string-starts-ends-with": "off"
+    "vitest/require-mock-type-parameters": "off"
   },
   "overrides": [
     // lint/signing-keys.js; test-node/signing-keys.test.ts pins this wiring.
@@ -130,14 +122,11 @@
       "files": ["packages/kopje/src/**/*.{ts,tsx}"],
       "rules": { "typescript/restrict-template-expressions": ["error", { "allowNullish": false }] }
     },
-    // Tests, test-node and the CLI may still assign, read and pass `any`; calling or returning one stays an error.
+    // Vitest types its asymmetric matchers (`expect.any(String)` and its kin) as `any`, so a test may assign one;
+    // no-unsafe-member-access and no-unsafe-argument stay on in tests.
     {
-      "files": ["packages/kopje/test/**", "packages/kopje/test-node/**", "packages/kopje/cli/**"],
-      "rules": {
-        "typescript/no-unsafe-argument": "off",
-        "typescript/no-unsafe-assignment": "off",
-        "typescript/no-unsafe-member-access": "off"
-      }
+      "files": ["packages/kopje/test/**", "packages/kopje/test-node/**"],
+      "rules": { "typescript/no-unsafe-assignment": "off" }
     },
     // oxlint does not read the CLI's `/* global */` comments.
     {
@@ -145,8 +134,10 @@
       "env": { "node": true },
       "rules": { "eslint/no-redeclare": "error", "eslint/no-undef": "error" }
     },
-    // Scripts no tsconfig covers: without types, every value is `any`, and an index read is judged without
-    // noUncheckedIndexedAccess, so a cast the package's settings need looks unnecessary.
+    // Untyped scripts. lint/ and the embed scripts have no tsconfig: every value is `any`, and an index read is judged
+    // without noUncheckedIndexedAccess, so a cast the package's settings need looks unnecessary. tsc checks the other
+    // three with checkJs (packages/kopje/scripts/tsconfig.json, scripts/tsconfig.json), but their JSON reads, RPC
+    // results and dynamic imports are still `any`.
     {
       "files": [
         "packages/kopje/scripts/**",

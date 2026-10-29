@@ -33,7 +33,7 @@ const SUGGESTIONS = 10;
 
 // A listed Tag at its widest: a name escaping to TAG_NAME_JSON_BYTES (MAX_TAG_LENGTH control characters), a url of a
 // TAG_NAME_BYTES name every byte of which percent-encodes, a 19-digit id, and seven days of LISTED_HISTORY_ROWS.
-export const LISTED_TAG_MAX = jsonBytes({
+const LISTED_TAG_MAX = jsonBytes({
   id: DIGITS(19),
   name: C.repeat(MAX_TAG_LENGTH),
   url: `${ORIGIN}/tags/${"%XX".repeat(TAG_NAME_BYTES)}`,
@@ -48,7 +48,7 @@ export const LISTED_TAG_MAX = jsonBytes({
 
 // A v2 search hashtag at its widest: search shows a stored name as decoded (tag-bounds.ts searchedTagKey), so a key of
 // TAG_NAME_BYTES malformed bytes is at most that many U+FFFD (three bytes each, nine percent-encoded in the url).
-export const SEARCH_TAG_MAX = jsonBytes({
+const SEARCH_TAG_MAX = jsonBytes({
   id: DIGITS(19),
   name: "\uFFFD".repeat(TAG_NAME_BYTES),
   url: `${ORIGIN}/tags/${"%EF%BF%BD".repeat(TAG_NAME_BYTES)}`,
@@ -286,7 +286,7 @@ describe("the history reads of the lists (RES-7)", () => {
       if (result.status !== "ok") {
         throw new Error(result.status);
       }
-      expect(result.value.items.map((tag) => tag.name)).toEqual([...followed].reverse());
+      expect(result.value.items.map((tag) => tag.name)).toEqual([...followed].toReversed());
       // Status i carries followed[i % 200] and is by author i % 100: one author per hashtag.
       expectCapped(result.value.items, 1);
       return rowsRead(h, followedTags, input);

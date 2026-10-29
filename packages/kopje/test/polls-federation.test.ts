@@ -2,7 +2,8 @@ import { runInDurableObject } from "cloudflare:test";
 import { describe, expect, it } from "vitest";
 
 import { Db } from "../src/db/sql";
-import { MAX_REMOTE_OPTIONS, type Poll } from "../src/domain/polls";
+import type { Poll } from "../src/domain/poll-presenter";
+import { MAX_REMOTE_OPTIONS } from "../src/domain/polls";
 import { recordEdit } from "../src/domain/statuses";
 import { endPolls } from "../src/jobs/scheduled";
 import { MAX_REMOTE_OPTION_LENGTH, pollOptionsSql } from "../src/platform/stored-bounds";

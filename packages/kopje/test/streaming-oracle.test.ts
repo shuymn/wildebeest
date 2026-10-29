@@ -332,7 +332,7 @@ describe("R33: the streamed statuses agree with their references (user, lists, p
       }),
       runs(CASES, 20261017),
     );
-    expect([...shown].sort()).toEqual(
+    expect([...shown].toSorted()).toEqual(
       [
         "feed filtered",
         "hashtag:cats",
@@ -341,7 +341,7 @@ describe("R33: the streamed statuses agree with their references (user, lists, p
         "list",
         "mention only",
         ...PUBLIC_FEEDS.map(([key]) => key),
-      ].sort(),
+      ].toSorted(),
     );
   }, 240_000);
 });

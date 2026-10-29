@@ -10,6 +10,7 @@ import { apiHarness } from "./api-helpers";
 import { countingStore, harness } from "./app-helpers";
 import { BUILD, migratedStore } from "./helpers";
 import { storeWith } from "./setup-helpers";
+import { attr, one, parseHtml, query, text } from "./web-dom";
 import { ICON_LINKS, iconLinksOf } from "./web-helpers";
 
 // The error pages of app.ts (negotiation.ts): a GET or HEAD of a page route that fails (500, 503, the env's
@@ -64,7 +65,11 @@ function failingStore(error: () => Error): { stub: StoreStub; calls: string[] } 
 }
 
 function init(method: string, accept: string | undefined, extra: Record<string, string> = {}, body?: string) {
-  return { method, headers: { ...(accept === undefined ? {} : { accept }), ...extra }, body };
+  return {
+    method,
+    headers: { ...(accept === undefined ? {} : { accept }), ...extra },
+    ...(body === undefined ? {} : { body }),
+  };
 }
 
 function expectPage(html: string, title: string) {
@@ -74,6 +79,9 @@ function expectPage(html: string, title: string) {
   expect(iconLinksOf(html)).toEqual(ICON_LINKS);
   expect(html).not.toContain("<script");
   expect(html).not.toContain("data-local");
+  // Without the Store, the header names the request's host and leads to the site's root.
+  const header = one(parseHtml(html), "header");
+  expect(query(header, "a").map((a) => [attr(a, "href"), text(a)])).toEqual([["/", "kopje.test"]]);
 }
 
 describe("negotiation", () => {

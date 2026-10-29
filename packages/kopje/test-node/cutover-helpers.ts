@@ -17,7 +17,7 @@ import { buildLegacyFixture, type FixtureOptions } from "./legacy-fixture.js";
 // Shared steps of the converter suites: a temporary directory per test, exports written from synthetic fixtures,
 // conversion and verification as the CLI runs them, and tampering that keeps a dump self-consistent.
 
-export const BASE_TIME = Date.parse("2026-10-20T00:00:00.000Z");
+const BASE_TIME = Date.parse("2026-10-20T00:00:00.000Z");
 
 export type Categories = Record<
   string,
@@ -74,7 +74,7 @@ export async function convert(
     out?: string;
     baseTime?: number;
     imagesDir?: string;
-    acceptMissingImages?: boolean;
+    acceptMissingImages?: boolean | undefined;
   } = {},
 ) {
   const outDir = join(dir, extra.out ?? "out");
@@ -87,7 +87,7 @@ export async function convert(
     env: extra.env ?? {},
     version: "test",
     imagesDir: extra.imagesDir,
-    acceptMissingImages: extra.acceptMissingImages,
+    acceptMissingImages: extra.acceptMissingImages ?? false,
   });
   return { ...result, dumpPath: join(outDir, "kopje.dump") };
 }
@@ -110,7 +110,7 @@ export async function verify(
     baseTime: 0,
     env: {},
     imagesDir: options.imagesDir,
-    acceptMissingImages: options.acceptMissingImages,
+    acceptMissingImages: options.acceptMissingImages ?? false,
   });
   return { ok, report, categories: (report as { categories?: Categories }).categories ?? {} };
 }

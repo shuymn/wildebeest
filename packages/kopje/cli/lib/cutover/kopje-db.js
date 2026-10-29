@@ -12,10 +12,10 @@ import { END_LINE, HEADER_PREFIX, TRAILER_PREFIX } from "../format.js";
 const MIGRATIONS_DIR = fileURLToPath(new URL("../../../migrations/", import.meta.url));
 
 /** @returns {{ name: string, sql: string }[]} */
-export function kopjeMigrations() {
+function kopjeMigrations() {
   return readdirSync(MIGRATIONS_DIR)
     .filter((f) => f.endsWith(".sql"))
-    .sort()
+    .toSorted()
     .map((f) => ({ name: f.slice(0, -".sql".length), sql: readFileSync(`${MIGRATIONS_DIR}${f}`, "utf8") }));
 }
 
@@ -73,7 +73,7 @@ function excluded(name) {
 }
 
 /** @param {string} name */
-export function quoteIdentifier(name) {
+function quoteIdentifier(name) {
   return `"${name.replaceAll('"', '""')}"`;
 }
 
@@ -96,7 +96,7 @@ export function readCatalog(db) {
     ).filter((c) => c.hidden === 0);
     const key = info
       .filter((c) => c.pk > 0)
-      .sort((a, b) => a.pk - b.pk)
+      .toSorted((a, b) => a.pk - b.pk)
       .map((c) => c.name);
     const withoutRowid = /\)\s*WITHOUT\s+ROWID\s*$/i.test(table.sql ?? "");
     const sequence = table.name === "sqlite_sequence";

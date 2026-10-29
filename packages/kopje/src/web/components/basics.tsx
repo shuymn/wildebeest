@@ -106,11 +106,7 @@ export type PagerTexts = { newer: string; older: string; newerShort: string; old
 
 // Newer and older pages, or earlier and later ones (`texts`): each side only when it is offered, the older one at the
 // row's end; nothing when neither is.
-export const Pager: FC<{ newer: string | null; older: string | null; texts: PagerTexts }> = ({
-  newer,
-  older,
-  texts,
-}) => {
+const Pager: FC<{ newer: string | null; older: string | null; texts: PagerTexts }> = ({ newer, older, texts }) => {
   const { m } = useUi();
   const side = (href: string, full: string, short: string, older: boolean) => (
     <LinkButton

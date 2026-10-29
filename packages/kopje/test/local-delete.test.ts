@@ -632,7 +632,7 @@ describe("who the Delete reaches (VIS-3)", () => {
     const claim = await runInDurableObject(t.store, (_instance, state) =>
       claimDeliveries.run(state.storage.sql, { now: NOW, leaseToken: "held" }),
     );
-    expect(claim.deliveries.map((d) => d.inbox).sort()).toEqual([
+    expect(claim.deliveries.map((d) => d.inbox).toSorted()).toEqual([
       "https://f1.example/inbox",
       "https://v1.example/inbox",
     ]);
@@ -813,7 +813,7 @@ describe("writes refused once the status is withdrawn (ID-7, VIS-28)", () => {
     await sql(t.store, "DELETE FROM notifications");
     await runInDurableObject(t.store, (_instance, state) => pollRound.run(state.storage.sql, { now: NOW }));
     expect(await sql(t.store, "SELECT status_id FROM polls WHERE ended = 1 ORDER BY status_id")).toEqual(
-      [polls.withdrawn!, polls.live!].sort().map((status_id) => ({ status_id })),
+      [polls.withdrawn!, polls.live!].toSorted().map((status_id) => ({ status_id })),
     );
     expect(await sql(t.store, "SELECT status_id FROM notifications WHERE type = 'poll'")).toEqual([
       { status_id: polls.live! },

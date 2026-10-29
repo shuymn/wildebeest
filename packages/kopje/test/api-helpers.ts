@@ -194,8 +194,9 @@ export type ApiHarness = Awaited<ReturnType<typeof apiHarness>>;
 // deps replaces the image codec, or wraps the Store stub the app calls (tests still reach the real Store as `store`).
 export async function apiHarness(
   overrides: Record<string, unknown> = {},
-  deps: Pick<AppDeps, "images" | "federation"> & { wrapStore?: (store: StoreStub) => StoreStub } = {},
+  deps: Pick<AppDeps, "images" | "federation"> & { wrapStore?: ((store: StoreStub) => StoreStub) | undefined } = {},
 ) {
+  const { wrapStore, ...seams } = deps;
   const store = await migratedStore();
   await setSetting(store, "domain", "kopje.test");
   const team = await accessTeam();
@@ -211,22 +212,24 @@ export async function apiHarness(
   const app = createApp({
     build: () => env.CF_VERSION_METADATA.id,
     now,
-    store: () => (deps.wrapStore === undefined ? store : deps.wrapStore(store)),
+    store: () => (wrapStore === undefined ? store : wrapStore(store)),
     fetch: team.fetch,
     randomToken,
-    images: deps.images,
-    federation: deps.federation,
+    ...seams,
     doorbell,
     jobs,
   });
   // Work a response leaves running (waitUntil, such as the media sweep) settles before the request returns.
-  const request = async (path: string, init?: RequestInit): Promise<Response> => {
+  const send = async (request: Request): Promise<Response> => {
     const ctx = createExecutionContext();
-    const response = await app.fetch(new Request(`https://kopje.test${path}`, init), testEnv, ctx);
+    const response = await app.fetch(request, testEnv, ctx);
     await waitOnExecutionContext(ctx);
     return response;
   };
-  return { store, team, request, now, env: testEnv, doorbell, jobs };
+  // A request to the instance domain; send takes one to any URL.
+  const request = (path: string, init?: RequestInit): Promise<Response> =>
+    send(new Request(`https://kopje.test${path}`, init));
+  return { store, team, request, send, now, env: testEnv, doorbell, jobs };
 }
 
 export function bearer(token: string, init: RequestInit = {}): RequestInit {
@@ -281,6 +284,8 @@ export type AuthorizeOptions = {
   state?: string;
   // The Access assertion sent instead of a valid one for `email`; null sends none.
   assertion?: string | null;
+  // The host the request goes to (and the decision's Origin names) instead of the instance domain.
+  host?: string;
 };
 
 async function accessHeader(h: ApiHarness, options: AuthorizeOptions): Promise<Record<string, string>> {
@@ -305,9 +310,12 @@ function authorizeQuery(app: App, options: AuthorizeOptions): Record<string, str
 }
 
 export async function consentPage(h: ApiHarness, app: App, options: AuthorizeOptions = {}): Promise<Response> {
-  return h.request(`/oauth/authorize?${new URLSearchParams(authorizeQuery(app, options)).toString()}`, {
-    headers: await accessHeader(h, options),
-  });
+  const query = new URLSearchParams(authorizeQuery(app, options)).toString();
+  return h.send(
+    new Request(`https://${options.host ?? "kopje.test"}/oauth/authorize?${query}`, {
+      headers: await accessHeader(h, options),
+    }),
+  );
 }
 
 // Posts the consent decision the way the consent page's form does.
@@ -318,9 +326,12 @@ export async function decide(
   options: AuthorizeOptions = {},
 ): Promise<Response> {
   const { response_type: _, ...fields } = authorizeQuery(app, options);
-  return h.request(
-    "/oauth/authorize",
-    form({ ...fields, decision }, { headers: { ...(await accessHeader(h, options)), origin: "https://kopje.test" } }),
+  const origin = `https://${options.host ?? "kopje.test"}`;
+  return h.send(
+    new Request(
+      `${origin}/oauth/authorize`,
+      form({ ...fields, decision }, { headers: { ...(await accessHeader(h, options)), origin } }),
+    ),
   );
 }
 

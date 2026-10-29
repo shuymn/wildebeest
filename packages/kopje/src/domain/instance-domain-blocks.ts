@@ -2,12 +2,13 @@ import type { Db } from "../db/sql";
 import { blockedDomain, hostDomain } from "../platform/domain-name";
 import { fetchableHref } from "../platform/http-url";
 import { sha256Hex } from "../platform/sha256";
-import { type PageQuery, edgeRangeSql } from "./accounts";
+import type { PageQuery } from "./accounts";
 import { admit, ARRAY_ANSWER_BYTES } from "./answer-budget";
 import { domainCoveredSql, hostCoveredSql, hostMediaRejectedSql, MAX_BLOCK_LABELS } from "./audience";
 import { authorize, type Authorized, type Credential } from "./auth";
 import { FRESH_ATTEMPTS_SQL } from "./job-attempts";
 import { readOperation, writeOperation } from "./operation";
+import { edgeRangeSql } from "./windows";
 
 // Instance domain blocks (R38, VIS-30; Mastodon's DomainBlock), migration 0046_instance_domain_blocks. Each Store
 // operation commits in one transaction and fetches nothing. A host's rule is its longest matching block (audience.ts
@@ -65,7 +66,7 @@ function labels(domain: string): number {
 // Mastodon's DomainValidator (app/validators/domain_validator.rb:4-6, 24-31): a normalized domain is shorter than 256
 // characters, each label 1 to 63 long.
 export const MAX_DOMAIN_LENGTH = 255;
-export const MAX_LABEL_LENGTH = 63;
+const MAX_LABEL_LENGTH = 63;
 // A raw domain (trimmed) longer than this is refused before it is normalized: no normalization of a longer one gives a
 // domain within MAX_DOMAIN_LENGTH.
 export const MAX_DOMAIN_INPUT = 1_024;
@@ -110,7 +111,7 @@ export function reportsRejected(db: Db, domain: string): boolean {
 // Resets the domain job (remote-suspension.ts) in the caller's transaction: its walks start again, its follow bound is
 // the newest follow, and a failing or parked job is fresh again (a new generation, RES-5). Here, not there:
 // deliveries.ts reads hostCovered, and remote-suspension.ts deliveries.ts.
-export function resetDomainJob(db: Db): void {
+function resetDomainJob(db: Db): void {
   db.run(
     `INSERT INTO remote_moderation_jobs (kind, subject, mode, follow_bound, phase, cursor)
 		VALUES ('domain', '', 'domain', (SELECT coalesce(max(id), 0) FROM follows), 'clear', '')
@@ -194,7 +195,7 @@ export const createInstanceDomainBlock = writeOperation(createBlock);
 // Applies the given fields; the domain and omitted fields stay. Null for an unknown id.
 export function updateBlock(
   db: Db,
-  input: Partial<BlockFields> & { id: number; now: number },
+  input: { [K in keyof BlockFields]?: BlockFields[K] | undefined } & { id: number; now: number },
 ): InstanceDomainBlock | null {
   const before = db.first<BlockRow>(`SELECT ${COLUMNS} FROM instance_domain_blocks WHERE id = ?`, input.id);
   if (before === undefined) {
@@ -251,7 +252,7 @@ export function blocksPage(db: Db, page: PageQuery): InstanceDomainBlock[] {
     (ascending ? page.minId : page.sinceId) ?? null,
     page.limit,
   );
-  return (ascending ? rows.reverse() : rows).map(present);
+  return (ascending ? rows.toReversed() : rows).map(present);
 }
 
 // Whether a suspend block covers `host`, a normalized domain (hostDomain).

@@ -2,9 +2,9 @@ import { runInDurableObject } from "cloudflare:test";
 import { describe, expect, it, vi } from "vitest";
 
 import { EXPANSION_STEP, supersedeEarlier } from "../src/domain/deliveries";
+import { MODERATION_ROUND_ROWS } from "../src/domain/moderation-bounds";
 import { writeOperation } from "../src/domain/operation";
 import { SEVER_ROUND, SEVER_ROWS } from "../src/domain/remote-suspension";
-import { MODERATION_ROUND_ROWS } from "../src/domain/suspension";
 import type { StoreStub } from "../src/platform/store-client";
 import { bearer, json, settle, sql, userToken } from "./api-helpers";
 import { NOW } from "./app-helpers";
@@ -173,8 +173,8 @@ describe("the account job and its generation", () => {
     await settle(w.h.store);
     expect(await jobs(w.h.store)).toEqual([]);
     const uri = await uriOf(w.h.store, r);
-    expect((await rejects(w.h.store)).map((row) => [row.signer, row.follower, row.retracts]).sort(byText)).toEqual(
-      [w.alice.id, w.bob.id, w.carol.id, w.dan.id].map((id) => [id, uri, 1]).sort(byText),
+    expect((await rejects(w.h.store)).map((row) => [row.signer, row.follower, row.retracts]).toSorted(byText)).toEqual(
+      [w.alice.id, w.bob.id, w.carol.id, w.dan.id].map((id) => [id, uri, 1]).toSorted(byText),
     );
     expect(await sql(w.h.store, "SELECT * FROM follows WHERE account_id = ?", r)).toEqual([]);
     // The report filed while r was available is frozen at the second suspension, and resolved too.

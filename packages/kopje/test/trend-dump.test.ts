@@ -2,7 +2,8 @@ import { runInDurableObject } from "cloudflare:test";
 import { describe, expect, it } from "vitest";
 
 import { readOperation } from "../src/domain/operation";
-import { linkHistory, TREND_LANGUAGES_JSON, trendCopySql } from "../src/domain/trends";
+import { TREND_LANGUAGES_JSON } from "../src/domain/trend-languages";
+import { linkHistory, trendCopySql } from "../src/domain/trends";
 import type { StoreStub } from "../src/platform/store-client";
 import { MAX_TREND_REVIEWS } from "../src/platform/stored-bounds";
 import { sql } from "./api-helpers";

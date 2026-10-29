@@ -26,7 +26,6 @@ import {
 } from "@fedify/vocab";
 import { Temporal } from "temporal-polyfill";
 
-import type { FeaturedItem } from "../domain/activities";
 import {
   type CollectionKind,
   type CollectionPage,
@@ -37,8 +36,9 @@ import {
   type NodeInfoUsage,
   type StoredKey,
 } from "../domain/actors";
+import type { FollowerSigner } from "../domain/follower-signer";
 import type { PolicyTicket } from "../domain/instance-domain-blocks";
-import type { FollowerSigner } from "../domain/remote-collections";
+import type { FeaturedItem } from "../domain/local-notes";
 import type { SnapshotSource } from "../domain/snapshot";
 import { renderFieldValue } from "../domain/status-text";
 import { httpUrl } from "../platform/http-url";
@@ -67,7 +67,7 @@ import {
 // (test-node/fedify-usage.test.ts); outbound delivery goes through deliveries.
 
 // The identifier of the instance actor, served at /actor. It cannot collide with a username, which has no ':'.
-export const INSTANCE_ACTOR = "kopje:instance";
+const INSTANCE_ACTOR = "kopje:instance";
 
 // Per-request state the dispatchers fill in for the caller (it is also Fedify's context data): the username a
 // dispatched actor resolved to, what the answer was rendered from (for the snapshot's freshness check), and a Store

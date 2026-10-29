@@ -419,6 +419,9 @@ fieldset,
 
   & .site {
     min-height: 44px;
+    /* A step past an icon's --s1: the disc's ink reaches its box's edge, where a line icon's stroke sits about 1.5px
+       inside, and a filled mark reads closer than a stroke (browser job). */
+    gap: var(--s2);
 
     & > img {
       /* The row centres the mark on the name's line box, whose centre lies below the centre of the lowercase

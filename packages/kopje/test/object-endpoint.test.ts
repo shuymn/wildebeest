@@ -190,6 +190,6 @@ describe("object endpoint (VIS-4)", () => {
     const second = await (await h.request(path(first.next ?? ""), AP)).json<Page>();
     expect(second.orderedItems).toHaveLength(5);
     expect(second.next).toBeUndefined();
-    expect([...first.orderedItems, ...second.orderedItems].map((item) => item.object.id)).toEqual(posted.reverse());
+    expect([...first.orderedItems, ...second.orderedItems].map((item) => item.object.id)).toEqual(posted.toReversed());
   });
 });

@@ -150,7 +150,7 @@ function cascadesFrom(keys: ForeignKey[], root: string, stop: readonly string[])
       }
     }
   }
-  return [...found].sort();
+  return [...found].toSorted();
 }
 
 function unguarded(found: string[], listed: readonly { table: string }[], exempt: Record<string, string>): string[] {
@@ -163,7 +163,7 @@ function directKeys(keys: ForeignKey[], root: string): string[] {
   return keys
     .filter((key) => key.table === root && ["CASCADE", "SET NULL"].includes(key.onDelete))
     .map((key) => `${key.from}.${key.column}`)
-    .sort();
+    .toSorted();
 }
 
 describe("cascade guard (RES-6)", () => {
@@ -260,7 +260,7 @@ describe("cascade guard (RES-6)", () => {
       const writing = triggers
         .filter(({ sql }) => /\b(INSERT|REPLACE|UPDATE|DELETE)\b/i.test(sql.split(/\bBEGIN\b/i)[1] ?? ""))
         .map(({ name }) => name)
-        .sort();
+        .toSorted();
       expect(
         writing.filter((name) => !Object.hasOwn(WRITING_TRIGGERS, name)),
         "these triggers write: count their writes where a batched delete or purge that fires them decides it has room (src/domain/inbox.ts), and name each in WRITING_TRIGGERS with where, or why no batch fires it",
@@ -377,7 +377,7 @@ describe("cascade guard below local_accounts (RES-6)", () => {
         keys
           .filter((key) => key.table === "local_accounts" && key.from === "reports")
           .map((key) => [key.column, key.onDelete])
-          .sort(byText),
+          .toSorted(byText),
       ).toEqual([
         ["action_taken_by_account_id", "SET NULL"],
         ["assigned_account_id", "SET NULL"],
@@ -386,7 +386,7 @@ describe("cascade guard below local_accounts (RES-6)", () => {
         keys
           .filter((key) => key.table === "accounts" && key.from === "reports")
           .map((key) => key.column)
-          .sort(),
+          .toSorted(),
       ).toEqual(["account_id", "target_account_id"]);
     });
   });
@@ -403,7 +403,7 @@ describe("cascade guard below oauth_tokens (RES-6)", () => {
       expect(
         found,
         "these tables cascade from oauth_tokens: add each to TOKEN_CHILDREN in src/domain/suspension.ts, child first, and delete its rows in the tokens job",
-      ).toEqual([...TOKEN_CHILDREN].sort());
+      ).toEqual([...TOKEN_CHILDREN].toSorted());
       // Child first: every parent a listed table cascades from, below oauth_tokens, comes after it.
       TOKEN_CHILDREN.forEach((table, index) => {
         const parents = keys

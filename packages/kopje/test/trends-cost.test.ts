@@ -2,9 +2,9 @@ import { runInDurableObject } from "cloudflare:test";
 import { describe, expect, it } from "vitest";
 
 import { writeOperation } from "../src/domain/operation";
+import { TREND_LANGUAGES_JSON } from "../src/domain/trend-languages";
 import {
   LINK_THRESHOLD,
-  TREND_LANGUAGES_JSON,
   TREND_LINK_CANDIDATES,
   TREND_LINK_GROUPS,
   trendCopySql,

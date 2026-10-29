@@ -3,14 +3,7 @@ import { env as testEnv } from "cloudflare:workers";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { Db } from "../src/db/sql";
-import {
-  JOB_BATCHES_PER_RUN,
-  JOB_RETENTION_MS,
-  MOVE_BATCH,
-  PURGE_BATCH,
-  runInboundJobs,
-  SWEEP_BATCH,
-} from "../src/domain/inbox";
+import { JOB_BATCHES_PER_RUN, JOB_RETENTION_MS, MOVE_BATCH, PURGE_BATCH, runInboundJobs } from "../src/domain/inbox";
 import {
   INBOUND_JOBS,
   JOB_RETRY_DELAYS_MS,
@@ -20,6 +13,7 @@ import {
   retryParkedJobs,
   SAFE_MS,
 } from "../src/domain/job-attempts";
+import { SWEEP_BATCH } from "../src/domain/remote-actors";
 import { jobsRound } from "../src/jobs/queue";
 import type { StoreStub } from "../src/platform/store-client";
 import { type AccessTeam, adminClaims, adminHarness, adminTeam, setTeamAccess } from "./access-helpers";

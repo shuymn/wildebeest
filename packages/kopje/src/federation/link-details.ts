@@ -1,7 +1,7 @@
 import { decodeHTMLStrict } from "entities/decode";
 
 import type { CardFields } from "../domain/link-cards";
-import { TREND_LANGUAGES } from "../domain/trends";
+import { TREND_LANGUAGES } from "../domain/trend-languages";
 import { outputMaxUnits, type PageMeta, type PageScan, SCAN_LIMITS, type ScanLimits } from "../platform/html-scan";
 import { httpUrl } from "../platform/http-url";
 import { railsBlank } from "../platform/rails-blank";

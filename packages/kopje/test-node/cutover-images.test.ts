@@ -114,7 +114,7 @@ type Answer = Uint8Array | number | (() => Response);
 
 // A fake fetch that answers by image id, from either source, and records what was asked.
 function fakeFetch(answers: Record<string, Answer>) {
-  const calls: { url: string; init?: RequestInit }[] = [];
+  const calls: { url: string; init?: RequestInit | undefined }[] = [];
   const fetch = (url: string, init?: RequestInit) => {
     calls.push({ url, init });
     const api = /^https:\/\/api\.cloudflare\.com\/client\/v4\/accounts\/[0-9a-f]{32}\/images\/v1\/([^/]+)\/blob$/.exec(
@@ -201,7 +201,7 @@ describe("images-export", () => {
     expect(ok).toBe(true);
     expect(report).toMatchObject({ images: 8, downloaded: 8, kept: 0, from: "delivery", malformedUrls: 0 });
     // The variant as found in the data, no credentials; the foreign and upstream accounts are not fetched.
-    expect(calls.map((c) => c.url).sort()).toEqual(
+    expect(calls.map((c) => c.url).toSorted()).toEqual(
       [
         "avatar-0/avatar",
         "avatar-1/avatar",
@@ -269,7 +269,7 @@ describe("images-export", () => {
     });
     expect(again.ok).toBe(true);
     expect(again.report).toMatchObject({ images: 8, kept: 6, downloaded: 2 });
-    expect(calls.map((c) => c.url.split("/")[4]!).sort()).toEqual(["image-2", "image-3"]);
+    expect(calls.map((c) => c.url.split("/")[4]!).toSorted()).toEqual(["image-2", "image-3"]);
     expect(await imagesJson(first.outDir)).toEqual(before);
     expect(await readFile(join(first.outDir, "originals", "image-2"))).toEqual(Buffer.from(FILES["image-2"] ?? []));
 
@@ -334,7 +334,7 @@ describe("images-export", () => {
     const file = await imagesJson(outDir);
     expect(file.images["avatar-1"]).toMatchObject({ state: "missing", reason: "not-found" });
     expect(file.images["image-3"]).toMatchObject({ state: "missing", reason: "too-many-pixels" });
-    expect((await readdir(join(outDir, "originals"))).sort()).toEqual(["avatar-0", "image-8", "image-9"]);
+    expect((await readdir(join(outDir, "originals"))).toSorted()).toEqual(["avatar-0", "image-8", "image-9"]);
   });
 
   it("stops on a server error, keeping what it downloaded, and refuses another instance or account", async () => {
@@ -518,7 +518,7 @@ describe("convert and verify-conversion with --images", () => {
 
     // One original per row, named for the R2 key originals/<media id>, byte for byte, mode 0600.
     const out = join(space.dir, "out", "originals");
-    const names = (await readdir(out)).sort();
+    const names = (await readdir(out)).toSorted();
     expect(names).toHaveLength(9);
     for (const name of Object.keys(tokens) as (keyof typeof tokens)[]) {
       const mediaId = String(media(name).id);

@@ -4,7 +4,8 @@ import { loginEmailMatchSql, sqliteLower } from "../platform/login-email";
 import type { ImportAuthority } from "../platform/store-admin";
 import { storedWarningText, WARNING_TEXT_BYTES } from "../platform/stored-bounds";
 import { writeAccountWarning } from "./account-warnings";
-import { type Account, accountsOf, type Page, type PageQuery, type Present } from "./accounts";
+import type { Page, PageQuery, Present } from "./accounts";
+import { type AdminAccount, adminAccountStream } from "./admin-account-presenter";
 import { accessAdminRefusal, forgetAdminAccountId } from "./admin-authority";
 import { admit, ARRAY_ANSWER_BYTES } from "./answer-budget";
 import { activeSql, availableJoinedSql, availableLocalSql, deletingSql, suspendedSql } from "./audience";
@@ -15,7 +16,6 @@ import {
   adminWriteOperation,
   EVERYONE_ROLE,
   OWNER_ROLE,
-  type Role,
 } from "./auth";
 import { logAction } from "./moderation-log";
 import { notify } from "./notifications";
@@ -27,97 +27,13 @@ import { suspendLocal, unsuspendLocal } from "./suspension";
 // Accounts as the Mastodon admin API shows them to the OAuth admin (R37): their entity, the list and its filters, an
 // account by id and the actions that change nothing; and the Access admin's repair of the OAuth admin's match.
 
-// REST::Admin::AccountSerializer (app/serializers/rest/admin/account_serializer.rb:3-87), in its order. Kopje has no
-// sign-ups, approvals, disabling, silencing, sensitizing, invites or recorded IPs:
-//   - a local account (a User in Mastodon): its email; confirmed and approved; not disabled, silenced or sensitized;
-//     locale null (Kopje stores none); its role (Owner for the OAuth admin, the default role for every other);
-//   - a remote account (no User): email, confirmed, disabled, approved, locale and role null, which is what
-//     Account's delegation to a missing user gives (app/models/account.rb:173-191, allow_nil);
-//   - both: ip null and ips [], invite_request null; created_by_application_id and invited_by_account_id absent (their
-//     conditions never hold); suspended when the account is unavailable (R1), as the nested account shows it.
-export type AdminAccount = {
-  id: string;
-  username: string;
-  domain: string | null;
-  created_at: string;
-  email: string | null;
-  ip: null;
-  confirmed: boolean | null;
-  suspended: boolean;
-  silenced: boolean;
-  sensitized: boolean;
-  disabled: boolean | null;
-  approved: boolean | null;
-  locale: null;
-  invite_request: null;
-  ips: never[];
-  account: Account;
-  role: Role | null;
-};
-
-// The admin entities of `ids` in order (an id may repeat), for an admission (admit): read `chunk` at a time as the
-// stream reaches them, each account through accountsOf (RES-2); undefined for an id with no account. `adminId` is the
-// OAuth admin the calling admin operation has just checked (adminGuarded), whose account shows the admin role.
-export function* adminAccountStream(
-  db: Db,
-  ids: readonly string[],
-  adminId: string,
-  present: Present,
-  chunk = ADMIN_ACCOUNT_CHUNK,
-): Generator<AdminAccount | undefined, undefined> {
-  for (let next = 0; next < ids.length; next += chunk) {
-    const slice = ids.slice(next, next + chunk);
-    const rows = new Map(
-      db
-        .all<{ id: string; domain: string | null; email: string | null }>(
-          `SELECT a.id, a.domain, l.email FROM json_each(?1) c CROSS JOIN accounts a ON a.id = c.value
-						LEFT JOIN local_accounts l ON l.account_id = a.id`,
-          JSON.stringify([...new Set(slice)]),
-        )
-        .map((row) => [row.id, row]),
-    );
-    const accounts = accountsOf(db, slice, present, chunk);
-    for (const id of slice) {
-      const account = accounts.next().value;
-      const row = rows.get(id);
-      if (account === undefined || row === undefined) {
-        yield undefined;
-        continue;
-      }
-      const local = row.domain === null;
-      yield {
-        id: row.id,
-        username: account.username,
-        domain: row.domain,
-        created_at: account.created_at,
-        email: local ? row.email : null,
-        ip: null,
-        confirmed: local ? true : null,
-        suspended: account.suspended === true,
-        silenced: false,
-        sensitized: false,
-        disabled: local ? false : null,
-        approved: local ? true : null,
-        locale: null,
-        invite_request: null,
-        ips: [],
-        account,
-        role: local ? (row.id === adminId ? OWNER_ROLE : EVERYONE_ROLE) : null,
-      };
-    }
-  }
-}
-
-// Admin entities read per query while an answer is admitted: one chunk at their bound is about 2.5 MB (RES-2).
-const ADMIN_ACCOUNT_CHUNK = 20;
-
 // One admin entity, a unit (RES-2); undefined for an id with no account.
-export function presentAdminAccount(db: Db, id: string, adminId: string, present: Present): AdminAccount | undefined {
+function presentAdminAccount(db: Db, id: string, adminId: string, present: Present): AdminAccount | undefined {
   return adminAccountStream(db, [id], adminId, present, 1).next().value;
 }
 
 // The longest email set-email takes (RFC 5321's path limit).
-export const MAX_EMAIL_LENGTH = 254;
+const MAX_EMAIL_LENGTH = 254;
 
 export type SetEmailResult =
   | { ok: true; username: string; email: string }
@@ -246,7 +162,7 @@ const CANDIDATE_COLUMNS = `a.id, a.domain IS NULL AS local, NOT ${availableJoine
 
 // The least string above every string that starts with `prefix`, in SQLite's BINARY order (UTF-8 bytes, which is code
 // point order): the prefix with its last code point incremented, null when every code point is the highest.
-export function prefixEnd(prefix: string): string | null {
+function prefixEnd(prefix: string): string | null {
   const points = [...prefix].map((point) => point.codePointAt(0)!);
   while (points.length > 0) {
     const last = points.pop()!;
@@ -330,7 +246,7 @@ function ordered(
   const texts = textMatches(db, rows, filter);
   return rows
     .filter((row) => inBounds(bounds, row.id) && matches(filter, adminId, row, texts))
-    .sort((a, b) => (a.id < b.id === bounds.ascending ? -1 : 1));
+    .toSorted((a, b) => (a.id < b.id === bounds.ascending ? -1 : 1));
 }
 
 // The candidates that pass the filter's text predicates, tested in SQL so no text is read into the isolate (null when

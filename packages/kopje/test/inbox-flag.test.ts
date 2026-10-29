@@ -136,7 +136,7 @@ describe("Flag: what a report links (R34)", () => {
       expect.objectContaining({
         account_id: reporter,
         target_account_id: DAVE,
-        status_ids: JSON.stringify([s1.id, s2.id].sort()),
+        status_ids: JSON.stringify([s1.id, s2.id].toSorted()),
         comment: "Spam from this account",
         category: "other",
         rule_ids: null,
@@ -204,7 +204,7 @@ describe("Flag: what a report links (R34)", () => {
       expect.objectContaining({
         account_id: reporter,
         target_account_id: "333333333333333333",
-        status_ids: JSON.stringify([plain.id, reply.id].sort()),
+        status_ids: JSON.stringify([plain.id, reply.id].toSorted()),
       }),
     ]);
   });
@@ -294,7 +294,7 @@ describe("Flag: the remote reporter status rule (R34, remoteReportableSql)", () 
     const direct = await statusOf(t, "direct");
     const mentioning = await statusOf(t, "direct", DAVE, { mentions: [{ accountId: reporter }] });
     expect(await reported(t, actor, [...open, closed, direct, mentioning], 1)).toEqual(
-      [...open, mentioning].map((s) => s.id).sort(),
+      [...open, mentioning].map((s) => s.id).toSorted(),
     );
     // A follower on the domain admits the private status; the direct one stays out though another status mentions
     // the domain (the mention is the status's own, where Mastodon's is any).

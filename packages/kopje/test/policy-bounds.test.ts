@@ -4,7 +4,6 @@ import { describe, expect, it } from "vitest";
 
 import { Db } from "../src/db/sql";
 import { getAccounts, listFollows, type PageQuery, relationships, userinfo } from "../src/domain/accounts";
-import { getFeatured, getLocalNote, getOutbox } from "../src/domain/activities";
 import {
   ADMIN_ACCOUNT_CANDIDATES,
   type AdminAccountFilter,
@@ -28,6 +27,7 @@ import {
 } from "../src/domain/filters";
 import { getRemoteKey, inboxGate, inboxOwnerExists, KEY_REFRESH_MS, PURGE_BATCH } from "../src/domain/inbox";
 import { listAccounts } from "../src/domain/lists";
+import { getFeatured, getLocalNote, getOutbox } from "../src/domain/local-notes";
 import { getMarkers, MARKER_TIMELINES } from "../src/domain/markers";
 import {
   dismissNotificationGroup,
@@ -175,7 +175,7 @@ const VIEWER = viewerOf(WORLD);
 const TARGET = targetOf(WORLD);
 const LISTED = listedOf(WORLD);
 // The account the account statuses endpoint reads: the author of the most statuses.
-const AUTHOR = WORLD.accounts.map((_, x) => x).sort((a, b) => authored(b) - authored(a))[0] as number;
+const AUTHOR = WORLD.accounts.map((_, x) => x).toSorted((a, b) => authored(b) - authored(a))[0] as number;
 
 function authored(x: number): number {
   return WORLD.statuses.filter((status) => status.author === x).length;
@@ -6003,6 +6003,7 @@ describe("the quotes list reads a window, however many quotes a status has (RES-
         newest: quoting(2000 - 1 - (request - 1) * 20),
         oldest: quoting(2000 - request * 20),
         candidates: 20,
+        more: true,
       });
       expect(await rowsRead({ store: many }, statusQuotes, input(cursor))).toBeLessThanOrEqual(
         (await rowsRead({ store: few }, statusQuotes, input(PAGE))) + ALLOWANCE,

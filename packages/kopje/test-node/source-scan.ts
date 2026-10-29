@@ -31,7 +31,7 @@ export function sources(dir: string, extensions: readonly string[] = [".ts", ".t
     });
   const files = walk(join(PACKAGE, dir))
     .map((path) => ({ path: relative(PACKAGE, path).replaceAll("\\", "/"), text: readFileSync(path, "utf8") }))
-    .sort((a, b) => (a.path < b.path ? -1 : 1));
+    .toSorted((a, b) => (a.path < b.path ? -1 : 1));
   if (files.length === 0) {
     throw new Error(`no sources in ${dir}`);
   }
@@ -120,7 +120,7 @@ export function parse(source: Source): Parsed {
 // - an empty statement in a statement list (`;`) is dropped; one that is a loop's or an if's body is kept;
 // - parentheses are not nodes (ParenthesizedExpression and TSParenthesizedType are unwrapped; parse() keeps none).
 // Line breaks, semicolons and trailing commas are not in the tree.
-export function keyOf(node: Node): string {
+function keyOf(node: Node): string {
   const n = node as Node & Record<string, unknown>;
   if (n.type === "ParenthesizedExpression") {
     return keyOf(n.expression);
@@ -159,7 +159,7 @@ export function keyOf(node: Node): string {
   };
   const fields = Object.keys(n)
     .filter((k) => !UNKEYED.has(k))
-    .sort()
+    .toSorted()
     .map((k) => `${k}=${value(n[k], k)}`);
   return `${n.type}{${fields.join(" ")}}`;
 }

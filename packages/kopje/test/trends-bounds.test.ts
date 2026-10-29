@@ -199,7 +199,7 @@ describe("the round’s windows (RES-7)", () => {
     );
     expect(returned).toHaveLength(2);
     await round(store);
-    expect((await trendTags(store)).map((t) => t.name).sort()).toEqual(["ok", "カフェ"].sort());
+    expect((await trendTags(store)).map((t) => t.name).toSorted()).toEqual(["ok", "カフェ"].toSorted());
   }, 60_000);
 
   it("scores the 400 statuses with the most boosts and favourites and not a 401st", async () => {

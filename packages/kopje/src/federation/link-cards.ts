@@ -90,7 +90,7 @@ import {
 // kind and reason, and the hostname only.
 
 export const CARD_ROUND_MS = 60_000;
-export const CARD_FINISH_MS = 10_000;
+const CARD_FINISH_MS = 10_000;
 export const CARD_FETCHES_MS = CARD_ROUND_MS - CARD_FINISH_MS;
 export const CARD_CONCURRENCY = 3;
 export const CARD_CHAINS = 2;
@@ -130,7 +130,7 @@ type Fetched = {
   outcome: CardOutcome;
   failure?: WebPageFailure;
   chain?: "page" | "oembed";
-  endpoint?: CardEndpoint;
+  endpoint?: CardEndpoint | undefined;
 };
 
 // Whether a failed chain leaves the claim unattempted (T12): a policy RPC error, the shared budget, or a timeout once
@@ -262,7 +262,7 @@ export async function linkCardsRound(env: Env, deps: LinkCardsDeps): Promise<Lin
       fetched: Fetched;
       endpoint: string | null;
       finalUrl: string;
-      record?: CardEndpoint;
+      record?: CardEndpoint | undefined;
     }> => {
       const answer = await get(claim.url, web, { budget, scan: CARD_SCAN, acceptLanguage: CARD_ACCEPT_LANGUAGE });
       const fetched = pageOutcome(answer, admission.failed(), spent());

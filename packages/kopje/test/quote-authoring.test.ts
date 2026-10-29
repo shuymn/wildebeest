@@ -3,9 +3,9 @@ import { runInDurableObject } from "cloudflare:test";
 import { describe, expect, it } from "vitest";
 
 import { Db } from "../src/db/sql";
-import { RETRACTION_TTL_MS } from "../src/domain/inbox";
 import { readOperation } from "../src/domain/operation";
 import { holdsLocalStamp, MAX_QUOTED_UPDATES, quotedUpdates } from "../src/domain/quotes";
+import { RETRACTION_TTL_MS } from "../src/domain/remote-actors";
 import { suspendLocal } from "../src/domain/suspension";
 import { deliveryRound } from "../src/jobs/deliver";
 import { publishScheduled } from "../src/jobs/scheduled";
@@ -802,7 +802,7 @@ describe("Concurrency: the test table", () => {
     expect((await outbound(t.store)).length).toBe(before);
     // The body delivered to every destination is the one bob signed, byte for byte, and verifies.
     const sent = (await deliver(t)).filter((s) => s.json.type === "Delete" && s.json.object === stamp);
-    expect([...new Set(sent.map((s) => s.inbox))].sort()).toEqual([
+    expect([...new Set(sent.map((s) => s.inbox))].toSorted()).toEqual([
       "https://fans.example/inbox",
       `${MASTODON}/users/bob/inbox`,
     ]);

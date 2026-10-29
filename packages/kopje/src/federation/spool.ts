@@ -79,7 +79,7 @@ export async function spoolInbox(request: Request, body: Uint8Array, queue: Queu
   return new Response(null, { status: 202 });
 }
 
-export async function deflate(body: Uint8Array): Promise<Uint8Array> {
+async function deflate(body: Uint8Array): Promise<Uint8Array> {
   const stream = new Blob([body]).stream().pipeThrough(new CompressionStream("deflate"));
   return new Uint8Array(await new Response(stream).arrayBuffer());
 }

@@ -17,6 +17,7 @@ import {
   retryDelay,
 } from "../src/domain/deliveries";
 import { readOperation } from "../src/domain/operation";
+import { noteQuote } from "../src/domain/quotes";
 import { hasLocalFollowers } from "../src/domain/remote-statuses";
 import { sha256Hex } from "../src/platform/sha256";
 import type { StoreStub } from "../src/platform/store-client";
@@ -510,7 +511,7 @@ describe("follows toward remote accounts", () => {
       const round = await claim(h.store, NOW, token);
       expect(round.deliveries).toHaveLength(1);
       const [delivery] = round.deliveries;
-      sent.push([JSON.parse(delivery?.body ?? "{}").type, delivery?.inbox ?? ""]);
+      sent.push([(JSON.parse(delivery?.body ?? "{}") as { type: string }).type, delivery?.inbox ?? ""]);
       await complete(h.store, delivery?.id ?? "", token, NOW, outcome);
     }
     expect(sent).toEqual([
@@ -701,7 +702,7 @@ describe("outbound reach with stale statistics (RES-7)", () => {
   // has local followers (inbound).
   const reach = readOperation<{ statusId: string; signer: string; remote: string }, unknown>(
     (db, { statusId, signer, remote }) => {
-      const of = statusReach(db, statusId);
+      const of = statusReach(db, statusId, noteQuote);
       return {
         reach: of,
         recipients: of === null ? null : recipientsFor(db, signer, { type: "Create" }, of.audience),

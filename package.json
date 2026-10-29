@@ -7,12 +7,15 @@
     "pretty": "oxfmt --check",
     "lint": "oxlint --type-aware --deny-warnings",
     "lint:fix": "oxlint --type-aware --fix",
+    "knip": "knip",
     "test": "vitest run",
     "check:kopje-package": "node scripts/check-kopje-package.mjs",
     "test:scripts": "node --test 'scripts/*.test.mjs'",
     "prepare": "lefthook install"
   },
   "devDependencies": {
+    "@vitest/coverage-v8": "catalog:",
+    "knip": "catalog:",
     "lefthook": "catalog:",
     "oxfmt": "catalog:",
     "oxlint": "catalog:",

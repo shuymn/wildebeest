@@ -24,9 +24,9 @@ import { NEW_GENERATION } from "./ids";
 // - generation: drawn fresh (NEW_GENERATION) when the row is inserted, one more on every change of link_back or of the
 //   (index, href) list, so a claim made before a change or a deletion cannot be recorded after it.
 //
-// Every store of a remote actor's document that replaces its raw (inbox.ts upsertRemoteActor; not the frozen and
-// covered paths) calls armRemoteFieldLinks in its transaction. Mastodon re-verifies on every processing; Kopje keeps a
-// time while the href and the link back stay (docs/mastodon-deviations.md, "Accounts").
+// Every store of a remote actor's document that replaces its raw (remote-actors.ts upsertRemoteActor; not the frozen
+// and covered paths) calls armRemoteFieldLinks in its transaction. Mastodon re-verifies on every processing; Kopje
+// keeps a time while the href and the link back stay (docs/mastodon-deviations.md, "Accounts").
 
 // An unverified link checked at least this long ago (checked_at, the last negative check) is checked again at a store.
 export const REMOTE_LINK_RECHECK_MS = 24 * 60 * 60 * 1000;

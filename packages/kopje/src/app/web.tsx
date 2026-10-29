@@ -113,7 +113,7 @@ export function siteGate(deps: ApiDeps) {
     }
     c.set("domain", gate.site.domain);
     c.set("site", gate.site);
-    await next();
+    return next();
   });
 }
 

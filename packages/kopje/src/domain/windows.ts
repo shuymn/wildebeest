@@ -40,7 +40,7 @@ export function mergedWindow(
     ...params,
   );
   const cut = rows.length > query.size || (rows[0]?.bound ?? null) !== null;
-  return { candidates: rows.slice(0, query.size).map(({ id, o }) => ({ id: String(id), o })), cut };
+  return { candidates: rows.slice(0, query.size).map(({ id, o }) => ({ id, o })), cut };
 }
 
 // The window of one stream: `candidates` selects (id) rows, the stream's candidates from the cursor in cursor order,
@@ -48,7 +48,7 @@ export function mergedWindow(
 // 2^53.
 export function singleWindow(db: Db, candidates: string, size: number, ...params: SqlStorageValue[]): Window {
   return windowOf(
-    db.all<{ id: string }>(candidates, ...params).map(({ id }) => String(id)),
+    db.all<{ id: string }>(candidates, ...params).map(({ id }) => id),
     size,
   );
 }
@@ -65,16 +65,19 @@ export function windowJson(window: Window): string {
 // The page of a window: of the rows the rule passed (`passed`, keyed by candidate), the first `limit` in cursor order,
 // newest first. Its far end is the last of them when the page is full, else the window's last candidate when the
 // window was cut, so a next page starts below what this one read; its near end is the first of them, or the window's
-// first candidate when none passed. `cut`: the next link is offered whatever the page holds.
+// first candidate when none passed. `cut`: the next link is offered whatever the page holds. `more`: a row may lie past
+// the far end: a row the rule passed lies past the page in the window, or the window was cut. An uncut window holds
+// every candidate of the cursor's range, so without either no row a page would show lies past it.
 export function windowPage<R>(
   window: Window,
   passed: readonly R[],
   key: (row: R) => string,
   limit: number,
   ascending: boolean,
-): { rows: R[]; newest: string | null; oldest: string | null; cut: boolean } {
+): { rows: R[]; newest: string | null; oldest: string | null; cut: boolean; more: boolean } {
   const byKey = new Map(passed.map((row) => [key(row), row]));
-  const taken = window.candidates.flatMap(({ id }) => byKey.get(id) ?? []).slice(0, limit);
+  const ordered = window.candidates.flatMap(({ id }) => byKey.get(id) ?? []);
+  const taken = ordered.slice(0, limit);
   const full = taken.length >= limit;
   const first = taken[0];
   const last = taken.at(-1);
@@ -88,9 +91,10 @@ export function windowPage<R>(
           ? null
           : key(last);
   const cut = window.cut && !full;
+  const more = ordered.length > limit || window.cut;
   return ascending
-    ? { rows: taken.reverse(), newest: far, oldest: near, cut }
-    : { rows: taken, newest: near, oldest: far, cut };
+    ? { rows: taken.toReversed(), newest: far, oldest: near, cut, more }
+    : { rows: taken, newest: near, oldest: far, cut, more };
 }
 
 function int(n: number): number {
@@ -99,3 +103,31 @@ function int(n: number): number {
   }
   return n;
 }
+
+// The cursor on an edge table's INTEGER id as a plain range, with `max` and `min` the cursor parameters (NULL for none):
+// no cursor is a REAL beyond either end of the INTEGER range, so every id is inside it (SQLite compares the two types by
+// value). A read in an index ending in the id then starts at the cursor, not at the newest.
+export function edgeRangeSql(column: string, max: string, min: string): string {
+  return `${column} < coalesce(CAST(${max} AS INTEGER), 1e19) AND ${column} > coalesce(CAST(${min} AS INTEGER), -1e19)`;
+}
+
+const STATUS_ID_LENGTH = 18;
+
+// Status ids are 18-digit TEXT compared as TEXT (the indexes are on the TEXT column). A shorter cursor is padded so
+// it compares as the number it is; a longer one is beyond every id, ABOVE_EVERY_ID, never the largest id itself (a
+// range below it then keeps that id, and one above it holds nothing).
+export function statusCursor(cursor: string | undefined): string | null {
+  if (cursor === undefined) {
+    return null;
+  }
+  cursor = cursor.replace(/^0+(?=\d)/, "");
+  if (cursor.length > STATUS_ID_LENGTH) {
+    return ABOVE_EVERY_ID;
+  }
+  return cursor.padStart(STATUS_ID_LENGTH, "0");
+}
+
+// Bounds beyond every 18-digit id, for a cursor that is absent: with them a range is always a plain one, read through
+// the index from the cursor rather than filtered from the newest.
+export const ABOVE_EVERY_ID = ":";
+export const BELOW_EVERY_ID = "";

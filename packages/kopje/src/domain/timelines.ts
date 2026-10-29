@@ -1,7 +1,7 @@
 import { STATUSES_ID_INDEX } from "../db/indexes";
 import type { Db } from "../db/sql";
 import { CARD_PUBLIC_LINK_INDEX } from "../platform/stored-bounds";
-import { edgeRangeSql, type Page, type PageQuery, type Present, resolveAccountId } from "./accounts";
+import { type Page, type PageQuery, type Present, resolveAccountId } from "./accounts";
 import { admit, type Admitted, admittedPage, ARRAY_ANSWER_BYTES } from "./answer-budget";
 import {
   audienceSql,
@@ -20,10 +20,19 @@ import {
 import { optionalUserReadOperation, type UserContext, userReadOperation } from "./auth";
 import { holdingSql, ownList, type RepliesPolicy } from "./lists";
 import { presentation, type Status, statusStream } from "./status-presenter";
-import { statusCursor } from "./statuses";
 import { normalizeTag } from "./tag-name";
 import { listedTrendLinkSql, publicCopiesSql, trendSettings } from "./trends";
-import { mergedWindow, readWindow, singleWindow, streamWindow, type Window, windowJson, windowPage } from "./windows";
+import {
+  edgeRangeSql,
+  mergedWindow,
+  readWindow,
+  singleWindow,
+  statusCursor,
+  streamWindow,
+  type Window,
+  windowJson,
+  windowPage,
+} from "./windows";
 
 // Timelines: newest first, paged by status id (18-digit TEXT, compared as TEXT) or, for
 // bookmarks and favourites, by the edge's INTEGER id. A page reads a candidate window from its cursor (windows.ts,
@@ -63,10 +72,10 @@ function rangeParams(cursor: Cursor): [string, string] {
 // admitted with `leading` (answerAdmission); a web page's list shares the page's budget (domain/web-pages/budget.ts).
 export type StatusAdmission = (entries: Iterable<Status | undefined>) => Admitted<Status>;
 
-export const answerAdmission: StatusAdmission = (entries) => admit(entries, ARRAY_ANSWER_BYTES, true);
+const answerAdmission: StatusAdmission = (entries) => admit(entries, ARRAY_ANSWER_BYTES, true);
 
-// A page of statuses and whether a continuation follows it: the page was full, or it was cut by its
-// candidate window or by bytes.
+// A page of statuses and whether a continuation follows it: a row may lie past it (windowPage's `more`), or it was
+// cut by bytes.
 export type StatusList = { page: Page<Status>; more: boolean };
 
 // The page of a window of status ids: the candidates `rule` passes for the viewer, and `and` (over ?1 the viewer, ?2
@@ -119,7 +128,7 @@ function windowStatusesWithin(
     present,
     admission,
   );
-  return { page: presented, more: page.rows.length >= cursor.limit || presented.cut === true };
+  return { page: presented, more: page.more || presented.cut === true };
 }
 
 // A page of statuses (`ids`, newest first, and each one's cursor in `keys`) presented within the answer budget,

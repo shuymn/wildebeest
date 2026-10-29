@@ -2,9 +2,9 @@ import { runInDurableObject } from "cloudflare:test";
 import { env } from "cloudflare:workers";
 import { describe, expect, it, vi } from "vitest";
 
-import { getOutbox } from "../src/domain/activities";
 import * as deliveries from "../src/domain/deliveries";
 import type { DeliveryOutcome } from "../src/domain/deliveries";
+import { getOutbox } from "../src/domain/local-notes";
 import { postActivity } from "../src/federation/delivery";
 import { type DeliveryDeps, deliveryRound } from "../src/jobs/deliver";
 import type { StoreStub } from "../src/platform/store-client";
@@ -171,7 +171,7 @@ describe("boosts that cascade with their original (VIS-3)", () => {
     await unfollow(h.store, queued);
     await h.request(`/api/v1/statuses/${original.id}`, bearer(alice.token, { method: "DELETE" }));
     await settleDeliveries(h.store);
-    expect((await undoTargets(h.store)).sort()).toEqual([
+    expect((await undoTargets(h.store)).toSorted()).toEqual([
       "https://leased.example/inbox",
       "https://queued.example/inbox",
     ]);
@@ -338,7 +338,8 @@ describe("the `all` cursor (RES-5)", () => {
     const first = await h.store.retryDeliveries(BUILD, { ids: "all", now: NOW });
     expect(first).toMatchObject({ ok: true, retried: deliveries.RETRY_BATCH, more: true });
     const next = first.ok ? (first.next ?? undefined) : undefined;
-    expect(await h.store.retryDeliveries(BUILD, { ids: "all", now: NOW, after: next })).toMatchObject({
+    const after = next === undefined ? {} : { after: next };
+    expect(await h.store.retryDeliveries(BUILD, { ids: "all", now: NOW, ...after })).toMatchObject({
       retried: 1,
       more: false,
     });
@@ -459,7 +460,7 @@ describe("retraction targets in every state (VIS-3)", () => {
     await h.request(`/api/v1/statuses/${status.id}`, bearer(alice.token, { method: "DELETE" }));
     await settleDeliveries(h.store);
     const deletes = (await rows(h.store)).filter((r) => r.type === "Delete").map((r) => new URL(r.inbox_url).hostname);
-    expect(deletes.sort()).toEqual(["delivered.example", "gaveup.example", "leased.example", "queued.example"]);
+    expect(deletes.toSorted()).toEqual(["delivered.example", "gaveup.example", "leased.example", "queued.example"]);
   });
 });
 
@@ -518,7 +519,7 @@ describe("copies as sent on the wire (VIS-2, VIS-7)", () => {
 });
 
 describe("the outbox", () => {
-  // The collection's totalItems is the account's stored statuses_count (activities.ts getOutbox).
+  // The collection's totalItems is the account's stored statuses_count (local-notes.ts getOutbox).
   it("runs no count query, for a page or for the collection", async () => {
     const h = await community(["alice"]);
     await post(h, h.users.alice, { status: "hello" });

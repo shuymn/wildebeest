@@ -1,7 +1,7 @@
 import { runInDurableObject } from "cloudflare:test";
 import { describe, expect, it } from "vitest";
 
-import { getOutbox, OUTBOX_BYTES, type OutboxPage } from "../src/domain/activities";
+import { getOutbox, OUTBOX_BYTES, type OutboxPage } from "../src/domain/local-notes";
 import { utf8Length } from "../src/platform/dump-format";
 import { NOW } from "./app-helpers";
 import { bigStatus } from "./budget-helpers";

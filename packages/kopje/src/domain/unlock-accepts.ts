@@ -1,6 +1,5 @@
-import type { Db } from "../db/sql";
 import { errorFields } from "../platform/error-message";
-import { answerPendingFollow } from "./accounts";
+import { answerPendingFollow } from "./account-actions";
 import { availableJoinedSql, availableSql, blocksSql, domainBlocksSql } from "./audience";
 import { isolated } from "./job-attempts";
 import { writeOperation } from "./operation";
@@ -10,9 +9,9 @@ import { writeOperation } from "./operation";
 // AuthorizeFollowWorker for each). Kopje runs it as a cursor job: local_accounts.accept_requests_after (migration
 // 0058) holds the last follows.id the job has passed, NULL for no job.
 //
-// - The 1 -> 0 transition of `locked` starts the job at 0 when a request is pending (unlockChanged, in the update's
-//   transaction); relocking clears it (Kopje stops accepting, docs/mastodon-deviations.md), and so does a suspension,
-//   in its transaction (suspension.ts suspendLocal), so an unsuspension does not resume it.
+// - The 1 -> 0 transition of `locked` starts the job at 0 when a request is pending (account-actions.ts unlockChanged,
+//   in the update's transaction); relocking clears it (Kopje stops accepting, docs/mastodon-deviations.md), and so
+//   does a suspension, in its transaction (suspension.ts suspendLocal), so an unsuspension does not resume it.
 // - Each step is its own write transaction (Store.runUnlockAccepts runs UNLOCK_ACCEPTS_PER_ROUND of them per round): it
 //   reads the job and the next pending request past the cursor, advances the cursor past it, and authorizes it through
 //   answerPendingFollow, the operation POST /api/v1/follow_requests/:id/authorize runs, with that operation's cost,
@@ -27,28 +26,6 @@ import { writeOperation } from "./operation";
 
 // Requests one round accepts or passes over at most, each in its own transaction.
 export const UNLOCK_ACCEPTS_PER_ROUND = 20;
-
-// In the transaction of a credentials update, after `locked` is applied: relocking clears the job, and unlocking with a
-// pending request starts it. True when a job is (still) running for the account.
-export function unlockChanged(db: Db, accountId: string, wasLocked: boolean, locked: boolean | undefined): boolean {
-  if (locked === true) {
-    db.run("UPDATE local_accounts SET accept_requests_after = NULL WHERE account_id = ?", accountId);
-    return false;
-  }
-  if (locked === false && wasLocked) {
-    db.run(
-      `UPDATE local_accounts SET accept_requests_after = 0 WHERE account_id = ?1
-				AND EXISTS (SELECT 1 FROM follows WHERE target_account_id = ?1 AND state = 'pending')`,
-      accountId,
-    );
-  }
-  return (
-    db.first(
-      "SELECT 1 AS running FROM local_accounts WHERE account_id = ? AND accept_requests_after IS NOT NULL",
-      accountId,
-    ) !== undefined
-  );
-}
 
 // The first job, by account id: a scan of the local accounts.
 const NEXT_JOB = `SELECT l.account_id, a.locked, ${availableJoinedSql("a", "l")} AS available

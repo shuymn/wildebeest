@@ -92,7 +92,7 @@ function repository() {
   const files = (extension = "css") =>
     readdirSync(join(root, "public", "assets"))
       .filter((name) => name.startsWith("kopje") && name.endsWith(`.${extension}`))
-      .sort();
+      .toSorted();
   const release = (version: string) => git("tag", `kopje-v${version}`);
   return { root, css, script, files, release, git };
 }
@@ -105,7 +105,7 @@ describe("build-assets", { timeout: 30_000 }, () => {
     css("a {}\n");
     const b = css("b {}\n");
     const c = css("c {}\n");
-    expect(files()).toEqual([c, "kopje.css"].sort());
+    expect(files()).toEqual([c, "kopje.css"].toSorted());
     expect(b).not.toBe(c);
     expect(releasedAssets(root)?.assets).toEqual({ stylesheet: LEGACY_STYLESHEET, script: null });
   });
@@ -117,7 +117,7 @@ describe("build-assets", { timeout: 30_000 }, () => {
     // Successive unreleased CSS edits keep the latest tagged release's stylesheet.
     const b = css("b {}\n");
     const c = css("c {}\n");
-    expect(files()).toEqual([a, c].sort());
+    expect(files()).toEqual([a, c].toSorted());
     expect(b).not.toBe(a);
     // The tag of the release being built does not count: its check still compares with rc.2.
     release("0.1.0-rc.3");
@@ -132,7 +132,7 @@ describe("build-assets", { timeout: 30_000 }, () => {
     release("0.1.0-rc.2");
     // A branch started at the tagged commit edits the CSS: rc.2's stylesheet is the one to keep.
     const c = css("c {}\n");
-    expect(files()).toEqual([b, c].sort());
+    expect(files()).toEqual([b, c].toSorted());
     expect(releasedAssets(root)?.tag).toBe("kopje-v0.1.0-rc.2");
   });
 
@@ -152,7 +152,7 @@ describe("build-assets", { timeout: 30_000 }, () => {
     const a = css("a {}\n");
     release("0.1.0-rc.2");
     const b = css("b {}\n");
-    expect(files()).toEqual([a, b].sort());
+    expect(files()).toEqual([a, b].toSorted());
     expect(css("a {}\n")).toBe(a);
     expect(files()).toEqual([a]);
   });
@@ -167,7 +167,7 @@ describe("build-assets", { timeout: 30_000 }, () => {
       `public/assets/${a} does not hold the bytes it is named for`,
     );
     build(root);
-    expect(files()).toEqual([a, b].sort());
+    expect(files()).toEqual([a, b].toSorted());
     expect(readFileSync(join(root, "public", "assets", a), "utf8")).toBe("a{}\n");
   });
 
@@ -181,7 +181,7 @@ describe("build-assets", { timeout: 30_000 }, () => {
       `public/assets/${a} does not hold the bytes it is named for`,
     ]);
     build(root);
-    expect(files()).toEqual([a, b].sort());
+    expect(files()).toEqual([a, b].toSorted());
     expect(readFileSync(join(root, "public", "assets", a), "utf8")).toBe("a{}\n");
     expect(drift(root, releaseForCheck(root).released)).toEqual([]);
   });
@@ -215,7 +215,7 @@ describe("build-assets", { timeout: 30_000 }, () => {
     expect(
       Object.keys(process.env)
         .filter((n) => n.startsWith("GIT_"))
-        .sort(),
+        .toSorted(),
     ).toEqual(["GIT_CONFIG_GLOBAL", "GIT_CONFIG_NOSYSTEM"]);
     const { root, css } = repository();
     css("a {}\n");
@@ -299,7 +299,7 @@ describe("build-assets", { timeout: 30_000 }, () => {
     release("0.1.0-rc.2");
     const b = css("b {}\n");
     expect(releasedAssets(root)?.assets).toEqual({ stylesheet: `/assets/${a}`, script: `/assets/${x}` });
-    expect(files()).toEqual([a, b].sort());
+    expect(files()).toEqual([a, b].toSorted());
     expect(files("js")).toEqual([x]);
     expect(drift(root, releaseForCheck(root).released)).toEqual([]);
   });
@@ -309,7 +309,7 @@ describe("build-assets", { timeout: 30_000 }, () => {
     const x = script('document.title = "x"\n');
     release("0.1.0-rc.2");
     const y = script('document.title = "y"\n');
-    expect(files("js")).toEqual([x, y].sort());
+    expect(files("js")).toEqual([x, y].toSorted());
     expect(readFileSync(join(root, "public", "assets", x), "utf8")).toMatch(/"x"/);
     expect(script('document.title = "x"\n')).toBe(x);
     expect(files("js")).toEqual([x]);
@@ -329,7 +329,7 @@ describe("build-assets", { timeout: 30_000 }, () => {
     const y = script('document.title = "y"\n');
     expect(releasedAssets(root)?.tag).toBe("kopje-v0.1.0-rc.3");
     expect(files()).toEqual([b]);
-    expect(files("js")).toEqual([x, y].sort());
+    expect(files("js")).toEqual([x, y].toSorted());
     expect(a).not.toBe(b);
   });
 
@@ -350,7 +350,7 @@ describe("build-assets", { timeout: 30_000 }, () => {
     writeFileSync(join(root, "src", "web", "kopje.css"), "a { color: red;\n");
     expect(() => build(root)).toThrow(/esbuild cannot read src\/web\/kopje\.css: Expected "}" to go with "{"/);
     expect(() => drift(root, releaseForCheck(root).released)).toThrow(/esbuild cannot read/);
-    expect(files()).toEqual([a, "kopje.css"].sort());
+    expect(files()).toEqual([a, "kopje.css"].toSorted());
     expect(readFileSync(join(root, "src", "web", "asset-versions.ts"), "utf8")).toBe(versions);
   });
 
@@ -369,7 +369,7 @@ describe("build-assets", { timeout: 30_000 }, () => {
       expect(() => build(root), source).toThrow(refusal);
       expect(() => drift(root, releaseForCheck(root).released), source).toThrow(refusal);
     }
-    expect(files()).toEqual([a, "kopje.css"].sort());
+    expect(files()).toEqual([a, "kopje.css"].toSorted());
     expect(readFileSync(join(root, "src", "web", "asset-versions.ts"), "utf8")).toBe(versions);
     // A comment with whitespace, a brace or a semicolon on one side is dropped with nothing joined.
     const b = css("/* a */a {\n\tcolor: red/* b */;\n\tfont-family: mono /* c */space;\n}/* d */\n");

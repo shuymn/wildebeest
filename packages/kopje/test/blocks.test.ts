@@ -364,7 +364,7 @@ describe("blocked recipients (VIS-13, VIS-15)", () => {
     expect(undo?.activity.type).toBe("Undo");
     expect(undo?.activity.cc).toContain("https://remote.example/users/bob");
     expect(undo?.audience.accounts).toEqual([bob]);
-    expect(undo?.inboxes.sort()).toEqual(["https://other.example/inbox", "https://remote.example/inbox"]);
+    expect(undo?.inboxes.toSorted()).toEqual(["https://other.example/inbox", "https://remote.example/inbox"]);
   });
 
   it("sends a profile Update, but no new status, to a follower on a domain the cleanup has not reached yet", async () => {
@@ -381,7 +381,7 @@ describe("blocked recipients (VIS-13, VIS-15)", () => {
       bearer(alice.token, { ...json({ display_name: "Alice Again" }), method: "PATCH" }),
     );
     expect(profile.status).toBe(200);
-    expect((await sent(h)).map((o) => [o.activity.type, o.inboxes.sort()])).toEqual([
+    expect((await sent(h)).map((o) => [o.activity.type, o.inboxes.toSorted()])).toEqual([
       ["Create", ["https://other.example/inbox"]],
       ["Update", ["https://blocked.example/inbox", "https://other.example/inbox"]],
     ]);

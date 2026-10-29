@@ -70,7 +70,7 @@ export async function uploaded(h: ApiHarness, user: User, form: FormData): Promi
 // Every R2 key in the media bucket under a prefix.
 export async function r2Keys(prefix = ""): Promise<string[]> {
   const listed = await env.MEDIA.list({ prefix });
-  return listed.objects.map((object) => object.key).sort();
+  return listed.objects.map((object) => object.key).toSorted();
 }
 
 // The served path of a media URL (https://kopje.test/media/...).

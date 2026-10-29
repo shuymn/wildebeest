@@ -10,9 +10,9 @@ import { STRINGS } from "./strings";
 
 export type Ui = { lang: string; m: Messages; f: Formats };
 
-export const ENGLISH: Ui = { lang: "en", m: STRINGS, f: FORMATS };
+const ENGLISH: Ui = { lang: "en", m: STRINGS, f: FORMATS };
 
-export const UiContext = createContext<Ui>(ENGLISH);
+const UiContext = createContext<Ui>(ENGLISH);
 
 export function useUi(): Ui {
   return useContext(UiContext);

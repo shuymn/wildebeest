@@ -9,18 +9,18 @@ import { createKopjeDatabase } from "../cli/lib/cutover/kopje-db.js";
 
 // The suites allow 10 levels less than the Store does: a variant of a statement no test runs (another viewer kind, an
 // extra filter) nests a few levels more or less than the one a test runs.
-export const ALLOWED_EXPR_DEPTH = 90;
+const ALLOWED_EXPR_DEPTH = 90;
 const MEASURED_UP_TO = 1000;
 
 // As test/sql-depth-setup.ts reads it.
-export type DeepStatement = { depth: number; sql: string };
+type DeepStatement = { depth: number; sql: string };
 
 let database: DatabaseSync | undefined;
 
 // Each statement of `statements` deeper than ALLOWED_EXPR_DEPTH, with its depth. A statement that fails to compile for
 // another reason throws, and so does a batch (SqlStorage.exec runs every statement of a text, prepare compiles the
 // first): the guard does not skip what it cannot measure.
-export function deepStatements(statements: string[]): DeepStatement[] {
+function deepStatements(statements: string[]): DeepStatement[] {
   database ??= createKopjeDatabase();
   const db = database;
   const compiles = (sql: string, depth: number): boolean => {

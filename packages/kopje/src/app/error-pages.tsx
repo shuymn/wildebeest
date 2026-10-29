@@ -1,11 +1,12 @@
 import type { Context } from "hono";
 
 import { MAINTENANCE_RETRY_AFTER_SECONDS } from "../mastodon/errors";
+import { onHost } from "../web/components/layout";
 import { type ErrorStatus, ErrorView } from "../web/pages/message";
 import { PRIVATE_HEADERS, PUBLIC_HEADERS } from "./web-headers";
 
 // The error pages app.ts answers a browser's page request with, in place of the API's answers. Each reads nothing of
-// the Store, which may be what failed, so none shows the site's chrome.
+// the Store, which may be what failed, so none shows the site's chrome: the header names the request's host.
 
 export type { ErrorStatus };
 
@@ -25,5 +26,5 @@ const HEADERS = {
 };
 
 export function errorPage(c: Context, status: ErrorStatus): Response | Promise<Response> {
-  return c.html(<ErrorPage status={status} />, status, HEADERS[status]);
+  return c.html(onHost(c.req.url, <ErrorPage status={status} />), status, HEADERS[status]);
 }

@@ -14,7 +14,7 @@ import { fileURLToPath } from "node:url";
 
 import { canonicalLegacyDatabase, legacyMigrations } from "../cli/lib/cutover/legacy-load.js";
 
-export const DOMAIN = "kopje.test";
+const DOMAIN = "kopje.test";
 const ORIGIN = `https://${DOMAIN}`;
 const PUBLIC = "https://www.w3.org/ns/activitystreams#Public";
 const IMAGES = "https://images.example/media";
@@ -33,7 +33,7 @@ export type FixtureOptions = {
   // outbox row (0017) and a subscription (0007), each where the level is below that migration.
   withDeletions?: boolean;
   // The KEK each local user's key is wrapped with (legacy: env.userKEK, often unset, so '').
-  keks?: { alice: string; bob: string };
+  keks?: { alice: string; bob: string } | undefined;
   // Boosts need the audience an outbox row has from 0002 on; below that the converter refuses them. Default: level >= 2.
   boosts?: boolean;
   // Notifications, and the exported sqlite_sequence counter of actor_notifications (none when undefined).
@@ -87,7 +87,7 @@ function upstreamDatabase(level: number): DatabaseSync {
   const dir = fileURLToPath(new URL("./fixtures/upstream-migrations/", import.meta.url));
   const db = new DatabaseSync(":memory:", { enableForeignKeyConstraints: false });
   for (const file of readdirSync(dir)
-    .sort()
+    .toSorted()
     .slice(0, level + 1)) {
     db.exec(readFileSync(`${dir}${file}`, "utf8"));
   }
@@ -121,7 +121,7 @@ function actorTypeDriftDatabase(level: number): DatabaseSync {
 function migrationNames(level: number): string[] {
   const dir = fileURLToPath(new URL("../cli/legacy-migrations/", import.meta.url));
   return readdirSync(dir)
-    .sort()
+    .toSorted()
     .slice(0, level + 1);
 }
 
@@ -406,7 +406,7 @@ export async function buildLegacyFixture(options: FixtureOptions): Promise<Legac
     cc: string[];
     mastodonId: string;
     tags?: unknown[];
-    attachment?: unknown[];
+    attachment?: unknown[] | undefined;
     inReplyTo?: Note;
     urlTail?: string;
     sensitive?: boolean;

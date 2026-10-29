@@ -379,7 +379,7 @@ describe("the snapshot writer and presenter (RES-2, HTML-3)", () => {
 
   it("keeps typical emoji whole: 40 Mastodon-shaped per status and 20 per profile", () => {
     const url = (i: number) =>
-      `https://mastodon.example/system/custom_emojis/images/000/123/${String(456 + i)}/original/${"0123456789abcdef"}.png`;
+      `https://mastodon.example/system/custom_emojis/images/000/123/${String(456 + i)}/original/0123456789abcdef.png`;
     const tags = Array.from({ length: 40 }, (_, i) => ({ shortcode: shortcode(16, i), url: url(i) }));
     const texts = [tags.map((tag) => `:${tag.shortcode}:`).join(" ")];
     expect(JSON.parse(emojiSnapshot(tags, texts, STATUS_EMOJIS_BYTES)!)).toHaveLength(40);
@@ -478,7 +478,7 @@ describe("the snapshot writer and presenter (RES-2, HTML-3)", () => {
     const content = `${":a".repeat(32 * 1024)}:`;
     const choices = Array.from({ length: 100 }, () => ":".repeat(1000));
     const start = performance.now();
-    const names = shortcodesIn([content, ...choices, `${"x".repeat(128 * 1024)}`]);
+    const names = shortcodesIn([content, ...choices, "x".repeat(128 * 1024)]);
     expect(names).toEqual(new Set(["a"]));
     expect(performance.now() - start).toBeLessThan(1_000);
   });

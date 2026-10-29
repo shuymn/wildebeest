@@ -65,7 +65,7 @@
   },
   "scripts": {
     "test": "vitest run && vitest run -c vitest.streaming.config.ts --max-workers=1 --no-isolate && vitest run -c vitest.node.config.ts",
-    "typecheck": "tsc --noEmit && tsc -p src/client && tsc -p cli && tsc -p test-node && tsc -p browser && tsc -p browser/fixtures",
+    "typecheck": "tsc --noEmit && tsc -p src/client && tsc -p cli && tsc -p test-node && tsc -p browser && tsc -p browser/fixtures && tsc -p scripts && tsc -p ../../scripts",
     "test:browser": "playwright test -c browser/playwright.config.ts",
     "bench:migration": "vitest run -c vitest.bench.config.ts --silent=false",
     "bench:scan": "vitest run -c vitest.scan-bench.config.ts --silent=false",
@@ -101,10 +101,10 @@
     "sanitize-html": "catalog:",
     "temporal-polyfill": "catalog:",
     "typescript": "catalog:",
+    "valibot": "catalog:",
     "vite": "catalog:",
     "vitest": "catalog:",
-    "wrangler": "catalog:",
-    "zod": "catalog:"
+    "wrangler": "catalog:"
   },
   "engines": {
     "node": ">=22"

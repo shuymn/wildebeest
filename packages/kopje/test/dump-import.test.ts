@@ -1597,13 +1597,13 @@ describe("a boost of a boost (#1247)", () => {
         const step = await verifier.importVerify(BUILD, ACCESS, id, 64 * 1024);
         expect(step).toMatchObject({ ok: true });
         const scan = seen.filter((s) => /FROM "statuses"/.test(s.query));
-        const lookups = seen.filter((s) => /^SELECT 1 AS x FROM statuses WHERE id = /.test(s.query));
+        const lookups = seen.filter((s) => s.query.startsWith("SELECT 1 AS x FROM statuses WHERE id = "));
         // Any other statement over statuses but the links' updates (applied first, before the scan).
         const other = seen.filter(
           (s) =>
             /\bstatuses\b/.test(s.query) &&
             !/FROM "statuses"/.test(s.query) &&
-            !/^UPDATE "statuses"/.test(s.query) &&
+            !s.query.startsWith('UPDATE "statuses"') &&
             !lookups.includes(s),
         );
         const first = lookups[0];

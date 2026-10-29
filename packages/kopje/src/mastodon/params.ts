@@ -150,9 +150,10 @@ export class Params {
           value !== FILE_VALUE ? [[field, value]] : files?.has(field) === true ? [[field, SENT_FILE]] : [],
         ),
       );
-    return [...[...indexed].sort(([a], [b]) => Number(a) - Number(b)).map(([, object]) => object), ...sequential].map(
-      project,
-    );
+    return [
+      ...[...indexed].toSorted(([a], [b]) => Number(a) - Number(b)).map(([, object]) => object),
+      ...sequential,
+    ].map(project);
   }
 
   // Values of `name[]` only, or undefined when none was sent: an array parameter as Rails' strong parameters permit
@@ -176,7 +177,7 @@ export class Params {
 export type ParamsResult = { ok: true; params: Params } | { ok: false; status: 400 | 413 };
 
 // A refusal while parsing: past a size bound (413) or nested too deep (400).
-export class ParamsRefused extends Error {
+class ParamsRefused extends Error {
   constructor(readonly status: 400 | 413) {
     super(status === 413 ? "parameters past their bound" : "parameters nested too deep");
   }

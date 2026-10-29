@@ -4,20 +4,21 @@ import { runInDurableObject } from "cloudflare:test";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { Db, type Savepoint } from "../src/db/sql";
-import { ACCOUNT_STALE_MS, PURGE_BATCH, receiveActivity, RETRACTION_TTL_MS, runInboundJobs } from "../src/domain/inbox";
+import { PURGE_BATCH, receiveActivity, runInboundJobs } from "../src/domain/inbox";
 import { JOB_RETRY_DELAYS_MS } from "../src/domain/job-attempts";
+import { completeQuote } from "../src/domain/quote-verification";
 import {
   MAX_LINKED_QUOTES,
-  completeQuote,
   QUOTE_BACKOFF_MS,
   QUOTE_HOPS,
   QUOTE_LEASE_MS,
   QUOTE_ROUND,
   QUOTE_STAGES,
-  REVOCATION_BATCHES,
   type QuoteVerification,
   type QuoteWork,
+  REVOCATION_BATCHES,
 } from "../src/domain/quotes";
+import { ACCOUNT_STALE_MS, RETRACTION_TTL_MS } from "../src/domain/remote-actors";
 import { syncCollections } from "../src/federation/collections";
 import { REQUEST_DEADLINE_MS } from "../src/federation/loader";
 import { verifyQuotes } from "../src/federation/quotes";

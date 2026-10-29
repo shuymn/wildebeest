@@ -50,7 +50,7 @@ import {
 // kind and reason, and the hostname only.
 
 export const FIELD_LINK_ROUND_MS = 60_000;
-export const FIELD_LINK_FINISH_MS = 10_000;
+const FIELD_LINK_FINISH_MS = 10_000;
 export const FIELD_LINK_CHECKS_MS = FIELD_LINK_ROUND_MS - FIELD_LINK_FINISH_MS;
 // A claim must outlast the round that holds it: twice its worst case.
 if (FIELD_LINK_HOLD_MS < 2 * FIELD_LINK_ROUND_MS) {
@@ -71,7 +71,7 @@ export const FIELD_LINK_SUBREQUESTS = LOCAL_FIELDS * WEB_PAGE_PAIR_MAX_SUBREQUES
 export const FIELD_LINK_STORE_CALLS = LOCAL_FIELDS * WEB_PAGE_PAIR_MAX_STORE_CALLS;
 // Post-DNS admissions: one per hop, each value's GET hops and its HEAD.
 export const FIELD_LINK_ADMISSIONS = LOCAL_FIELDS * (WEB_PAGE_MAX_REDIRECTS + 2);
-export const FIELD_LINK_SCAN: Partial<ScanLimits> = Object.freeze({ links: 0, metas: 0, jsonLd: 0 });
+const FIELD_LINK_SCAN: Partial<ScanLimits> = Object.freeze({ links: 0, metas: 0, jsonLd: 0 });
 export const FIELD_LINK_OUTPUT_MAX_UNITS = outputMaxUnits({ ...SCAN_LIMITS, ...FIELD_LINK_SCAN });
 
 type Sink = { fetchWebPage: typeof fetchWebPage; probeRedirect: typeof probeRedirect };

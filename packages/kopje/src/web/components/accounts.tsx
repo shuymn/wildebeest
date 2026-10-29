@@ -8,7 +8,7 @@ import { Who } from "./post";
 
 // A list of accounts: a row each, its avatar, its name linked to its profile, and its address. The follow lists'
 // members and the Featured tab's endorsed accounts.
-export const AccountRows: FC<{ accounts: AuthorView[] }> = ({ accounts }) => (
+const AccountRows: FC<{ accounts: AuthorView[] }> = ({ accounts }) => (
   <ul class="card rows accounts" role="list">
     {accounts.map((account) => (
       <li>

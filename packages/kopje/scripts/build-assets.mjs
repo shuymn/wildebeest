@@ -29,7 +29,14 @@ export const ASSETS = "public/assets";
 export const VERSIONS = "src/web/asset-versions.ts";
 const TAGS = "kopje-v*";
 
+/**
+ * @typedef {"stylesheet" | "script"} Kind
+ * @typedef {Record<Kind, string | null>} Paths the path of each kind, or null when there is none
+ * @typedef {{ tag: string | null, prefix: string, assets: Paths }} Released
+ */
+
 // The bundle's build. Its bytes depend on the esbuild version, pinned in the workspace catalog.
+/** @param {string} root */
 export function bundle(root) {
   const result = buildSync({
     absWorkingDir: root,
@@ -46,7 +53,7 @@ export function bundle(root) {
     write: false,
     logLevel: "silent",
   });
-  return Buffer.from(result.outputFiles[0].contents);
+  return Buffer.from(/** @type {import("esbuild").OutputFile} */ (result.outputFiles[0]).contents);
 }
 
 // The served stylesheet: src/web/kopje.css with its comments and whitespace removed by the pinned esbuild. Only
@@ -58,6 +65,7 @@ export function bundle(root) {
 // esbuild drops a comment without leaving a separator (0.28.2: `mono/**/space` becomes `monospace`, `1/**/px`
 // becomes `1px`), so a source is also refused when a comment could be the only thing between two tokens: neither the
 // character before a run of comments nor the one after it is whitespace, a brace, a semicolon or the file's edge.
+/** @param {string} root */
 export function stylesheet(root) {
   const text = readFileSync(join(root, "src/web/kopje.css"), "utf8");
   const joining = joiningComment(text);
@@ -77,7 +85,7 @@ export function stylesheet(root) {
     logLevel: "silent",
   });
   if (result.warnings.length > 0) {
-    const [first] = result.warnings;
+    const first = /** @type {import("esbuild").Message} */ (result.warnings[0]);
     throw new Error(
       `build-assets: esbuild cannot read src/web/kopje.css: ${first.text} (line ${first.location?.line ?? "?"})`,
     );
@@ -90,6 +98,7 @@ const SEPARATES = /[\s{};]/;
 // The line of the first run of comments that may be the only separator between two tokens, or null. Strings and
 // escapes are skipped, so a `/*` inside them is not a comment; an unterminated comment or string ends the scan (esbuild
 // then warns).
+/** @param {string} text */
 export function joiningComment(text) {
   let at = 0;
   while (at < text.length) {
@@ -111,8 +120,8 @@ export function joiningComment(text) {
         }
         at = end + 2;
       }
-      const before = start === 0 ? " " : text[start - 1];
-      const after = at >= text.length ? " " : text[at];
+      const before = start === 0 ? " " : text.charAt(start - 1);
+      const after = at >= text.length ? " " : text.charAt(at);
       if (!SEPARATES.test(before) && !SEPARATES.test(after)) {
         return text.slice(0, start).split("\n").length;
       }
@@ -126,6 +135,12 @@ export function joiningComment(text) {
 // The kinds of asset the build publishes. `constant` and `previous` name the versions module's exports, and `comment`
 // is the current export's comment there; `legacy` is the path a release linked before the kind had a fingerprinted
 // name (null: it had no such file); `owned` matches every file name of the kind the build manages.
+/**
+ * @type {{
+ *   kind: Kind, constant: string, previous: string, comment: string[], extension: string,
+ *   legacy: string | null, owned: RegExp, bytes: (root: string) => Buffer
+ * }[]}
+ */
 export const KINDS = [
   {
     kind: "stylesheet",
@@ -152,19 +167,30 @@ export const KINDS = [
   },
 ];
 
+/** @param {Buffer} bytes */
 export function fingerprint(bytes) {
   return createHash("sha256").update(bytes).digest("hex").slice(0, 10);
 }
 
 // An export of the versions module: its quoted path, null, or undefined when the module has no such export. Either
 // quote and an optional semicolon are read, so a module written in any formatter style parses, released tags included.
+/**
+ * @param {string} text
+ * @param {string} name
+ * @returns {string | null | undefined}
+ */
 function field(text, name) {
   const match = new RegExp(`^export const ${name} = (?:'([^']*)'|"([^"]*)"|null);?$`, "m").exec(text);
   return match === null ? undefined : (match[1] ?? match[2] ?? null);
 }
 
 // The paths a versions module records, by kind: { current: { stylesheet, script }, previous: { … } }.
+/**
+ * @param {string} text
+ * @returns {{ current: Paths, previous: Paths }}
+ */
 export function readVersions(text) {
+  /** @param {string} name */
   const read = (name) => {
     const value = field(text, name);
     if (value === undefined) {
@@ -173,13 +199,15 @@ export function readVersions(text) {
     return value;
   };
   return {
-    current: Object.fromEntries(KINDS.map((k) => [k.kind, read(k.constant)])),
-    previous: Object.fromEntries(KINDS.map((k) => [k.kind, read(k.previous)])),
+    current: /** @type {Paths} */ (Object.fromEntries(KINDS.map((k) => [k.kind, read(k.constant)]))),
+    previous: /** @type {Paths} */ (Object.fromEntries(KINDS.map((k) => [k.kind, read(k.previous)]))),
   };
 }
 
+/** @param {string | null} path */
 const literal = (path) => (path === null ? "null" : `"${path}"`);
 
+/** @param {{ current: Paths, previous: Paths }} versions */
 export function renderVersions({ current, previous }) {
   return [
     "// Written by scripts/build-assets.mjs from src/web/kopje.css and src/client/; never edited by hand.",
@@ -191,6 +219,7 @@ export function renderVersions({ current, previous }) {
   ].join("\n");
 }
 
+/** @param {string} path */
 const basename = (path) => path.slice(path.lastIndexOf("/") + 1);
 
 // The repository is located by `-C root` alone: variables that locate another one (a git hook exports GIT_DIR and
@@ -210,6 +239,25 @@ export function gitEnv(env = process.env) {
   return Object.fromEntries(Object.entries(env).filter(([name]) => !LOCATING.includes(name)));
 }
 
+/**
+ * @overload
+ * @param {string} root
+ * @param {string[]} args
+ * @returns {string}
+ */
+/**
+ * @overload
+ * @param {string} root
+ * @param {string[]} args
+ * @param {"buffer"} encoding
+ * @returns {Buffer}
+ */
+/**
+ * @param {string} root
+ * @param {string[]} args
+ * @param {"utf8" | "buffer"} encoding
+ * @returns {string | Buffer}
+ */
 function git(root, args, encoding = "utf8") {
   return execFileSync("git", ["-C", root, ...args], {
     encoding,
@@ -220,6 +268,12 @@ function git(root, args, encoding = "utf8") {
 
 // The files a release linked, by kind: the paths in its tree's versions module, or a kind's legacy path when the
 // module or the kind's export is missing (a release before the kinds were fingerprinted, or before the kind).
+/**
+ * @param {string} root
+ * @param {string} prefix
+ * @param {string} tag
+ * @returns {Paths}
+ */
 function assetsAt(root, prefix, tag) {
   let text = "";
   try {
@@ -227,18 +281,28 @@ function assetsAt(root, prefix, tag) {
   } catch {
     // No versions module: every kind is legacy.
   }
-  return Object.fromEntries(KINDS.map((k) => [k.kind, field(text, k.constant) ?? k.legacy]));
+  return /** @type {Paths} */ (Object.fromEntries(KINDS.map((k) => [k.kind, field(text, k.constant) ?? k.legacy])));
 }
 
+/**
+ * @param {Paths} a
+ * @param {Paths} b
+ */
 const samePaths = (a, b) => KINDS.every((k) => a[k.kind] === b[k.kind]);
 
 // The latest completed release and its files, or null when git or the tags cannot tell (no repository, a shallow
 // clone, no tag reachable). `current` holds the paths being built: a tag on HEAD whose release links exactly them is
 // the release being built, and the one before it is the latest completed; a tag on HEAD with other assets on top is
 // complete.
+/**
+ * @param {string} [root]
+ * @param {Paths} [current]
+ * @returns {Released | null}
+ */
 export function releasedAssets(root = ROOT, current = currentPaths(root)) {
   try {
     const prefix = git(root, ["rev-parse", "--show-prefix"]).trim();
+    /** @param {string[]} exclude */
     const describe = (exclude) =>
       git(root, [
         "describe",
@@ -262,6 +326,11 @@ export function releasedAssets(root = ROOT, current = currentPaths(root)) {
 
 // The bytes of a released file: always the release's own, from its tag, so an edited or lost working copy is a drift
 // that the build repairs. Only without tags (--check's fallback) are they the working copy's.
+/**
+ * @param {string} root
+ * @param {Released} released
+ * @param {string} path
+ */
 function releasedBytes(root, released, path) {
   const name = basename(path);
   if (released.tag === null) {
@@ -271,26 +340,40 @@ function releasedBytes(root, released, path) {
 }
 
 // The current bytes and fingerprinted path of each kind.
+/**
+ * @param {string} [root]
+ * @returns {Record<Kind, { bytes: Buffer, path: string }>}
+ */
 export function currentAssets(root = ROOT) {
-  return Object.fromEntries(
-    KINDS.map((k) => {
-      const bytes = k.bytes(root);
-      return [k.kind, { bytes, path: `/assets/kopje.${fingerprint(bytes)}.${k.extension}` }];
-    }),
+  return /** @type {Record<Kind, { bytes: Buffer, path: string }>} */ (
+    Object.fromEntries(
+      KINDS.map((k) => {
+        const bytes = k.bytes(root);
+        return [k.kind, { bytes, path: `/assets/kopje.${fingerprint(bytes)}.${k.extension}` }];
+      }),
+    )
   );
 }
 
-const pathsOf = (assets) => Object.fromEntries(KINDS.map((k) => [k.kind, assets[k.kind].path]));
+/** @param {Record<Kind, { path: string }>} assets */
+const pathsOf = (assets) =>
+  /** @type {Record<Kind, string>} */ (Object.fromEntries(KINDS.map((k) => [k.kind, assets[k.kind].path])));
 
+/** @param {string} [root] */
 export function currentPaths(root = ROOT) {
   return pathsOf(currentAssets(root));
 }
 
 // What the build leaves on disk: the versions module's text and the asset files by name. `released` is
 // releasedAssets()'s answer, or { tag: null, assets } as recorded when the tags are not available.
+/**
+ * @param {string} root
+ * @param {Released} released
+ */
 export function plan(root, released) {
   const assets = currentAssets(root);
   const current = pathsOf(assets);
+  /** @type {Map<string, Buffer>} */
   const files = new Map();
   for (const k of KINDS) {
     files.set(basename(current[k.kind]), assets[k.kind].bytes);
@@ -302,9 +385,14 @@ export function plan(root, released) {
   return { versions: renderVersions({ current, previous: released.assets }), files };
 }
 
+/** @param {string} name */
 const owned = (name) => KINDS.some((k) => k.owned.test(name));
 
 // The differences between the disk and the plan, as messages; empty when the build would change nothing.
+/**
+ * @param {string} root
+ * @param {Released} released
+ */
 export function drift(root, released) {
   const { versions, files } = plan(root, released);
   const problems = [];
@@ -377,6 +465,7 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
       }
     } else {
       const { current, previous } = build();
+      /** @param {Paths} paths */
       const shown = (paths) => KINDS.map((k) => paths[k.kind] ?? `no ${k.kind}`).join(", ");
       console.log(`build-assets: ${shown(current)}, keeping ${shown(previous)}`);
     }

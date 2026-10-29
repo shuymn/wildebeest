@@ -2,9 +2,9 @@ import { runInDurableObject } from "cloudflare:test";
 import { describe, expect, it } from "vitest";
 
 import { listFollowRequests, listFollows, type Page, type PageQuery } from "../src/domain/accounts";
-import { getOutbox } from "../src/domain/activities";
 import { listEndorsements } from "../src/domain/endorsements";
 import { listAccounts } from "../src/domain/lists";
+import { getOutbox } from "../src/domain/local-notes";
 import { listGroupedNotifications, notificationGroupAccounts } from "../src/domain/notification-groups";
 import { getNotificationPolicy, listNotificationRequests } from "../src/domain/notification-requests";
 import { listNotifications } from "../src/domain/notifications";
@@ -348,7 +348,7 @@ type Read = {
 const range = (base: bigint, count: number) => Array.from({ length: count }, (_, i) => id(base, count - 1 - i));
 const friendStatuses = (newer: number) => [...range(FRIEND_NEWER, newer), ...range(FRIEND_OLDER, OLDER)];
 const visibleAccounts = (newer: number) => [...range(NEWER_ACCOUNT, newer), ...range(VISIBLE_ACCOUNT, OLDER)];
-const byId = (ids: string[]) => [...ids].sort((a, b) => (BigInt(b) > BigInt(a) ? 1 : -1));
+const byId = (ids: string[]) => [...ids].toSorted((a, b) => (BigInt(b) > BigInt(a) ? 1 : -1));
 
 const READS: Read[] = [
   {

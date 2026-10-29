@@ -5,13 +5,12 @@ import { describe, expect, it } from "vitest";
 
 import { selectSql } from "../src/db/columns";
 import { Db } from "../src/db/sql";
+import { MAX_REMOTE_FIELDS, MOVED_ACCOUNT_COLUMNS } from "../src/domain/account-columns";
 import {
   DISPLAY_NAME_LIMIT,
   familiarFollowers,
   listFollows,
   MAX_FAMILIAR_FOLLOWERS,
-  MAX_REMOTE_FIELDS,
-  MOVED_ACCOUNT_COLUMNS,
   presentAccountsWithin,
   PROFILE_URL_LIMIT,
   USERNAME_LIMIT,
@@ -416,7 +415,7 @@ describe("answers of many accounts are bounded in bytes (RES-3)", () => {
     const ids = await accounts(t, MAX_LIST_MEMBERS_ANSWERED, BASE, typical);
     await listOf(t, ids);
     const answer = await membersAnswer(t, `/api/v1/lists/${LIST}/accounts?limit=0`);
-    expect(answer.ids).toEqual([...ids].reverse());
+    expect(answer.ids).toEqual([...ids].toReversed());
     expect(answer.next).toBeNull();
     // 2,101 bytes a member.
     expect(answer.bytes).toBeLessThan((ANSWER_BYTES * 26) / 100);
@@ -432,7 +431,7 @@ describe("answers of many accounts are bounded in bytes (RES-3)", () => {
     for (const answer of answers) {
       expect(answer.bytes).toBeLessThanOrEqual(ANSWER_BYTES);
     }
-    expect(answers.flatMap((answer) => answer.ids)).toEqual([...ids].reverse());
+    expect(answers.flatMap((answer) => answer.ids)).toEqual([...ids].toReversed());
     expect(new URL(answers[0]!.next!).searchParams.get("limit")).toBe("0");
   }, 60_000);
 
@@ -451,7 +450,7 @@ describe("answers of many accounts are bounded in bytes (RES-3)", () => {
       for (const answer of answers) {
         expect(answer.bytes).toBeLessThanOrEqual(ANSWER_BYTES);
       }
-      expect(answers.flatMap((answer) => answer.ids)).toEqual([...ids].reverse());
+      expect(answers.flatMap((answer) => answer.ids)).toEqual([...ids].toReversed());
     }
     // About 68 fit: the first two chunks are read, however many members there are.
     expect(read[0]!.profiles).toBe(100);
@@ -486,7 +485,7 @@ describe("answers of many accounts are bounded in bytes (RES-3)", () => {
     for (const answer of answers) {
       expect(answer.bytes).toBeLessThanOrEqual(ANSWER_BYTES);
     }
-    expect(answers.flatMap((answer) => answer.ids)).toEqual([...ids].reverse());
+    expect(answers.flatMap((answer) => answer.ids)).toEqual([...ids].toReversed());
   }, 60_000);
 
   it("pages a cut answer past pending and unavailable members, each available one once", async () => {
@@ -509,7 +508,7 @@ describe("answers of many accounts are bounded in bytes (RES-3)", () => {
     );
     const answers = await walk(t, `/api/v1/lists/${LIST}/accounts?limit=0`);
     expect(answers.length).toBeGreaterThan(1);
-    expect(answers.flatMap((answer) => answer.ids)).toEqual(ids.filter((id) => !gone.includes(id)).reverse());
+    expect(answers.flatMap((answer) => answer.ids)).toEqual(ids.filter((id) => !gone.includes(id)).toReversed());
   }, 60_000);
 
   it("cuts the endorsements answer by its bytes and links next to the rest", async () => {
@@ -527,7 +526,7 @@ describe("answers of many accounts are bounded in bytes (RES-3)", () => {
     for (const answer of answers) {
       expect(answer.bytes).toBeLessThanOrEqual(ANSWER_BYTES);
     }
-    expect(answers.flatMap((answer) => answer.ids)).toEqual([...ids].reverse());
+    expect(answers.flatMap((answer) => answer.ids)).toEqual([...ids].toReversed());
   }, 60_000);
 });
 
@@ -547,7 +546,7 @@ describe("familiar followers share the answer bytes (RES-3)", () => {
     await follows(t, [ALICE], followers);
     await follows(t, followers, [target!]);
     // 40 accounts of about 120 KB: 4.8 MB.
-    expect((await ask(t, [target!])).get(target!)).toEqual([...followers].reverse());
+    expect((await ask(t, [target!])).get(target!)).toEqual([...followers].toReversed());
   }, 60_000);
 
   it("gives the whole budget to the one account with followers, whatever the order and the empty ones", async () => {
@@ -567,7 +566,7 @@ describe("familiar followers share the answer bytes (RES-3)", () => {
     }
     // 80 such accounts pass the budget; about 68 fit, far more than a twentieth of it.
     const shown = first.get(big!)!;
-    expect(shown).toEqual([...followers].reverse().slice(0, shown.length));
+    expect(shown).toEqual([...followers].toReversed().slice(0, shown.length));
     expect(shown.length).toBeGreaterThan(60);
     expect(shown.length).toBeLessThan(MAX_FAMILIAR_FOLLOWERS);
   }, 60_000);
@@ -581,13 +580,13 @@ describe("familiar followers share the answer bytes (RES-3)", () => {
     await follows(t, heavy, targets.slice(0, 1));
     await follows(t, light, targets.slice(1));
     const forward = await ask(t, targets);
-    expect(await ask(t, [...targets].reverse())).toEqual(forward);
+    expect(await ask(t, [...targets].toReversed())).toEqual(forward);
     for (const id of targets.slice(1)) {
-      expect(forward.get(id)).toEqual([...light].reverse());
+      expect(forward.get(id)).toEqual([...light].toReversed());
     }
     // The typical ones take about 3.2 MB; the large one takes what is left.
     const shown = forward.get(targets[0]!)!;
-    expect(shown).toEqual([...heavy].reverse().slice(0, shown.length));
+    expect(shown).toEqual([...heavy].toReversed().slice(0, shown.length));
     expect(shown.length).toBeGreaterThan(30);
     const read = await measured(t, familiarFollowers, {
       credential: await credential(t, "read:follows"),
@@ -615,7 +614,7 @@ describe("unexpected_accounts (RES-3)", () => {
       JSON.stringify(ids),
     );
     // Mentioned newest first, so mention order is not id order.
-    const mentioned = [...ids].reverse();
+    const mentioned = [...ids].toReversed();
     const text = mentioned.map((id) => `@a@d${BigInt(id) - BASE}.example`).join(" ");
     const whole = await runInDurableObject(t.store, (_instance, state) =>
       presentAccountsWithin(new Db(state.storage.sql), mentioned, { origin: ORIGIN }, Infinity, true),

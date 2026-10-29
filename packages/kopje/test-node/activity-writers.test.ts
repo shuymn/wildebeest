@@ -82,12 +82,12 @@ describe("instance activity writers", () => {
   it("counts every local status and account the Store inserts", () => {
     const { findings, covered } = scan(SOURCES);
     expect(findings).toEqual([]);
-    expect(covered.sort()).toEqual(
+    expect(covered.toSorted()).toEqual(
       [
         "src/domain/setup.ts a local account insert",
         "src/domain/statuses.ts a local status insert",
         "src/domain/statuses.ts a local status insert",
-      ].sort(),
+      ].toSorted(),
     );
   });
 

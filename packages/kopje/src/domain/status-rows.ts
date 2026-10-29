@@ -1,5 +1,12 @@
 import { balancedSum, type ColumnMap, fixedColumns, type FixedColumns, rowHeapSql } from "../db/columns";
-import { ACCOUNTS_ID_INDEX, MEDIA_ID_INDEX, OAUTH_CLIENTS_ID_INDEX, STATUSES_ID_INDEX } from "../db/indexes";
+import {
+  ACCOUNTS_ID_INDEX,
+  MEDIA_ID_INDEX,
+  OAUTH_CLIENTS_ID_INDEX,
+  POLL_VOTES_KEY_INDEX,
+  POLLS_STATUS_INDEX,
+  STATUSES_ID_INDEX,
+} from "../db/indexes";
 import {
   mediaCacheSql,
   emojiCacheSql,
@@ -20,23 +27,24 @@ import {
   isoTimeSql,
   storedCountSql,
 } from "../platform/stored-bounds";
-import { ACCOUNT_COLUMN_MAP, MOVED_ACCOUNT_COLUMNS } from "./accounts";
+import { ACCOUNT_COLUMN_MAP, MOVED_ACCOUNT_COLUMNS } from "./account-columns";
 import { ADMIN_EMAIL_COLUMNS, LOCAL_EMAIL_COLUMNS, OAUTH_ADMIN_HEAP_SQL } from "./admin-authority";
 import { QUOTE_APPROVAL_COLUMNS, QUOTE_READ_COLUMNS, quotedStatusIdSql } from "./audience";
-import { FILTER_MATCH_COLUMNS } from "./filters";
-import { OWN_VOTE_COLUMNS, ownVoteCountSql, POLL_COLUMN_MAP, POLL_FROM } from "./polls";
 import { actorUriSql, usernameSql } from "./profile-bounds";
 import { CACHED_IMAGE_COLUMNS, CACHED_IMAGE_KINDS } from "./remote-media";
 import {
   MAX_PRESENTED_TAGS,
   MAX_STATUS_MEDIA,
   MAX_STATUS_MENTION_ROWS,
+  pollOptionsSql,
   statusUriSql,
   tagNameSql,
 } from "./status-bounds";
 
 // hydrate's queries (status-presenter.ts) and R, statusStream's bound on one status's row heap, share these column maps
 // (src/db/columns.ts), so R cannot drift from what is read (RES-3, "Heap at 8 MiB per answer" in docs/threat-model.md).
+// Imports only leaves, so modules that build SQL from these maps at load (status-presenter.ts, trends.ts) can use
+// them whatever the import order.
 
 // in_reply_to_id and in_reply_to_account_id are shown as Mastodon shows them, even when the viewer may not see the
 // parent: they belong to the reply, whose ActivityPub object carries inReplyTo to every recipient anyway, and its
@@ -190,6 +198,37 @@ export const SHOWN_CARD_JOIN =
 // The attached card of the status `j.value`, by its key: one row at most.
 export const SHOWN_CARD_SQL = "c.status_id = j.value AND c.fetched_at IS NOT NULL";
 
+// A status's poll as presentPolls (poll-presenter.ts) reads it, and the viewer's own votes in its current generation.
+export const POLL_COLUMN_MAP = {
+  status_id: "p.status_id",
+  account_id: "s.account_id",
+  options: pollOptionsSql("p.options"),
+  tallies: "p.tallies",
+  multiple: "p.multiple",
+  hide_totals: "p.hide_totals",
+  expires_at: "p.expires_at",
+  votes_count: "p.votes_count",
+  voters_count: "p.voters_count",
+} as const satisfies ColumnMap;
+
+const POLL_FROM = `polls p INDEXED BY ${POLLS_STATUS_INDEX}
+	CROSS JOIN statuses s INDEXED BY ${STATUSES_ID_INDEX} ON s.id = p.status_id`;
+
+export const OWN_VOTE_COLUMNS = fixedColumns({ poll_id: "v.poll_id", choice: "v.choice" }, { poll_id: 18, choice: 0 });
+
+// How many votes `viewer` cast in the current generation of the poll of `status`, which presentPolls reads as their
+// own: for R (statusRowBoundSql). A count of the viewer's own votes only (R27).
+function ownVoteCountSql(status: string, viewer: string): string {
+  return `(SELECT count(*) FROM polls p INDEXED BY ${POLLS_STATUS_INDEX} CROSS JOIN poll_votes v INDEXED BY ${POLL_VOTES_KEY_INDEX}
+		ON v.poll_id = p.status_id AND v.generation = p.generation AND v.account_id = ${viewer} WHERE p.status_id = ${status})`;
+}
+
+// The filters that name a status (filters.ts filterStatusMatches): a filter's id and the status's.
+export const FILTER_MATCH_COLUMNS = fixedColumns(
+  { filter_id: "fs.filter_id", status_id: "fs.status_id" },
+  { filter_id: 18, status_id: 18 },
+);
+
 // A viewer flag: its kind (one letter) and the status's id. A status has at most one of each of the five kinds (a
 // viewer keeps one boost of an original: the unique index statuses_account_reblogs_kept, which the flag reads).
 export const VIEWER_FLAG_COLUMNS = fixedColumns(
@@ -199,9 +238,9 @@ export const VIEWER_FLAG_COLUMNS = fixedColumns(
 const VIEWER_FLAGS = 5;
 
 // Every query the presenter runs for a chunk, by the map its result columns come from (test/status-rows.test.ts
-// fails on a query without one, or a column outside it). Built on first use, as statusRowBoundSql. moved: the authors'
-// moved-to accounts (accounts.ts movedOf). adminEmail and localEmails: the OAuth admin's lookup for a local author's,
-// or a local moved-to account's, Owner role (oauthAdmin), once per operation.
+// fails on a query without one, or a column outside it). moved: the authors' moved-to accounts (accounts.ts movedOf).
+// adminEmail and localEmails: the OAuth admin's lookup for a local author's, or a local moved-to account's, Owner role
+// (oauthAdmin), once per operation.
 export function hydrateQueries(): Readonly<Record<HydrateQuery, ColumnMap>> {
   return {
     statuses: STATUS_COLUMN_MAP,
@@ -308,7 +347,6 @@ let boundSql: string | undefined;
 // operator-sized local_accounts, evaluated once per statement and only when such an item is read), which an operation
 // reads at most once, in whichever chunk first shows an available local account.
 export function statusRowBoundSql(): string {
-  // Built on first use: the maps come from modules that import this one's importers.
   boundSql ??= `WITH t AS (SELECT key AS k, value AS id FROM json_each(?1)),
 		x(k, id) AS (SELECT k, id FROM t
 			UNION ALL SELECT t.k, b.reblog_of_id FROM t CROSS JOIN statuses b INDEXED BY ${STATUSES_ID_INDEX} ON b.id = t.id

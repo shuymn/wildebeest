@@ -22,18 +22,21 @@ const KEK_NAMES = ["userKEK", "USER_KEY"];
 /** @param {unknown} value */
 function record(value) {
   return typeof value === "object" && value !== null && !Array.isArray(value)
-    ? /** @type {Record<string, any>} */ (value)
+    ? /** @type {Record<string, unknown>} */ (value)
     : {};
 }
 
 /**
  * The bindings of one deployment environment, by kind.
- * @param {Record<string, any>} config
+ * @param {Record<string, unknown>} config
  */
 function bindingsOf(config) {
-  /** @param {string} field @param {string} idField */
+  /** @param {string} field @param {string} idField (its value a string, as the API reports it) */
   const map = (field, idField) =>
-    Object.entries(record(config[field])).map(([binding, value]) => ({ binding, id: record(value)[idField] ?? null }));
+    Object.entries(record(config[field])).map(([binding, value]) => ({
+      binding,
+      id: /** @type {string | null} */ (record(value)[idField] ?? null),
+    }));
   return {
     d1: map("d1_databases", "id"),
     queues: map("queue_producers", "name"),
@@ -41,10 +44,10 @@ function bindingsOf(config) {
     kv: map("kv_namespaces", "namespace_id"),
     r2: map("r2_buckets", "name"),
     services: map("services", "service"),
-    vars: Object.entries(record(config.env_vars)).map(([name, value]) => ({
-      name,
-      type: typeof record(value).type === "string" ? record(value).type : "unknown",
-    })),
+    vars: Object.entries(record(config.env_vars)).map(([name, value]) => {
+      const type = record(value).type;
+      return { name, type: typeof type === "string" ? type : "unknown" };
+    }),
     compatibilityDate: typeof config.compatibility_date === "string" ? config.compatibility_date : null,
     compatibilityFlags: Array.isArray(config.compatibility_flags) ? config.compatibility_flags : [],
   };
@@ -52,7 +55,7 @@ function bindingsOf(config) {
 
 /**
  * @param {unknown} json the saved API answer ({ result: project }) or the project itself
- * @param {{ domain?: string, kopjeQueue?: string }} [options]
+ * @param {{ domain?: string | undefined, kopjeQueue?: string | undefined }} [options]
  */
 export function readPagesProject(json, { domain, kopjeQueue } = {}) {
   const project = record(record(json).result ?? json);
@@ -197,7 +200,8 @@ export function readPagesProject(json, { domain, kopjeQueue } = {}) {
 }
 
 /**
- * @param {{ projectPath: string, exportPath?: string, domain?: string, kopjeQueue?: string,
+ * @param {{ projectPath: string, exportPath?: string | undefined, domain?: string | undefined,
+ *   kopjeQueue?: string | undefined,
  *   env: Record<string, string | undefined> }} options
  */
 export async function preflight({ projectPath, exportPath, domain, kopjeQueue, env }) {
@@ -215,7 +219,7 @@ export async function preflight({ projectPath, exportPath, domain, kopjeQueue, e
       texts: files.map((file) => () => readFileSync(file, "utf8")),
       acceptDeletions: true,
     });
-    const users = /** @type {any[]} */ (
+    const users = /** @type {import("./kek.js").LegacyUser[]} */ (
       db.prepare("SELECT actor_id, privkey, privkey_salt, pubkey FROM users ORDER BY rowid").all()
     ).map((u) => ({ uri: String(u.actor_id), privkey: u.privkey, salt: u.privkey_salt, pubkey: String(u.pubkey) }));
     db.close();

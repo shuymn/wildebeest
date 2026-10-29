@@ -11,7 +11,7 @@ import { END_LINE, HEADER_PREFIX, TRAILER_PREFIX } from "../format.js";
 /**
  * Splits a whole dump text into its header, statements and trailer.
  * @param {string} text
- * @returns {{ header: any, trailer: any, statements: Generator<DumpStatement> }}
+ * @returns {{ header: unknown, trailer: unknown, statements: Generator<DumpStatement> }}
  */
 export function readDumpText(text) {
   const firstEnd = text.indexOf("\n");
@@ -28,8 +28,8 @@ export function readDumpText(text) {
   }
   const trailerLine = text.slice(trailerStart, text.length - END_LINE.length - 2);
   return {
-    header: JSON.parse(first.slice(HEADER_PREFIX.length)),
-    trailer: JSON.parse(trailerLine.slice(TRAILER_PREFIX.length)),
+    header: /** @type {unknown} */ (JSON.parse(first.slice(HEADER_PREFIX.length))),
+    trailer: /** @type {unknown} */ (JSON.parse(trailerLine.slice(TRAILER_PREFIX.length))),
     statements: statements(text, firstEnd + 1, trailerStart),
   };
 }
@@ -165,7 +165,7 @@ function identifier(text, at) {
  * @param {string} text
  * @param {number} at
  */
-export function scanLiteral(text, at) {
+function scanLiteral(text, at) {
   if (text[at] === "'") {
     let i = at + 1;
     for (;;) {

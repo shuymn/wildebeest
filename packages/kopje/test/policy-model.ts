@@ -137,7 +137,7 @@ export class PolicyModel {
   covered(domain: string): boolean {
     const rule = this.world.instanceBlocks
       .filter((b) => domain === b.domain || domain.endsWith(`.${b.domain}`))
-      .sort((a, b) => b.domain.length - a.domain.length)[0];
+      .toSorted((a, b) => b.domain.length - a.domain.length)[0];
     return rule?.severity === "suspend";
   }
 
@@ -168,7 +168,7 @@ export class PolicyModel {
     return this.world.instanceBlocks
       .filter((b) => b.severity === "suspend")
       .map((b) => b.domain)
-      .sort()
+      .toSorted()
       .map((domain) => ({ domain, comment: shown(rationale) }));
   }
 
@@ -254,7 +254,7 @@ export class PolicyModel {
       this.world.follows
         .filter((f) => f.from === from && f.accepted)
         .slice(-count)
-        .reverse()
+        .toReversed()
         .map((f) => f.to);
     const counted = newest(viewer, windows.sources)
       .filter((source) => this.followListsShown(source, viewer))
@@ -271,7 +271,7 @@ export class PolicyModel {
       frequency.set(x, (frequency.get(x) ?? 0) + 1);
     }
     return [...frequency]
-      .sort(([a, fa], [b, fb]) => fb - fa || b - a)
+      .toSorted(([a, fa], [b, fb]) => fb - fa || b - a)
       .slice(0, windows.kept)
       .map(([x]) => x);
   }
@@ -447,7 +447,7 @@ export class PolicyModel {
         const allowed = reviews.status.get(row.status) ?? reviews.account.get(author) ?? reviews.byDefault;
         return row.score === top.get(author) && allowed && this.trendable(row.status, discoverable);
       })
-      .sort((a, b) => b.score - a.score || b.status - a.status)
+      .toSorted((a, b) => b.score - a.score || b.status - a.status)
       .slice(0, 200)
       .map((row) => row.status)
       .filter((s) => this.listable(s, viewer));
@@ -464,7 +464,7 @@ export class PolicyModel {
   ): { url: string; copy: number }[] {
     return links
       .filter((link) => link.score >= 1 && allowed.has(link.url))
-      .sort((a, b) => b.score - a.score || (a.url < b.url ? -1 : a.url > b.url ? 1 : 0))
+      .toSorted((a, b) => b.score - a.score || (a.url < b.url ? -1 : a.url > b.url ? 1 : 0))
       .slice(0, 200)
       .flatMap((link) => {
         const copy = this.publicCopies(link.url, copies)
@@ -487,10 +487,10 @@ export class PolicyModel {
       .flatMap((o) =>
         this.world.statuses
           .flatMap((b, i) => (b.reblogOf === o && b.visibility === "public" ? [i] : []))
-          .sort((a, b) => b - a)
+          .toSorted((a, b) => b - a)
           .slice(0, 20),
       )
-      .sort((a, b) => b - a)
+      .toSorted((a, b) => b - a)
       .slice(0, 200);
     const days = new Map<string, { uses: number; accounts: Set<number> }>();
     const count = (s: number) => {
@@ -527,7 +527,7 @@ export class PolicyModel {
 
   // The statuses holding a public copy of `url`, newest first.
   private publicCopies(url: string, copies: ReadonlyMap<number, string>): number[] {
-    return [...copies.entries()].flatMap(([s, u]) => (u === url ? [s] : [])).sort((a, b) => b - a);
+    return [...copies.entries()].flatMap(([s, u]) => (u === url ? [s] : [])).toSorted((a, b) => b - a);
   }
 
   // Whether a status counts for a link: a public original by an available author.
@@ -562,7 +562,7 @@ export class PolicyModel {
     for (let p = this.status(s).replyTo; p !== null && up.length < limit; p = this.status(p).replyTo) {
       up.push(p);
     }
-    return up.filter((x) => this.listable(x, null)).reverse();
+    return up.filter((x) => this.listable(x, null)).toReversed();
   }
 
   threadReplies(s: number): number[] {
@@ -587,7 +587,7 @@ export class PolicyModel {
           ? [x]
           : [],
       )
-      .reverse()
+      .toReversed()
       .map((x) => this.status(x).author);
   }
 
@@ -604,7 +604,7 @@ export class PolicyModel {
           ? [q.status]
           : [];
       })
-      .sort((a, b) => b - a);
+      .toSorted((a, b) => b - a);
   }
 
   // Whether the list `l` holds the account x (as a member of any kind: the owner, active or pending).
@@ -843,7 +843,7 @@ export class PolicyModel {
     const { author, mentions } = this.status(s);
     const all = new Set([author, ...mentions.filter((m) => !m.silent).map((m) => m.account)]);
     all.delete(owner);
-    return [...all].sort((a, b) => a - b);
+    return [...all].toSorted((a, b) => a - b);
   }
 
   // The conversations of the world's direct statuses (not boosts), as Mastodon's migration of them makes them: a local

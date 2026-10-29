@@ -366,7 +366,7 @@ describe("forwarding a report (R23, DATA-7)", () => {
     expect(body.forwarded).toBe(true);
     // carol and dave: erin's domain is not listed, frank's inbox is carol's server's, and alice is local.
     const [flag] = await outbound(h.store);
-    expect(flag?.audience).toEqual({ followers: false, accounts: [carol, dave].sort() });
+    expect(flag?.audience).toEqual({ followers: false, accounts: [carol, dave].toSorted() });
     expect((flag!.activity.object as string[]).length).toBe(1 + replies.length);
     expect(
       (await sql<{ inbox_url: string }>(h.store, "SELECT inbox_url FROM deliveries ORDER BY inbox_url")).map(

@@ -60,15 +60,16 @@ async function fixtures() {
       method: "PATCH",
     }),
   );
+  // Each list holds one row past its first page, so each measured page is full and offers the page past it.
   let last: Record<string, unknown> = {};
-  for (let i = 0; i < 20; i++) {
+  for (let i = 0; i <= 20; i++) {
     last = await post(h, alice, { status: `A short post, number ${i}, about servers and the walk home.` });
   }
-  // The status page's post has 20 replies, a full page of them (bob's, so alice's pages list none).
-  for (let i = 0; i < 20; i++) {
+  // The status page's post has 21 replies, a full page of them and one later (bob's, so alice's pages list none).
+  for (let i = 0; i <= 20; i++) {
     await post(h, bob, { status: `A short reply, number ${i}, about the walk home.`, in_reply_to_id: last.id });
   }
-  // The same 20 posts carry a hashtag, so its page lists them (its rows written as a post's hashtags are).
+  // The same 21 posts carry a hashtag, so its page lists them (its rows written as a post's hashtags are).
   await sql(
     h.store,
     "INSERT INTO status_tags (status_id, name, public) SELECT id, 'walks', 1 FROM statuses WHERE account_id = ?",
@@ -86,8 +87,8 @@ async function fixtures() {
     ),
   );
   await setSetting(h.store, "privacy_policy", "<p>Policy</p>");
-  // 40 followers on another server, a full page of the follow list.
-  await seedFollows(h.store, alice.id, 40, { direction: "followers", domain: "social.example", base: 600_000 });
+  // 41 followers on another server, a full page of the follow list and one past it.
+  await seedFollows(h.store, alice.id, 41, { direction: "followers", domain: "social.example", base: 600_000 });
   return { h, status: new URL(String(last.url)).pathname };
 }
 
@@ -115,6 +116,10 @@ describe("HTML weight", () => {
     expect((await (await h.request(status)).text()).match(/<article /g)).toHaveLength(21);
     // The follow list fixture: 40 rows.
     expect((await (await h.request("/@alice/followers")).text()).match(/<li><div class="who">/g)).toHaveLength(40);
+    // Each list page carries its pager: a page lies past it.
+    for (const path of ["/@alice", status, "/tags/walks", "/@alice/followers"]) {
+      expect([path, (await (await h.request(path)).text()).includes('<nav class="pager"')]).toEqual([path, true]);
+    }
     // The inline icons' share of the gzip size: the page's gzip size with and without its SVG
     // markup, 2,829 against 2,308 bytes (18%). A per-page sprite measured larger on gzip (each icon keeps its <svg>
     // wrapper, and gzip already shares the repeated paths), so the icons stay inline; 0.27 is the measured share

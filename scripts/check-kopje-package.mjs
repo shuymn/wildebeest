@@ -62,8 +62,9 @@ const current = JSON.parse(readFileSync(manifestPath, "utf8")).version;
 const version = values.version ?? (current === UNVERSIONED ? CHECK_VERSION : current);
 
 const work = mkdtempSync(join(tmpdir(), "kopje-package-"));
+/** @type {string[]} */
 const failures = [];
-const fail = (message) => failures.push(message);
+const fail = (/** @type {string} */ message) => failures.push(message);
 try {
   // 1. Build and pack, with the version set for this check only. The published stylesheets must be what the asset
   // build writes (packages/kopje/scripts/build-assets.mjs); packing skips prepack, so the check runs here.
@@ -102,10 +103,10 @@ try {
   const templateDist = join(work, "template-dist");
   const templateKiB = gzipKiB(run(wrangler, ["deploy", "--dry-run", "--outdir", templateDist], app));
   console.log(`gzip: in-repo ${repoKiB} KiB, template ${templateKiB} KiB`);
-  for (const [what, kib] of [
+  for (const [what, kib] of /** @type {[string, number][]} */ ([
     ["in-repo", repoKiB],
     ["template", templateKiB],
-  ]) {
+  ])) {
     if (kib > LIMIT_KIB) {
       fail(`the ${what} bundle is ${kib} KiB gzipped, over ${LIMIT_KIB} KiB`);
     }
@@ -147,6 +148,7 @@ if (failures.length > 0) {
 }
 console.log(`check-kopje-package: ok (kopje ${version})`);
 
+/** @param {string} dir */
 function checkPackage(dir) {
   const manifest = JSON.parse(readFileSync(join(dir, "package.json"), "utf8"));
   if (manifest.version !== version) {
@@ -191,7 +193,7 @@ function checkPackage(dir) {
       fail(`the packed manifest names ${target}, which is not in the package`);
     }
   }
-  const files = readdirSync(dir, { recursive: true }).map((file) => file.split("\\").join("/"));
+  const files = readdirSync(dir, { recursive: true, encoding: "utf8" }).map((file) => file.split("\\").join("/"));
   const shippedSources = files.filter((file) => /^(src|test|test-node|stubs|scripts)\//.test(file));
   if (shippedSources.length > 0) {
     fail(`the package ships sources: ${shippedSources.join(",")}`);
@@ -241,6 +243,11 @@ function checkPackage(dir) {
 
 // The bundle imports no wasm module and none sits beside the script: wrangler would emit a CompiledWasm import as a
 // file of its own.
+/**
+ * @param {string} dir
+ * @param {string} script
+ * @param {string} what
+ */
 function checkNoWasm(dir, script, what) {
   const modules = readdirSync(dir).filter((file) => file.endsWith(".wasm"));
   const imported = [...readFileSync(join(dir, script), "utf8").matchAll(/["']([^"'\n]*\.wasm)["']/g)].map(
@@ -252,19 +259,29 @@ function checkNoWasm(dir, script, what) {
 }
 
 // The bundle links its map, and the map carries the original sources, so stack traces in Workers Logs point at them.
+/**
+ * @param {string} script
+ * @param {string} what
+ */
 function checkSourceMap(script, what) {
   const name = `${script.split(/[\\/]/).at(-1)}.map`;
   if (!readFileSync(script, "utf8").trimEnd().endsWith(`//# sourceMappingURL=${name}`)) {
     fail(`${what} does not link ${name}`);
     return;
   }
-  const map = JSON.parse(readFileSync(`${script}.map`, "utf8"));
+  const map = /** @type {{ sources?: string[], sourcesContent?: unknown[] }} */ (
+    JSON.parse(readFileSync(`${script}.map`, "utf8"))
+  );
   const entry = map.sources?.findIndex((source) => source.endsWith("src/worker.ts")) ?? -1;
   if (entry === -1 || typeof map.sourcesContent?.[entry] !== "string" || map.sourcesContent[entry] === "") {
     fail(`${what}'s source map lacks src/worker.ts with its content`);
   }
 }
 
+/**
+ * @param {string} app
+ * @param {Record<string, string>} assets
+ */
 async function smoke(app, assets) {
   // wrangler runs the template's build command (the asset copy) in the current directory.
   const cwd = process.cwd();
@@ -329,6 +346,10 @@ async function smoke(app, assets) {
 
 // `npm run admin` in an instance's repository runs the installed kopje's CLI, and nothing else: without the install it
 // fails even when another kopje-admin is on PATH.
+/**
+ * @param {string} app
+ * @param {string} bare
+ */
 function checkAdminScript(app, bare) {
   const help = run("npm", ["run", "--silent", "admin", "--", "--help"], app, { quiet: true });
   if (!help.includes("Usage: kopje-admin")) {
@@ -353,6 +374,10 @@ function checkAdminScript(app, bare) {
   fail(`\`npm run admin\` without the install did not fail; it printed: ${output.slice(0, 200)}`);
 }
 
+/**
+ * @param {string} tarball
+ * @param {string} dir
+ */
 function checkInstall(tarball, dir) {
   mkdirSync(dir, { recursive: true });
   writeFileSync(join(dir, "package.json"), JSON.stringify({ name: "consumer", private: true, type: "module" }));
@@ -361,7 +386,7 @@ function checkInstall(tarball, dir) {
   // for kopje@<version>); the template's `npm run admin` is checked in checkAdminScript.
   const elsewhere = join(dir, "..", "elsewhere");
   mkdirSync(elsewhere, { recursive: true });
-  for (const [what, command, args, cwd] of [
+  for (const [what, command, args, cwd] of /** @type {[string, string, string[], string][]} */ ([
     ["the installed bin", join(dir, "node_modules", ".bin", "kopje-admin"), ["--help"], dir],
     [
       "npm exec --package",
@@ -369,7 +394,7 @@ function checkInstall(tarball, dir) {
       ["exec", "--yes", "--offline", `--package=${tarball}`, "--", "kopje-admin", "--help"],
       elsewhere,
     ],
-  ]) {
+  ])) {
     const help = run(command, args, cwd, { quiet: true });
     if (!help.includes("Usage: kopje-admin")) {
       fail(`${what} did not print the CLI usage`);
@@ -408,6 +433,10 @@ function checkInstall(tarball, dir) {
 // The cutover tools ship as CLI modules that run Kopje's code from dist/ (the package has no sources). A synthetic
 // legacy export (packages/kopje/test-node/legacy-fixture.ts) is converted, checked, fingerprinted and turned into a
 // maintenance worker by the installed CLI.
+/**
+ * @param {string} installed
+ * @param {string} dir
+ */
 async function checkCutover(installed, dir) {
   const { buildLegacyFixture } = await import(pathToFileURL(join(pkg, "test-node", "legacy-fixture.ts")).href);
   const fixture = await buildLegacyFixture({ level: 39, notificationSequence: 12n });
@@ -426,7 +455,8 @@ async function checkCutover(installed, dir) {
   for (const args of steps) {
     try {
       execFileSync(cli, args, { cwd: installed, stdio: ["ignore", "pipe", "pipe"] });
-    } catch (error) {
+    } catch (caught) {
+      const error = /** @type {{ stderr?: unknown, message?: unknown }} */ (caught);
       fail(`the installed \`kopje-admin ${args[0]}\` failed: ${String(error.stderr ?? error.message).slice(0, 300)}`);
     }
   }
@@ -435,30 +465,49 @@ async function checkCutover(installed, dir) {
   }
 }
 
+/** @param {number} ms */
 function sleep(ms) {
   return new Promise((done) => setTimeout(done, ms));
 }
 
+/**
+ * @param {string} tarball
+ * @param {string} dir
+ */
 function extract(tarball, dir) {
   mkdirSync(dir, { recursive: true });
   run("tar", ["-xzf", tarball, "-C", dir, "--strip-components", "1"], dir);
 }
 
+/**
+ * @param {string} dir
+ * @returns {Record<string, string>}
+ */
 function hashes(dir) {
   const files = readdirSync(dir, { recursive: true, withFileTypes: true })
     .filter((entry) => entry.isFile())
     .map((entry) => join(entry.parentPath, entry.name));
   return Object.fromEntries(
     files
-      .map((file) => [relative(dir, file).split("\\").join("/"), sha256(readFileSync(file))])
-      .sort(([a], [b]) => a.localeCompare(b)),
+      .map(
+        (file) =>
+          /** @type {[string, string]} */ ([relative(dir, file).split("\\").join("/"), sha256(readFileSync(file))]),
+      )
+      .toSorted(([a], [b]) => a.localeCompare(b)),
   );
 }
 
+/** @param {Buffer} bytes */
 function sha256(bytes) {
   return createHash("sha256").update(bytes).digest("hex");
 }
 
+/**
+ * @param {string} command
+ * @param {string[]} args
+ * @param {string} cwd
+ * @param {{ env?: Record<string, string>, quiet?: boolean }} [options]
+ */
 function run(command, args, cwd, { env = {}, quiet = false } = {}) {
   const output = execFileSync(command, args, {
     cwd,
@@ -473,6 +522,7 @@ function run(command, args, cwd, { env = {}, quiet = false } = {}) {
   return output;
 }
 
+/** @param {string} output */
 function gzipKiB(output) {
   const match = /gzip: ([0-9.]+) KiB/.exec(output);
   if (match === null) {
@@ -481,10 +531,21 @@ function gzipKiB(output) {
   return Number(match[1]);
 }
 
+/**
+ * The fields of a raw wrangler config this check reads (wrangler's own type is not installed with it).
+ * @typedef {Record<string, unknown>} Entry
+ * @typedef {Record<string, unknown> & {
+ *   queues?: { producers?: Entry[], consumers?: Entry[] },
+ *   ratelimits?: Entry[],
+ *   r2_buckets?: Entry[],
+ * }} RawConfig
+ */
+
 // The template may name its Worker and resources as it likes, but everything the code depends on must be as in the
 // package's own config.
 function compareConfigs() {
-  const read = (dir) => readRawConfig({ config: join(dir, "wrangler.jsonc") }).rawConfig;
+  /** @param {string} dir */
+  const read = (dir) => /** @type {RawConfig} */ (readRawConfig({ config: join(dir, "wrangler.jsonc") }).rawConfig);
   const source = read(pkg);
   const target = read(template);
   const queues = new Set(
@@ -499,6 +560,7 @@ function compareConfigs() {
   if (target.keep_names !== false) {
     fail("deploy/wrangler.jsonc must set keep_names to false: the kopje bundle already keeps the names");
   }
+  /** @param {ReturnType<typeof read>} config */
   const shape = (config) => ({
     compatibility_date: config.compatibility_date,
     compatibility_flags: config.compatibility_flags,
@@ -526,7 +588,7 @@ function compareConfigs() {
   });
   const expected = shape(source);
   const actual = shape(target);
-  for (const key of Object.keys(expected)) {
+  for (const key of /** @type {(keyof typeof expected)[]} */ (Object.keys(expected))) {
     if (JSON.stringify(expected[key]) !== JSON.stringify(actual[key])) {
       fail(
         `deploy/wrangler.jsonc ${key} is ${JSON.stringify(actual[key])}, packages/kopje has ${JSON.stringify(expected[key])}`,

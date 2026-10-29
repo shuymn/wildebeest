@@ -275,7 +275,8 @@ describe("the orphan sweep through the round", () => {
     const ours = [...all, orphan];
     // Our keys only (the bucket is shared), as a first page with a next one to come.
     const list = async (options: R2ListOptions) => {
-      const listed = await env.MEDIA.list({ ...options, cursor: undefined });
+      const { cursor: _cursor, ...first } = options;
+      const listed = await env.MEDIA.list(first);
       return {
         ...listed,
         objects: listed.objects.filter((o) => ours.some((t) => o.key.includes(t))),

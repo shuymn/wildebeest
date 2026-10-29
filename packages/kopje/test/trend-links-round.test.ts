@@ -5,17 +5,16 @@ import { Db } from "../src/db/sql";
 import { deleteStatusBatch, PURGE_BATCH } from "../src/domain/inbox";
 import { recordCard } from "../src/domain/link-cards";
 import { readOperation } from "../src/domain/operation";
+import { TREND_LANGUAGES, TREND_LANGUAGES_JSON } from "../src/domain/trend-languages";
 import {
   LINK_HISTORY_BOOSTS,
   LINK_HISTORY_BOOSTS_PER_STATUS,
   LINK_HISTORY_ORIGINALS,
   linkCandidates,
   linkHistory,
-  TREND_LANGUAGES_JSON,
   TREND_LINK_BOOSTS,
   TREND_LINK_BOOSTS_PER_STATUS,
   TREND_LINK_CANDIDATES,
-  TREND_LANGUAGES,
   TREND_LINK_COPIES,
   TREND_LINK_GROUPS,
   TREND_ROW_CAPS,
@@ -127,8 +126,8 @@ describe("link scores (Trends::Links#calculate_scores)", () => {
     await storedLink(store, "https://en.example/", 2, 2, AT - HOUR);
     await round(store, AT + 8 * HOUR);
     const rows = Object.fromEntries((await trendLinkRows(store)).map((r) => [r.url, r]));
-    expect(Object.keys(rows).sort()).toEqual(
-      ["https://en.example/", "https://kept.example/", "https://xx.example/", LINK].sort(),
+    expect(Object.keys(rows).toSorted()).toEqual(
+      ["https://en.example/", "https://kept.example/", "https://xx.example/", LINK].toSorted(),
     );
     expect(rows["https://kept.example/"]).toMatchObject({ max_score: 100, max_score_at: iso(AT + 8 * HOUR - 2 * DAY) });
     expect(rows["https://kept.example/"]!.score).toBeCloseTo(100 * 0.5 ** 6, 10);
@@ -240,7 +239,7 @@ describe("allowance and the pools", () => {
     await round(store);
     const listed = readOperation<void, { links: number; tags: number }>((db) => ({
       links: db.first<{ n: number }>(
-        `SELECT count(*) AS n FROM trend_links t WHERE ${"coalesce((SELECT r.trendable FROM link_trend_reviews r WHERE r.url = t.url), 0) = 1"}`,
+        `SELECT count(*) AS n FROM trend_links t WHERE coalesce((SELECT r.trendable FROM link_trend_reviews r WHERE r.url = t.url), 0) = 1`,
       )!.n,
       tags: db.first<{ n: number }>("SELECT count(*) AS n FROM trend_tags")!.n,
     }));

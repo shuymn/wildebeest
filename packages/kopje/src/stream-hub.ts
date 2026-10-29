@@ -1,10 +1,10 @@
 import { noteActivity } from "./domain/auth";
 import { keepInstanceActivity } from "./domain/instance-activity";
+import { JOURNAL_SPAN } from "./domain/stream-journal";
 import {
   CONVERSATIONS_PER_TURN,
   hashtagKey,
   isFeedKey,
-  JOURNAL_SPAN,
   keyHashtag,
   keyList,
   listKey,
@@ -19,18 +19,18 @@ import {
   streamDeleteUnits,
   streamEnterConversation,
   type StreamEvent,
-  type StreamGrant,
   streamEvents,
+  type StreamGrant,
   type StreamKeys,
   streamListOwned,
   type StreamPosition,
   streamPrune,
-  type StreamSubject,
-  type StreamUnitAfter,
   streamReconcile,
   streamRegister,
+  type StreamSubject,
   streamTokens,
   streamUnit,
+  type StreamUnitAfter,
 } from "./domain/streaming";
 import { normalizeTag } from "./domain/tag-name";
 import { errorFields } from "./platform/error-message";
@@ -702,12 +702,12 @@ export class StreamHub {
         );
         const subscribed = sockets.flatMap(({ at }) => at.subs.flatMap((sub) => keyList(sub) ?? []));
         const feeds = new Set(sockets.flatMap(({ at }) => at.subs.filter(isFeedKey)));
-        found = { sockets, lists: new Set(subscribed), feeds: [...feeds].sort() };
+        found = { sockets, lists: new Set(subscribed), feeds: [...feeds].toSorted() };
         selected.set(viewer, found);
       }
       const { sockets, lists: subscribed, feeds } = found;
       const unitLists = lists === undefined ? [...subscribed] : lists.filter((list) => subscribed.has(list));
-      return sockets.length === 0 ? [] : [{ subject, viewer, sockets, lists: unitLists.sort(), feeds }];
+      return sockets.length === 0 ? [] : [{ subject, viewer, sockets, lists: unitLists.toSorted(), feeds }];
     });
   }
 

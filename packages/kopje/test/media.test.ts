@@ -895,8 +895,7 @@ describe("the blurhash of a local upload", () => {
     const find = (type: string, content: string) =>
       sent.find(
         (item) =>
-          item.activity.type === type &&
-          String((item.activity.object as { content: string }).content).includes(content),
+          item.activity.type === type && (item.activity.object as { content: string }).content.includes(content),
       )?.activity;
     const [create, none, update] = [find("Create", "both"), find("Create", "none"), find("Update", "edited")];
     for (const activity of [create, update]) {

@@ -1,4 +1,5 @@
 import type { Db } from "../db/sql";
+import { iso } from "../platform/iso-time";
 import {
   boundedLocalFieldsSql,
   FIELD_LINK_MAX_ATTEMPTS,
@@ -19,7 +20,6 @@ import {
   recordRemoteFieldLink,
   remoteLinksHeld,
 } from "./remote-field-links";
-import { iso } from "./statuses";
 
 // Account fields[].verified_at of local accounts (Mastodon's VerifyAccountLinksWorker and VerifyLinkService,
 // app/workers/verify_account_links_worker.rb, app/services/verify_link_service.rb, v4.5.11): the Store's part. The
@@ -34,7 +34,7 @@ import { iso } from "./statuses";
 // - A candidate is a value of the bounded fields (boundedLocalFieldsSql) that fieldLinkValueSql and verifiableLink
 //   accept, not yet verified, nor checked and not verified: at most LOCAL_FIELDS, each at most FIELD_LINK_VALUE_BYTES
 //   of printable ASCII.
-// - A save (accounts.ts updateCredentials) prunes verified_links in SQL, clears unverified_links, and arms
+// - A save (account-actions.ts updateCredentials) prunes verified_links in SQL, clears unverified_links, and arms
 //   links_due_at when a candidate is left: coalesced with a pending check (Mastodon's lock until_executed), and never
 //   before the last claim's hold ends.
 // - A claim (claimFieldLinks, one per round) takes the first due account that is not held, bumps the claim token
@@ -296,6 +296,7 @@ export const recordFieldLink = writeOperation<
     const recorded =
       value !== null &&
       Number.isSafeInteger(input.now) &&
+      // oxlint-disable-next-line typescript/no-unnecessary-boolean-literal-compare -- unchecked RPC input
       recordRemoteFieldLink(db, input.accountId, value, input.verified === true, input.now, iso(input.now));
     return { held: true, recorded };
   }

@@ -540,7 +540,7 @@ describe("hashtags a hashtag timeline lists (status_tags.public)", () => {
         { uri: followers.id, visibility: "private", public: 0 },
       ]
         .flatMap((row) => names.map((name) => ({ ...row, name })))
-        .sort((a, b) => (a.uri < b.uri ? -1 : a.uri > b.uri ? 1 : a.name < b.name ? -1 : 1));
+        .toSorted((a, b) => (a.uri < b.uri ? -1 : a.uri > b.uri ? 1 : a.name < b.name ? -1 : 1));
     expect(await rows()).toEqual(expected(["cats"]));
 
     // An Update rewrites the hashtags; the status keeps its visibility, so its hashtags keep the mark.
@@ -618,7 +618,7 @@ describe("Delete of a status (ID-6, RES-6)", () => {
 
     expect(await t.post(carol, remove(carol, note.id))).toBe(202);
     expect(await t.post(bob, remove(bob, local.uri))).toBe(202);
-    expect((await statuses(t.store)).map((s) => s.uri).sort()).toEqual([local.uri, note.id].sort());
+    expect((await statuses(t.store)).map((s) => s.uri).toSorted()).toEqual([local.uri, note.id].toSorted());
     // A refused Delete records no retraction (ID-7).
     expect(await sql(t.store, "SELECT * FROM inbound_retractions")).toEqual([]);
 

@@ -11,7 +11,7 @@ import {
   finishFieldLinks,
   recordFieldLink,
 } from "../src/domain/field-links";
-import { type RemoteActorInput, upsertRemoteActor } from "../src/domain/inbox";
+import { type RemoteActorInput, upsertRemoteActor } from "../src/domain/remote-actors";
 import {
   REMOTE_LINK_CLAIM_WALK,
   REMOTE_LINK_EXPIRE_BATCH,

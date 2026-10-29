@@ -40,8 +40,8 @@ import { IMAGE_MATRIX_LIMIT, IMAGE_SIZE_LIMIT, TOKEN_SHAPE } from "./upload-rule
 
 export const IMAGES_FILE = "images.json";
 export const ORIGINALS_DIR = "originals";
-export const IMAGES_FORMAT = 1;
-export const DELIVERY_PREFIX = "https://imagedelivery.net/";
+const IMAGES_FORMAT = 1;
+const DELIVERY_PREFIX = "https://imagedelivery.net/";
 
 // The account hash of the images cloudflare/wildebeest ships as defaults (its default header). A profile image under
 // it is a default, not the user's: the converter leaves it out, so Kopje's own default applies.
@@ -50,9 +50,9 @@ export const UPSTREAM_ACCOUNT_HASH = "NkfPDviynOyTAOI79ar_GQ";
 export const LEGACY_DEFAULT_AVATAR =
   "https://raw.githubusercontent.com/mastodon/mastodon/main/public/avatars/original/missing.png";
 
-export const ACCOUNT_HASH = /^[A-Za-z0-9_-]{8,64}$/;
+const ACCOUNT_HASH = /^[A-Za-z0-9_-]{8,64}$/;
 // Images ids legacy got from the Images API are UUIDs; anything that could leave the originals directory is refused.
-export const IMAGE_ID = /^[A-Za-z0-9_-]{1,128}$/;
+const IMAGE_ID = /^[A-Za-z0-9_-]{1,128}$/;
 const VARIANT = /^[A-Za-z0-9_=,.-]{1,128}$/;
 const ACCOUNT_ID = /^[0-9a-f]{32}$/;
 
@@ -106,7 +106,7 @@ function strings(value, visit, depth = 0) {
  * @param {import('node:sqlite').DatabaseSync} db the bridged legacy database
  * @param {string} accountHash
  */
-export function collectImageIds(db, accountHash) {
+function collectImageIds(db, accountHash) {
   /** @type {Map<string, string>} */
   const ids = new Map();
   let malformed = 0;
@@ -117,9 +117,10 @@ export function collectImageIds(db, accountHash) {
   ];
   for (const sql of sources) {
     for (const row of /** @type {{ json: unknown }[]} */ (db.prepare(sql).all())) {
+      /** @type {unknown} */
       let parsed;
       try {
-        parsed = JSON.parse(String(row.json));
+        parsed = /** @type {unknown} */ (JSON.parse(String(row.json)));
       } catch {
         continue;
       }
@@ -170,10 +171,10 @@ export function readImagesFile(dir) {
     }
     throw new ExportError("images-file-invalid");
   }
-  /** @type {any} */
+  /** @type {Record<string, unknown> | null} */
   let value;
   try {
-    value = JSON.parse(text);
+    value = /** @type {Record<string, unknown> | null} */ (JSON.parse(text));
   } catch {
     throw new ExportError("images-file-invalid");
   }
@@ -191,7 +192,7 @@ export function readImagesFile(dir) {
   }
   /** @type {Map<string, ImageEntry>} */
   const images = new Map();
-  for (const [id, entry] of Object.entries(/** @type {Record<string, any>} */ (value.images))) {
+  for (const [id, entry] of Object.entries(/** @type {Record<string, unknown>} */ (value.images))) {
     if (!IMAGE_ID.test(id) || !validEntry(entry)) {
       throw new ExportError("images-file-invalid");
     }
@@ -203,24 +204,27 @@ export function readImagesFile(dir) {
 const TYPES = new Set(["image/jpeg", "image/png", "image/gif", "image/webp", "image/avif"]);
 const REASONS = new Set(["not-found", "unsupported-type", "too-large", "too-many-pixels", "unreadable"]);
 
-/** @param {any} entry */
-function validEntry(entry) {
-  if (
-    typeof entry !== "object" ||
-    entry === null ||
-    typeof entry.secret !== "string" ||
-    !TOKEN_SHAPE.test(entry.secret)
-  ) {
+/**
+ * @param {unknown} value
+ * @returns {value is ImageEntry}
+ */
+function validEntry(value) {
+  if (typeof value !== "object" || value === null) {
+    return false;
+  }
+  const entry = /** @type {Record<string, unknown>} */ (value);
+  if (typeof entry.secret !== "string" || !TOKEN_SHAPE.test(entry.secret)) {
     return false;
   }
   if (entry.state === "missing") {
-    return REASONS.has(entry.reason);
+    return typeof entry.reason === "string" && REASONS.has(entry.reason);
   }
   const dimension = (/** @type {unknown} */ n) => Number.isInteger(n) && Number(n) > 0 && Number(n) <= 65535;
   return (
     entry.state === "ok" &&
     typeof entry.sha256 === "string" &&
     /^[0-9a-f]{64}$/.test(entry.sha256) &&
+    typeof entry.type === "string" &&
     TYPES.has(entry.type) &&
     dimension(entry.width) &&
     dimension(entry.height) &&
@@ -379,7 +383,7 @@ async function readCapped(response, limit) {
  * @param {Uint8Array} bytes
  * @returns {{ ok: true, type: string, width: number, height: number } | { ok: false, reason: MissingReason }}
  */
-export function checkImage(bytes) {
+function checkImage(bytes) {
   if (bytes.byteLength > IMAGE_SIZE_LIMIT) {
     return { ok: false, reason: "too-large" };
   }
@@ -398,7 +402,8 @@ export function checkImage(bytes) {
 }
 
 /**
- * @param {{ exportPath: string, accountHash: string, outDir: string, accountId?: string, token?: string,
+ * @param {{ exportPath: string, accountHash: string, outDir: string, accountId?: string | undefined,
+ *   token?: string | undefined,
  *   fetch: Fetch, progress?: (text: string) => void }} options
  * @returns {Promise<{ ok: boolean, report: Record<string, unknown> }>}
  */
@@ -435,7 +440,7 @@ export async function exportImages({ exportPath, accountHash, outDir, accountId,
   /** @type {Map<string, ImageEntry>} */
   const images = new Map(previous?.images ?? []);
   const save = () => {
-    const sorted = Object.fromEntries([...images].sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)));
+    const sorted = Object.fromEntries([...images].toSorted(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)));
     const text = `${JSON.stringify({ format: IMAGES_FORMAT, accountHash, domain, images: sorted }, null, 2)}\n`;
     renameSync(writeTemporary(outDir, IMAGES_FILE, text), join(outDir, IMAGES_FILE));
   };

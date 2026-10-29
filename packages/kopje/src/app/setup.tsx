@@ -3,7 +3,9 @@ import { deleteCookie, getCookie, setCookie } from "hono/cookie";
 
 import {
   ACCESS_DISPATCH_MARGIN_MS,
+  ACCESS_LEASE_MS,
   ACCESS_REQUEST_TIMEOUT_MS,
+  ACCESS_SUPERSEDE_GRACE_MS,
   type ImagesCheck,
   type ImagesOutcome,
   SETUP_SESSION_MS,
@@ -32,6 +34,7 @@ import { ImageCodecError } from "../platform/images";
 import { LOCAL_USERNAME } from "../platform/stored-bounds";
 import { generateWrappedKey, type KeyGen } from "../security/key-wrap";
 import { constantTimeEqual, sha256Hex } from "../security/tokens";
+import { onHost } from "../web/components/layout";
 import { csrfMatches, csrfToken, sameOrigin, SESSION_COOKIE, SETUP_COOKIE, SETUP_CSRF_CONTEXT } from "../web/session";
 import {
   ChecklistPage,
@@ -65,6 +68,8 @@ const FORM_LIMIT = 16 * 1024;
 const PROBE_PATIENCE_MS = 2 * 60 * 1000;
 // The cron runs every 5 minutes (wrangler.jsonc); three missed runs is a failure.
 const CRON_PATIENCE_MS = 15 * 60 * 1000;
+// How long a stalled reconciliation keeps a new run busy: its lease, then the grace before it is superseded.
+const STALLED_RUN_MINUTES = (ACCESS_LEASE_MS + ACCESS_SUPERSEDE_GRACE_MS) / 60_000;
 
 // A 1x1 PNG, transformed by the Images check.
 const TINY_PNG = Uint8Array.from(
@@ -100,7 +105,7 @@ type Session =
   | { mode: "admin"; authority: SetupAuthority; secret: string; view: SetupView };
 
 function page(c: SetupContext, status: Status, body: Parameters<SetupContext["html"]>[0]) {
-  return c.html(body, status, PRIVATE_HEADERS);
+  return c.html(onHost(c.req.url, body), status, PRIVATE_HEADERS);
 }
 
 function redirect(path: string): Response {
@@ -469,7 +474,7 @@ export function setupRoutes(deps: SetupDeps): Hono<SetupEnv> {
       case "busy":
         return fail(
           "Another run of this step is in progress.",
-          "Wait for it to finish (at most two minutes), then reload the page.",
+          `Wait for it to finish (a stalled run lapses after ${STALLED_RUN_MINUTES} minutes), then reload the page.`,
         );
       case "no_domain":
         return fail("Confirm the domain first.");

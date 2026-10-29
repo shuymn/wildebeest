@@ -3,12 +3,11 @@ import { beforeEach, describe, expect, it } from "vitest";
 
 import { Db } from "../src/db/sql";
 import { TARGET_CHUNK_SIZE } from "../src/domain/deliveries";
+import { MODERATION_ROUND_ROWS, REPORT_ROUND } from "../src/domain/moderation-bounds";
 import {
-  MODERATION_ROUND_ROWS,
   moderationRound,
   REACH_ROUND,
   RECENT_MS,
-  REPORT_ROUND,
   REPORTER_ROUND,
   suspendLocal,
   TOKEN_ROUND_ROWS,
@@ -1111,7 +1110,7 @@ describe("the sender rule (R1)", () => {
     expect(await act(h, admin, alice.id, { type: "suspend" })).toEqual({ status: 200, body: {} });
     await settle(h.store);
     const sent = await drain(h.store);
-    expect(sent.map((s) => [s.type, s.inbox, s.suspended]).sort(byText)).toEqual([
+    expect(sent.map((s) => [s.type, s.inbox, s.suspended]).toSorted(byText)).toEqual([
       ["Undo", "https://fans.example/inbox", false],
       ["Undo", "https://remote.example/inbox", false],
       ["Update", "https://fans.example/inbox", true],
@@ -1295,7 +1294,7 @@ describe("review regressions (A3b rounds 1 and 2)", () => {
     expect(REACH_ROUND).toBe(500);
     expect(await act(h, admin, alice.id, { type: "suspend" })).toEqual({ status: 200, body: {} });
     await settle(h.store);
-    expect((await drain(h.store)).map((sent) => sent.inbox).sort()).toEqual([
+    expect((await drain(h.store)).map((sent) => sent.inbox).toSorted()).toEqual([
       "https://dm.example/inbox",
       "https://mention.example/inbox",
     ]);
@@ -1354,7 +1353,7 @@ describe("review regressions (A3b rounds 1 and 2)", () => {
     );
     expect(await act(h, admin, alice.id, { type: "suspend" })).toEqual({ status: 200, body: {} });
     await settle(h.store);
-    expect((await drain(h.store)).map((sent) => sent.inbox).sort()).toEqual([
+    expect((await drain(h.store)).map((sent) => sent.inbox).toSorted()).toEqual([
       "https://crowd.example/inbox",
       "https://zz.example/users/zz/inbox",
     ]);

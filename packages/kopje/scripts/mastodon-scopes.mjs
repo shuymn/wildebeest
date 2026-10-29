@@ -199,9 +199,9 @@ const VERBS = new Set(["get", "post", "put", "patch", "delete", "match"]);
  *   path: string,
  *   module: string,
  *   defaults?: Record<string, unknown>,
- *   controller?: string,
+ *   controller?: string | undefined,
  *   param?: string,
- *   unknown?: string,
+ *   unknown?: string | undefined,
  *   pendingDefaults?: RawRoute[],
  * }} Frame
  */
@@ -1318,7 +1318,7 @@ function requestParams(route, checkout, cache, siblingPathParams) {
     if (stack.has(name)) return none;
     const method = findMethod(sources, name);
     if (method === null) {
-      return { ...none, unresolved: new Set(/_params$/.test(name) ? [`${file}: method ${name} not found`] : []) };
+      return { ...none, unresolved: new Set(name.endsWith("_params") ? [`${file}: method ${name} not found`] : []) };
     }
     stack.add(name);
     const reads = bodyReads(method.body, `${method.file} ${name}`, method.file, sources, checkout);
@@ -1368,7 +1368,7 @@ function requestParams(route, checkout, cache, siblingPathParams) {
 // AccountSerializer::FieldSerializer is an entity of its own), after its superclass's fields when that is a serializer
 // of app/serializers. `<Class>#<method>` is the hash a method returns, read from its literal keys. What cannot be read
 // with certainty is `unresolved`.
-export const ENTITIES = [
+const ENTITIES = [
   "REST::AccountSerializer",
   "REST::AccountSerializer::FieldSerializer",
   "REST::CredentialAccountSerializer",
@@ -1437,7 +1437,8 @@ export function entityFields(checkout, entity) {
   const [className = "", method] = entity.split("#");
   const parts = className.split("::");
   // An inner class lives in its outer class's file.
-  const outer = parts.length > 2 && /Serializer$/.test(parts.at(-2) ?? "") ? parts.slice(0, -1).join("::") : className;
+  const outer =
+    parts.length > 2 && (parts.at(-2) ?? "").endsWith("Serializer") ? parts.slice(0, -1).join("::") : className;
   const file = serializerFile(outer);
   if (!existsSync(join(checkout, file))) {
     return { fields: [], unresolved: [`${file} not found`] };

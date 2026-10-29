@@ -117,7 +117,7 @@ describe("POST /api/v1/statuses", () => {
       [
         { id: h.users.bob.id, username: "bob", url: "https://kopje.test/@bob", acct: "bob" },
         { id: carolId, username: "carol", url: "https://remote.example/@carol", acct: "carol@remote.example" },
-      ].sort((a, b) => a.id.localeCompare(b.id)),
+      ].toSorted((a, b) => a.id.localeCompare(b.id)),
     );
     expect(status.tags).toEqual([{ name: "kopje", url: "https://kopje.test/tags/kopje" }]);
   });
@@ -514,10 +514,10 @@ describe("application", () => {
       expect(await shown(name, site), JSON.stringify(name)).toBeNull();
     }
     // Malformed bytes decode to U+FFFD: 60 of them are shown, 61 are past the code points.
-    expect(await shown(bytes(...Array(APP_NAME_LIMIT).fill(0xff)), site, true)).toMatchObject({
+    expect(await shown(bytes(...Array.from({ length: APP_NAME_LIMIT }, () => 0xff)), site, true)).toMatchObject({
       name: "\ufffd".repeat(APP_NAME_LIMIT),
     });
-    expect(await shown(bytes(...Array(APP_NAME_LIMIT + 1).fill(0xff)), site, true)).toBeNull();
+    expect(await shown(bytes(...Array.from({ length: APP_NAME_LIMIT + 1 }, () => 0xff)), site, true)).toBeNull();
     // A BLOB, which no JSON function reads, is no name; and a BLOB website is no website.
     expect(await shown(bytes(0x61), site)).toBeNull();
     expect(await shown("App", bytes(0x61))).toEqual({ name: "App", website: null });
@@ -539,7 +539,7 @@ describe("application", () => {
     // parser's serialization drops the malformed segment with the `/../` after it.
     const malformed = bytes(
       ...new TextEncoder().encode(site),
-      ...Array(1000).fill(0xff),
+      ...Array.from({ length: 1000 }, () => 0xff),
       ...new TextEncoder().encode("/../xy"),
     );
     expect(malformed.byteLength).toBe(1026);
@@ -1165,9 +1165,9 @@ describe("edits never widen a non-public audience", () => {
       // Followers only for private; the addressed accounts as before, never dave or erin.
       const expected = {
         followers: visibility === "private",
-        accounts: [carol, bob.id].sort(),
+        accounts: [carol, bob.id].toSorted(),
       };
-      expect({ ...updates[0]?.audience, accounts: [...(updates[0]?.audience.accounts ?? [])].sort() }).toEqual(
+      expect({ ...updates[0]?.audience, accounts: [...(updates[0]?.audience.accounts ?? [])].toSorted() }).toEqual(
         expected,
       );
       // The new mentions are only linked in the content: they are not addressed or tagged.
@@ -1316,7 +1316,7 @@ describe("media_ids (PostStatusService#validate_media!, MEDIA-1)", () => {
     expect(await posting(h, token, { status: "x", media_ids: ["", "abc", " 12", "1_0"] })).toEqual(
       mediaNotFound("0", "12", "10"),
     );
-    expect(await posting(h, token, { status: "x", media_ids: ["0012", "abc", "0012", `${ID}`] })).toEqual(
+    expect(await posting(h, token, { status: "x", media_ids: ["0012", "abc", "0012", ID] })).toEqual(
       mediaNotFound("12", "0", "12"),
     );
     expect(await posting(h, token, { status: "x", media_ids: ["9007199254740993"] })).toEqual(

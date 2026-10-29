@@ -6,10 +6,20 @@ import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { isAbsolute, join, resolve } from "node:path";
 
-export const REGISTRY = "https://registry.npmjs.org/";
+const REGISTRY = "https://registry.npmjs.org/";
+
+/**
+ * @typedef {{ code: number, stdout: string, stderr: string }} Ran
+ * @typedef {(args: string[]) => Ran} Run
+ */
 
 // Runs a command and returns its exit code and output, never throwing on a non-zero exit. With a timeout (ms), a
 // command still running then is killed and throws.
+/**
+ * @param {string} command
+ * @param {{ timeout?: number }} [options]
+ * @returns {Run}
+ */
 export function runCommand(command, { timeout } = {}) {
   return (args) => {
     const result = spawnSync(command, args, { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], timeout });
@@ -21,18 +31,31 @@ export function runCommand(command, { timeout } = {}) {
 }
 
 // How `npm publish <argument>` reads its argument, by npm's own spec parser (npm-package-arg, shipped inside npm).
-export function npmSpecType(argument) {
+/**
+ * @param {string} argument
+ * @returns {string}
+ */
+function npmSpecType(argument) {
   const npmRoot = execFileSync("npm", ["root", "--global"], { encoding: "utf8" }).trim();
-  const npa = createRequire(join(npmRoot, "npm", "package.json"))("npm-package-arg");
+  const npa = /** @type {(spec: string) => { type: string }} */ (
+    createRequire(join(npmRoot, "npm", "package.json"))("npm-package-arg")
+  );
   return npa(argument).type;
 }
 
 // Runs fn with packages/kopje/package.json (or any manifest) set to the version, and restores the file byte for byte
 // afterwards, whether fn returns or throws.
+/**
+ * @template T
+ * @param {string} manifestPath
+ * @param {string} version
+ * @param {() => T} fn
+ * @returns {T}
+ */
 export function withManifestVersion(manifestPath, version, fn) {
   const original = readFileSync(manifestPath, "utf8");
   try {
-    const manifest = JSON.parse(original);
+    const manifest = /** @type {Record<string, unknown>} */ (JSON.parse(original));
     if (manifest.version !== version) {
       writeFileSync(manifestPath, `${JSON.stringify({ ...manifest, version }, null, "\t")}\n`);
     }
@@ -49,6 +72,12 @@ export function withManifestVersion(manifestPath, version, fn) {
 //   - a version on npm with the tarball's integrity is not published again ('skipped'), so a run that published and
 //     then failed can be rerun;
 //   - a version on npm with another integrity, or a lookup that fails for another reason, publishes nothing and throws.
+/**
+ * @param {{
+ *   tarball: string, tag: string, dryRun?: boolean, npm?: Run, specType?: (argument: string) => string,
+ *   log?: (message: string) => void,
+ * }} options
+ */
 export function publish({
   tarball: given,
   tag,
@@ -65,7 +94,9 @@ export function publish({
   if (!isAbsolute(tarball) || type !== "file") {
     throw new Error(`npm reads ${tarball} as a ${type} spec, not a local file`);
   }
-  const manifest = JSON.parse(execFileSync("tar", ["-xzOf", tarball, "package/package.json"], { encoding: "utf8" }));
+  const manifest = /** @type {{ name: string, version: string }} */ (
+    JSON.parse(execFileSync("tar", ["-xzOf", tarball, "package/package.json"], { encoding: "utf8" }))
+  );
   const id = `${manifest.name}@${manifest.version}`;
   const integrity = `sha512-${createHash("sha512").update(readFileSync(tarball)).digest("base64")}`;
 
@@ -95,9 +126,15 @@ export function publish({
 }
 
 // The integrity npm has for the version, or null when npm has no such version.
+/**
+ * @param {Run} npm
+ * @param {string} id
+ * @returns {string | null}
+ */
 function publishedIntegrity(npm, id) {
   const { code, stdout, stderr } = npm(["view", id, "dist.integrity", "--json", "--registry", REGISTRY]);
   const output = stdout.trim();
+  /** @type {unknown} */
   let parsed;
   try {
     parsed = output === "" ? null : JSON.parse(output);
@@ -105,7 +142,7 @@ function publishedIntegrity(npm, id) {
     throw new Error(`npm view ${id} printed something unexpected; publishing nothing: ${output.slice(0, 200)}`);
   }
   if (code !== 0) {
-    if (parsed?.error?.code === "E404") {
+    if (/** @type {{ error?: { code?: unknown } } | null} */ (parsed)?.error?.code === "E404") {
       return null;
     }
     throw new Error(`npm view ${id} failed (exit ${code}); publishing nothing: ${stderr.slice(0, 500)}`);
@@ -130,6 +167,12 @@ export const UPGRADE_NOTE =
 // Creates the GitHub release for the tag, unless it exists: a rerun after the release was made leaves it as it is.
 // Any answer from `gh release view` other than "found" or "not found" throws without creating anything. The notes are
 // UPGRADE_NOTE followed by the notes file.
+/**
+ * @param {{
+ *   repo: string, tag: string, version: string, prerelease: boolean, notesFile: string, tarball: string,
+ *   gh?: Run, log?: (message: string) => void,
+ * }} options
+ */
 export function createRelease({
   repo,
   tag,
@@ -171,11 +214,21 @@ const MINUTE = 60_000;
 // it waits, up to `wait` from the start; while no run is listed, up to `appear` (a tag pushed right after the merge
 // may come before the run). Every other answer, a failed or cancelled run, no run, a wait that ran out, or gh
 // failing, stalling (a minute a call) or answering something else, is false: the caller then runs those checks itself.
+/**
+ * A run as the GitHub API lists it (only its being an object is checked).
+ * @typedef {{ head_sha: string, status: string, conclusion: string | null, html_url: string }} WorkflowRun
+ */
+/**
+ * @param {{
+ *   repo: string, sha: string, gh?: Run, sleep?: (ms: number) => Promise<unknown>, now?: () => number,
+ *   log?: (message: string) => void, wait?: number, appear?: number, interval?: number,
+ * }} options
+ */
 export async function mainChecked({
   repo,
   sha,
   gh = runCommand("gh", { timeout: MINUTE }),
-  sleep = (ms) => new Promise((done) => setTimeout(done, ms)),
+  sleep = (/** @type {number} */ ms) => new Promise((done) => setTimeout(done, ms)),
   now = Date.now,
   log = console.log,
   wait = 20 * MINUTE,
@@ -185,18 +238,20 @@ export async function mainChecked({
   const start = now();
   const path = `repos/${repo}/actions/workflows/ci.yml/runs`;
   for (;;) {
+    /** @type {WorkflowRun[]} */
     let runs;
     try {
       const answer = gh(["api", "-X", "GET", path, "-f", `head_sha=${sha}`, "-f", "event=push", "-f", "branch=main"]);
       if (answer.code !== 0) {
         throw new Error(`exit ${answer.code}: ${answer.stderr.slice(0, 500)}`);
       }
-      runs = JSON.parse(answer.stdout).workflow_runs;
-      if (!Array.isArray(runs) || !runs.every((run) => typeof run === "object" && run !== null)) {
+      const listed = /** @type {{ workflow_runs?: unknown }} */ (JSON.parse(answer.stdout)).workflow_runs;
+      if (!Array.isArray(listed) || !listed.every((run) => typeof run === "object" && run !== null)) {
         throw new Error(`unexpected answer: ${answer.stdout.slice(0, 200)}`);
       }
+      runs = /** @type {WorkflowRun[]} */ (listed);
     } catch (error) {
-      log(`could not list the main runs of ${sha}: ${error.message}`);
+      log(`could not list the main runs of ${sha}: ${/** @type {Error} */ (error).message}`);
       return false;
     }
     const passed = runs.find(
@@ -220,7 +275,7 @@ export async function mainChecked({
       log(`the main run on ${sha} did not finish in ${wait / MINUTE} minutes`);
       return false;
     }
-    log(runs.length === 0 ? `waiting for a main run on ${sha}` : `waiting for ${pending[0].html_url}`);
+    log(runs.length === 0 ? `waiting for a main run on ${sha}` : `waiting for ${pending[0]?.html_url}`);
     await sleep(interval);
   }
 }

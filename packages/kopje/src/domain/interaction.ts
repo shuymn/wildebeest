@@ -1,7 +1,8 @@
 import type { Db } from "../db/sql";
 import { parseAddress } from "../platform/domain-name";
 import { httpUrl } from "../platform/http-url";
-import { type Account, accountByAddress, followAccount, presentAccountById, resolveAccountId } from "./accounts";
+import { followAccount } from "./account-actions";
+import { type Account, accountByAddress, presentAccountById, resolveAccountId } from "./accounts";
 import { instanceDomainOf } from "./actors";
 import { availableSql, viewableStatusId } from "./audience";
 import { contextOf, userWriteOperation } from "./auth";

@@ -81,8 +81,8 @@ import { RowBudget } from "./row-budget";
 
 export const LEASE_MS = 60_000;
 export const MAX_ATTEMPTS = 15;
-export const RETRY_BASE_MS = 30_000;
-export const RETRY_MAX_MS = 12 * 60 * 60 * 1000;
+const RETRY_BASE_MS = 30_000;
+const RETRY_MAX_MS = 12 * 60 * 60 * 1000;
 export const CLAIM_LIMIT = 16;
 export const GAVE_UP_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
 export { EXPANSION_STEP };
@@ -115,7 +115,7 @@ type Activity = Record<string, unknown>;
 //   - domains: the distinct hosts of their actor ids, at most PROVENANCE_MAX; absent above it.
 // A target with neither accounts nor many has no provenance: one whose recipients are unknown (a retraction's earlier
 // receivers, phase A's staged reach, a row queued before migration 0044) or merged with such a target.
-export type Provenance = { accounts?: string[]; domains?: string[]; many?: true };
+type Provenance = { accounts?: string[]; domains?: string[]; many?: true };
 
 export type Target = { inbox: string; addressee: string | null } & Provenance;
 
@@ -300,7 +300,7 @@ function mergedProvenance(target: Target, other: Target): Provenance {
   const many = target.many === true || other.many === true || provenance.many === true;
   const domains = target.domains === undefined || other.domains === undefined ? undefined : provenance.domains;
   return {
-    ...(many ? { many: true } : { accounts: provenance.accounts }),
+    ...(many ? { many: true } : provenance.accounts === undefined ? {} : { accounts: provenance.accounts }),
     ...(domains === undefined ? {} : { domains }),
   };
 }
@@ -309,10 +309,10 @@ function provenanceOf(b: Behind): Provenance {
   if (b.unknown) {
     return {};
   }
-  const domains = b.domains.size > PROVENANCE_MAX ? {} : { domains: [...b.domains].sort() };
+  const domains = b.domains.size > PROVENANCE_MAX ? {} : { domains: [...b.domains].toSorted() };
   return b.accounts.size > PROVENANCE_MAX
     ? { many: true, ...domains }
-    : { accounts: [...b.accounts].sort(), ...domains };
+    : { accounts: [...b.accounts].toSorted(), ...domains };
 }
 
 // How an activity reaches the addressed account with this uri (audienceTargets): true for a copy of its own at its
@@ -407,8 +407,8 @@ function targetsOf(
     targets: [
       ...[...personal]
         .map(([addressee, { inbox, behind }]) => ({ inbox, addressee, ...provenanceOf(behind) }))
-        .sort(byInbox),
-      ...[...neutral].map(([inbox, behind]) => ({ inbox, addressee: null, ...provenanceOf(behind) })).sort(byInbox),
+        .toSorted(byInbox),
+      ...[...neutral].map(([inbox, behind]) => ({ inbox, addressee: null, ...provenanceOf(behind) })).toSorted(byInbox),
     ],
     voters: new Set(recipients.voters.map((v) => v.inbox).filter(isDeliverableInbox)),
   };
@@ -703,6 +703,7 @@ export function stagingRetraction(db: Db, signerId: string, object: string): str
 // staging anew.
 export const STAGING_READ = 500;
 export const STAGING_BYTES = 2 * TARGET_CHUNK_BYTES;
+/** @alias */
 export const EMIT_BYTES = TARGET_CHUNK_BYTES;
 // The staging's rows: its row's insert and staged set by the first call; its delete, staged cleared and the intent
 // dropped at the end (endStaging). Each call saves its row once more.
@@ -1766,7 +1767,7 @@ function stagedProvenance(unknown: boolean, accounts: string[]): Provenance {
   if (unknown) {
     return {};
   }
-  return accounts.length > PROVENANCE_MAX ? { many: true } : { accounts: [...accounts].sort() };
+  return accounts.length > PROVENANCE_MAX ? { many: true } : { accounts: [...accounts].toSorted() };
 }
 
 // Deletes the first n rows of the staged set in key order, personal copies first: in each half (neutral) a range of
@@ -2055,7 +2056,7 @@ class Admission {
   }
 }
 
-export const NO_PERSONAL_INBOX = "no personal inbox";
+const NO_PERSONAL_INBOX = "no personal inbox";
 
 // Writes up to `budget` targets of the oldest chunks still expanding, oldest first, reading each chunk from its cursor
 // (next). A target over a cap is written as gave_up 'backlog full'; a silent copy without a personal inbox as gave_up
@@ -2741,7 +2742,7 @@ function forwardFallback(db: Db, row: LaneRow, now: number, status: number, erro
 // Operator view (admin API and `kopje-admin deliveries`) and the sweep
 // ---------------------------------------------------------------------------------------------------------------
 
-export type GaveUpDelivery = {
+type GaveUpDelivery = {
   id: string;
   account: string;
   // '' for a silent copy whose recipient has no personal inbox (unreachable).

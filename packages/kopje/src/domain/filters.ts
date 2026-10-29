@@ -1,9 +1,10 @@
-import { fixedColumns, selectSql } from "../db/columns";
+import { selectSql } from "../db/columns";
 import type { Db } from "../db/sql";
 import { resolveApiId } from "./accounts";
 import { canView, type ViewerContext } from "./audience";
 import { userReadOperation, userWriteOperation } from "./auth";
 import { allocateLocalId } from "./ids";
+import { FILTER_MATCH_COLUMNS } from "./status-rows";
 
 // Filters (Mastodon 4.5's CustomFilter, CustomFilterKeyword and CustomFilterStatus, Api::V2::FiltersController and
 // its keywords and statuses controllers, and the v1 layer Api::V1::FiltersController over them). A filter belongs to
@@ -17,10 +18,9 @@ import { allocateLocalId } from "./ids";
 
 // CustomFilter::VALID_CONTEXTS, CustomFilter's action enum, TITLE_LENGTH_LIMIT and
 // CustomFilterKeyword::KEYWORD_LENGTH_LIMIT.
-export const FILTER_CONTEXTS = ["home", "notifications", "public", "thread", "account"] as const;
-export type FilterContext = (typeof FILTER_CONTEXTS)[number];
-export const FILTER_ACTIONS = ["warn", "hide", "blur"] as const;
-export type FilterAction = (typeof FILTER_ACTIONS)[number];
+const FILTER_CONTEXTS = ["home", "notifications", "public", "thread", "account"] as const;
+const FILTER_ACTIONS = ["warn", "hide", "blur"] as const;
+type FilterAction = (typeof FILTER_ACTIONS)[number];
 export const MAX_FILTER_TITLE = 256;
 export const MAX_FILTER_KEYWORD = 512;
 
@@ -29,7 +29,7 @@ export const MAX_FILTER_KEYWORD = 512;
 // with its rules (RES-3). Generous for a person's filters: at most 1,000 keywords and 10,000 filtered statuses.
 export const MAX_FILTERS = 50;
 export const MAX_FILTER_KEYWORDS = 20;
-export const MAX_FILTER_STATUSES = 200;
+const MAX_FILTER_STATUSES = 200;
 
 // REST::FilterKeywordSerializer and REST::FilterStatusSerializer.
 export type FilterKeyword = { id: string; keyword: string; whole_word: boolean };
@@ -176,7 +176,7 @@ function expiresAt(expiresIn: string, now: string): string | null | undefined {
 
 const INVALID_DATE = "Invalid date supplied";
 
-export type FilterError =
+type FilterError =
   | { status: "not_found" }
   // A validation failure: Rails' messages, answered as "Validation failed: ..." with 422.
   | { status: "invalid"; errors: string[] }
@@ -186,10 +186,20 @@ export type FilterError =
 export type FilterOutcome<T> = { status: "ok"; value: T } | FilterError;
 
 // The attributes of a filter a create or an update sets; undefined leaves one as it is (on create: its default).
-export type FilterChanges = { title?: string; context?: string[]; filterAction?: string; expiresIn?: string };
+export type FilterChanges = {
+  title?: string | undefined;
+  context?: string[] | undefined;
+  filterAction?: string | undefined;
+  expiresIn?: string | undefined;
+};
 
 // A keywords_attributes entry as sent: each field undefined when absent.
-export type KeywordAttributes = { id?: string; keyword?: string; wholeWord?: string; destroy?: string };
+export type KeywordAttributes = {
+  id?: string | undefined;
+  keyword?: string | undefined;
+  wholeWord?: string | undefined;
+  destroy?: string | undefined;
+};
 
 // Rails' boolean casting: blank is nil, "0", "f", "false" and "off" (any case) are false, anything else is true.
 function castBoolean(value: string | undefined): boolean | undefined {
@@ -290,7 +300,7 @@ function planKeywords(
   const byId = new Map(existing.map((k) => [k.id, k]));
   // The entries naming an existing keyword, merged by id in input order as Rails assigns each to the same record: a
   // later field wins, and _destroy, once set, stays.
-  const merged = new Map<string, { keyword?: string; wholeWord?: string; destroy: boolean }>();
+  const merged = new Map<string, { keyword?: string | undefined; wholeWord?: string | undefined; destroy: boolean }>();
   for (const entry of attributes) {
     const destroy = castBoolean(entry.destroy) === true;
     if (blank(entry.id)) {
@@ -485,7 +495,7 @@ export const listFilterKeywords = userReadOperation<{ filterId: string }, Filter
   },
 );
 
-export type KeywordChanges = { keyword?: string; wholeWord?: string };
+export type KeywordChanges = { keyword?: string | undefined; wholeWord?: string | undefined };
 
 // POST /api/v2/filters/:filter_id/keywords: whole_word defaults to true.
 export const createFilterKeyword = userWriteOperation<
@@ -551,7 +561,7 @@ export const listFilterStatuses = userReadOperation<{ filterId: string }, Filter
 // StatusPolicy#show?), once per filter. A status the viewer may not see is refused as one that does not exist is
 // ("Status must exist"), so the two cannot be told apart; Mastodon answers "Status is invalid" for the first.
 export const createFilterStatus = userWriteOperation<
-  { filterId: string; statusId?: string },
+  { filterId: string; statusId?: string | undefined },
   FilterOutcome<FilterStatus>
 >((db, input, _viewer, { accountId, now }) => {
   const filter = ownFilter(db, accountId, input.filterId);
@@ -620,7 +630,7 @@ function ownKeywords(db: Db, ownerId: string): { filter: FilterRow; keyword: Key
     filters.map((f) => f.id),
   )
     .map((keyword) => ({ filter: byId.get(keyword.filter_id)!, keyword }))
-    .sort((a, b) => (a.keyword.id < b.keyword.id ? -1 : a.keyword.id > b.keyword.id ? 1 : 0));
+    .toSorted((a, b) => (a.keyword.id < b.keyword.id ? -1 : a.keyword.id > b.keyword.id ? 1 : 0));
 }
 
 // GET /api/v1/filters: every keyword of the viewer's filters, by keyword id.
@@ -637,11 +647,11 @@ export const getFilterV1 = userReadOperation<{ id: string }, FilterV1 | null>((d
 // What a v1 create or update sends: phrase is both the filter's title and the keyword (filter_params and
 // keyword_params), irreversible the filter's action (hide or warn).
 export type FilterV1Changes = {
-  phrase?: string;
-  context?: string[];
-  irreversible?: string;
-  wholeWord?: string;
-  expiresIn?: string;
+  phrase?: string | undefined;
+  context?: string[] | undefined;
+  irreversible?: string | undefined;
+  wholeWord?: string | undefined;
+  expiresIn?: string | undefined;
 };
 
 function v1FilterChanges(input: FilterV1Changes): FilterChanges {
@@ -807,11 +817,6 @@ export function activeFilters(db: Db, viewer: ViewerContext): ActiveFilters | nu
   };
 }
 
-export const FILTER_MATCH_COLUMNS = fixedColumns(
-  { filter_id: "fs.filter_id", status_id: "fs.status_id" },
-  { filter_id: 18, status_id: 18 },
-);
-
 // The filters among `active` that name each of `statusIds` (CustomFilterStatus), by status id: one seek per filter
 // and status through filter_statuses_pair, so the rows read follow the page, not what other filters name.
 export function filterStatusMatches(
@@ -849,8 +854,6 @@ export function filterStatusMatches(
 // migration 0079_filter_text_units), else from an upper bound of its text (status-presenter.ts filterTextBoundSql),
 // so an unmeasured status may be cut where its whole text would fit; each cut is also bounded by what is left of
 // MAX_FILTER_REQUEST_TEXT, so the budget holds whatever the figures (docs/mastodon-deviations.md).
-// Re-exported as the leaf module's binding, so a module that builds SQL with it at load (status-presenter.ts) reads it
-// initialized whatever the import order: filters.ts is in an import cycle with it.
 export { FILTER_TEXT_UNITS_MAX as MAX_FILTER_TEXT } from "../platform/stored-bounds";
 export const MAX_FILTER_REQUEST_TEXT = 400_000;
 
@@ -867,7 +870,7 @@ export function filterTextLevel(lengths: readonly number[]): number {
   if (total <= MAX_FILTER_REQUEST_TEXT) {
     return Infinity;
   }
-  const sorted = [...lengths].sort((a, b) => a - b);
+  const sorted = [...lengths].toSorted((a, b) => a - b);
   let remaining = MAX_FILTER_REQUEST_TEXT;
   for (let i = 0; i < sorted.length; i++) {
     const length = sorted[i] ?? 0;
