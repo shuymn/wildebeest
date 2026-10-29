@@ -12,6 +12,7 @@ import {
   replaceBootstrapRows,
   settingsFromRows,
 } from "./access-settings";
+import { normalizeDomain } from "./domain-name";
 import { CatalogError, readCatalog } from "./dump-catalog";
 import {
   type DumpHeader,
@@ -1865,6 +1866,16 @@ function parseConfigValues(value: unknown): Record<string, string | null> | stri
     const text = typeof raw === "string" ? raw.trim() : "";
     if (text === "" || text.length > MAX_CONFIG_VALUE) {
       return `${name} must be a non-empty string of at most ${MAX_CONFIG_VALUE} characters, or null`;
+    }
+    if (name === "domain") {
+      // Stored as /setup stores it, the canonical host (lowercase, IDNA to ASCII) that request hosts are compared
+      // with (WEB-1).
+      const domain = normalizeDomain(text);
+      if (domain === null) {
+        return "domain must be a domain name: no IP address, port, path or trailing dot";
+      }
+      changes[name] = domain;
+      continue;
     }
     changes[name] = text;
   }

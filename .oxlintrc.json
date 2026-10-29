@@ -122,14 +122,11 @@
       "files": ["packages/kopje/src/**/*.{ts,tsx}"],
       "rules": { "typescript/restrict-template-expressions": ["error", { "allowNullish": false }] }
     },
-    // Tests, test-node and the CLI may still assign, read and pass `any`; calling or returning one stays an error.
+    // Vitest types its asymmetric matchers (`expect.any(String)` and its kin) as `any`, so a test may assign one;
+    // no-unsafe-member-access and no-unsafe-argument stay on in tests.
     {
-      "files": ["packages/kopje/test/**", "packages/kopje/test-node/**", "packages/kopje/cli/**"],
-      "rules": {
-        "typescript/no-unsafe-argument": "off",
-        "typescript/no-unsafe-assignment": "off",
-        "typescript/no-unsafe-member-access": "off"
-      }
+      "files": ["packages/kopje/test/**", "packages/kopje/test-node/**"],
+      "rules": { "typescript/no-unsafe-assignment": "off" }
     },
     // oxlint does not read the CLI's `/* global */` comments.
     {
@@ -137,8 +134,10 @@
       "env": { "node": true },
       "rules": { "eslint/no-redeclare": "error", "eslint/no-undef": "error" }
     },
-    // Scripts no tsconfig covers: without types, every value is `any`, and an index read is judged without
-    // noUncheckedIndexedAccess, so a cast the package's settings need looks unnecessary.
+    // Untyped scripts. lint/ and the embed scripts have no tsconfig: every value is `any`, and an index read is judged
+    // without noUncheckedIndexedAccess, so a cast the package's settings need looks unnecessary. tsc checks the other
+    // three with checkJs (packages/kopje/scripts/tsconfig.json, scripts/tsconfig.json), but their JSON reads, RPC
+    // results and dynamic imports are still `any`.
     {
       "files": [
         "packages/kopje/scripts/**",

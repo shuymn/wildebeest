@@ -100,7 +100,7 @@ export async function seedRemoteAccount(store: StoreStub, id: string, uri: strin
 export async function verifyCavage(request: Request, pubkey: string): Promise<boolean> {
   const header = request.headers.get("signature") ?? "";
   const params: Record<string, string | undefined> = Object.fromEntries(
-    [...header.matchAll(/(\w+)="([^"]*)"/g)].map((m) => [m[1], m[2]]),
+    [...header.matchAll(/(\w+)="([^"]*)"/g)].map((m): [string, string | undefined] => [m[1]!, m[2]]),
   );
   const url = new URL(request.url);
   const lines = (params.headers ?? "").split(" ").map((name: string) =>

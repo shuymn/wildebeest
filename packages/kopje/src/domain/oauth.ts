@@ -271,24 +271,38 @@ export const sweepOAuth = writeOperation<{ now: number }, { apps: number; tokens
 // instance_settings names written by /setup step 3.
 export const ACCESS_TEAM_DOMAIN = "access_team_domain";
 const ACCESS_AUD = "access_aud";
+const INSTANCE_DOMAIN = "domain";
 
-// What /oauth/authorize needs before it can verify the Access assertion: the Access settings and the client.
+// What /oauth/authorize needs before it can verify the Access assertion: the instance domain (WEB-1), the Access
+// settings and the client.
 export const authorizeContext = readOperation<
   { clientId: string },
-  { access: { teamDomain: string; aud: string } | null; client: Client | null; firstParty: boolean }
+  {
+    domain: string | null;
+    access: { teamDomain: string; aud: string } | null;
+    client: Client | null;
+    firstParty: boolean;
+  }
 >((db, { clientId }) => {
   const settings = new Map(
     db
       .all<{
         name: string;
         value: string;
-      }>("SELECT name, value FROM instance_settings WHERE name IN (?, ?)", ACCESS_TEAM_DOMAIN, ACCESS_AUD)
+      }>(
+        "SELECT name, value FROM instance_settings WHERE name IN (?, ?, ?)",
+        INSTANCE_DOMAIN,
+        ACCESS_TEAM_DOMAIN,
+        ACCESS_AUD,
+      )
       .map((row) => [row.name, row.value]),
   );
+  const domain = settings.get(INSTANCE_DOMAIN);
   const teamDomain = settings.get(ACCESS_TEAM_DOMAIN);
   const aud = settings.get(ACCESS_AUD);
   const client = clientRow(db, clientId);
   return {
+    domain: domain ?? null,
     access: teamDomain === undefined || aud === undefined ? null : { teamDomain, aud },
     client: client === undefined ? null : toClient(client),
     // The web UI's own login (domain/web-session.ts): the consent page reads as signing in.

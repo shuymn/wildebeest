@@ -117,9 +117,10 @@ function collectImageIds(db, accountHash) {
   ];
   for (const sql of sources) {
     for (const row of /** @type {{ json: unknown }[]} */ (db.prepare(sql).all())) {
+      /** @type {unknown} */
       let parsed;
       try {
-        parsed = JSON.parse(String(row.json));
+        parsed = /** @type {unknown} */ (JSON.parse(String(row.json)));
       } catch {
         continue;
       }
@@ -170,10 +171,10 @@ export function readImagesFile(dir) {
     }
     throw new ExportError("images-file-invalid");
   }
-  /** @type {any} */
+  /** @type {Record<string, unknown> | null} */
   let value;
   try {
-    value = JSON.parse(text);
+    value = /** @type {Record<string, unknown> | null} */ (JSON.parse(text));
   } catch {
     throw new ExportError("images-file-invalid");
   }
@@ -191,7 +192,7 @@ export function readImagesFile(dir) {
   }
   /** @type {Map<string, ImageEntry>} */
   const images = new Map();
-  for (const [id, entry] of Object.entries(/** @type {Record<string, any>} */ (value.images))) {
+  for (const [id, entry] of Object.entries(/** @type {Record<string, unknown>} */ (value.images))) {
     if (!IMAGE_ID.test(id) || !validEntry(entry)) {
       throw new ExportError("images-file-invalid");
     }
@@ -203,24 +204,27 @@ export function readImagesFile(dir) {
 const TYPES = new Set(["image/jpeg", "image/png", "image/gif", "image/webp", "image/avif"]);
 const REASONS = new Set(["not-found", "unsupported-type", "too-large", "too-many-pixels", "unreadable"]);
 
-/** @param {any} entry */
-function validEntry(entry) {
-  if (
-    typeof entry !== "object" ||
-    entry === null ||
-    typeof entry.secret !== "string" ||
-    !TOKEN_SHAPE.test(entry.secret)
-  ) {
+/**
+ * @param {unknown} value
+ * @returns {value is ImageEntry}
+ */
+function validEntry(value) {
+  if (typeof value !== "object" || value === null) {
+    return false;
+  }
+  const entry = /** @type {Record<string, unknown>} */ (value);
+  if (typeof entry.secret !== "string" || !TOKEN_SHAPE.test(entry.secret)) {
     return false;
   }
   if (entry.state === "missing") {
-    return REASONS.has(entry.reason);
+    return typeof entry.reason === "string" && REASONS.has(entry.reason);
   }
   const dimension = (/** @type {unknown} */ n) => Number.isInteger(n) && Number(n) > 0 && Number(n) <= 65535;
   return (
     entry.state === "ok" &&
     typeof entry.sha256 === "string" &&
     /^[0-9a-f]{64}$/.test(entry.sha256) &&
+    typeof entry.type === "string" &&
     TYPES.has(entry.type) &&
     dimension(entry.width) &&
     dimension(entry.height) &&
