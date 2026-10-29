@@ -182,7 +182,7 @@ jobs:
         with:
           persist-credentials: false
           # The whole history and the release tags: the package check compares the kept stylesheet with the latest
-          # release (packages/kopje/scripts/build-assets.mjs).
+          # release (packages/kopje/scripts/build-assets.mjs), and the migration check reads every release tag.
           fetch-depth: 0
       # node and pnpm at the versions mise.lock pins; the hooks' tools are not needed here.
       - uses: jdx/mise-action@82a612c5ab8bcda7cc5db6b7e81a8e7584c3dc6e # v5.2.3
@@ -215,6 +215,12 @@ jobs:
         env:
           KOPJE_ASSETS_REQUIRE_TAGS: "1"
         run: pnpm run check:kopje-package
+
+      # A released migration is never changed: every migration in a kopje-v* tag keeps its bytes
+      # (packages/kopje/scripts/released-migrations.mjs). It needs the tags fetched above.
+      - name: Check released migrations
+        if: needs.changes.outputs.kopje == 'true'
+        run: pnpm --filter kopje check:migrations
 
       # The release steps (publish once, recover a rerun, keep an existing GitHub release), with npm and gh stubbed.
       - name: Test the kopje release scripts
