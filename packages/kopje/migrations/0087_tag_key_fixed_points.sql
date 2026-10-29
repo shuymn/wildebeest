@@ -34,8 +34,9 @@
 -- - The local accounts' featured hashtags under each new name are counted again from status_tags, as featuring one
 --   counts them (src/domain/featured-tags.ts); a remote account's are counted when read.
 --
--- Cost: the file creates work tables, so it is not declared foreignKeys: 'unchanged' and the upgrade checks every
--- reference of the Store (workerd refuses TEMP tables). Each table's names are read once to find the names with
+-- Cost: the file is declared foreignKeys: 'unchanged' (src/platform/store-kernel.ts Migration): its tables are work
+-- tables, with no REFERENCES and dropped before it ends, and the two indexes it drops are created again as they
+-- were, so the upgrade skips the whole-Store foreign key check. Each table's names are read once to find the names with
 -- another character (status_tags through status_tags_name, each row; the others whole); each such name's bytes are
 -- cut into chunks of 512 and walked, with a range lookup per character in the fixed-size tables, sorted, and composed
 -- with a key lookup per piece. Then each renamed name's status_tags rows are read through status_tags_name, renamed
@@ -55,9 +56,9 @@
 -- Measured on the benchmark store of test/bench/migration-cost.ts (1,000,000 accounts, 2,000,000 statuses, and its
 -- 20,000 hashtag names on 200,000 status_tags rows, one at the input bound and one past it, 100,000 rows of one
 -- renamed key featured by every local account and 50,000 remote ones, trend_tags and tag_trend_reviews at their
--- caps) in workerd's local Durable Object SQLite, the whole Store's foreign keys verified: 11,062 and 11,160 ms in
--- two runs for the upgrade of this file through the kernel (its statements about 4.3 s of it, the foreign key check
--- about 6 s), within the budget of 20 s, at a load average of about 2.
+-- caps) in workerd's local Durable Object SQLite, the Store's foreign key check skipped as declared: 4,255 and
+-- 4,271 ms in two runs for the upgrade of this file through the kernel, within the budget of 20 s, at a load average
+-- of about 2 (a retry, which checks the whole Store, about 10.4 s).
 
 CREATE TABLE tag_key_chars (first INTEGER PRIMARY KEY, last INTEGER NOT NULL);
 
@@ -597,28 +598,33 @@ CREATE TABLE tag_renames (id INTEGER PRIMARY KEY, name TEXT NOT NULL UNIQUE, new
 
 INSERT OR IGNORE INTO tag_renames (name)
 SELECT DISTINCT name FROM status_tags INDEXED BY status_tags_name
-WHERE name GLOB '*[^0-9_a-z]*' AND typeof(name) = 'text' AND CASE WHEN length(CAST(name AS BLOB)) <= 300000
-  THEN CASE WHEN instr(CAST(name AS BLOB), x'00') = 0 THEN length(name) <= 150000 END END;
+WHERE name GLOB '*[^0-9_a-z]*' AND typeof(name) = 'text'
+  AND iif(length(CAST(name AS BLOB)) <= 300000,
+    iif(instr(CAST(name AS BLOB), x'00') = 0, length(name) <= 150000, NULL), NULL);
 
 INSERT OR IGNORE INTO tag_renames (name)
 SELECT name FROM tag_follows
-WHERE name GLOB '*[^0-9_a-z]*' AND typeof(name) = 'text' AND CASE WHEN length(CAST(name AS BLOB)) <= 300000
-  THEN CASE WHEN instr(CAST(name AS BLOB), x'00') = 0 THEN length(name) <= 150000 END END;
+WHERE name GLOB '*[^0-9_a-z]*' AND typeof(name) = 'text'
+  AND iif(length(CAST(name AS BLOB)) <= 300000,
+    iif(instr(CAST(name AS BLOB), x'00') = 0, length(name) <= 150000, NULL), NULL);
 
 INSERT OR IGNORE INTO tag_renames (name)
 SELECT name FROM featured_tags
-WHERE name GLOB '*[^0-9_a-z]*' AND typeof(name) = 'text' AND CASE WHEN length(CAST(name AS BLOB)) <= 300000
-  THEN CASE WHEN instr(CAST(name AS BLOB), x'00') = 0 THEN length(name) <= 150000 END END;
+WHERE name GLOB '*[^0-9_a-z]*' AND typeof(name) = 'text'
+  AND iif(length(CAST(name AS BLOB)) <= 300000,
+    iif(instr(CAST(name AS BLOB), x'00') = 0, length(name) <= 150000, NULL), NULL);
 
 INSERT OR IGNORE INTO tag_renames (name)
 SELECT name FROM trend_tags
-WHERE name GLOB '*[^0-9_a-z]*' AND typeof(name) = 'text' AND CASE WHEN length(CAST(name AS BLOB)) <= 300000
-  THEN CASE WHEN instr(CAST(name AS BLOB), x'00') = 0 THEN length(name) <= 150000 END END;
+WHERE name GLOB '*[^0-9_a-z]*' AND typeof(name) = 'text'
+  AND iif(length(CAST(name AS BLOB)) <= 300000,
+    iif(instr(CAST(name AS BLOB), x'00') = 0, length(name) <= 150000, NULL), NULL);
 
 INSERT OR IGNORE INTO tag_renames (name)
 SELECT name FROM tag_trend_reviews
-WHERE name GLOB '*[^0-9_a-z]*' AND typeof(name) = 'text' AND CASE WHEN length(CAST(name AS BLOB)) <= 300000
-  THEN CASE WHEN instr(CAST(name AS BLOB), x'00') = 0 THEN length(name) <= 150000 END END;
+WHERE name GLOB '*[^0-9_a-z]*' AND typeof(name) = 'text'
+  AND iif(length(CAST(name AS BLOB)) <= 300000,
+    iif(instr(CAST(name AS BLOB), x'00') = 0, length(name) <= 150000, NULL), NULL);
 
 -- Each name's bytes in chunks of at most 512 that end before a lead byte (a well-formed name splits between its
 -- characters), then each chunk's code points: at each position the one starting there, the next position past its
@@ -631,14 +637,14 @@ WITH RECURSIVE peel(id, k, chunk, rest) AS (
   SELECT id, 0, NULL, CAST(name AS BLOB) FROM tag_renames
   UNION ALL
   SELECT id, k + 1,
-    substr(rest, 1, CASE WHEN length(rest) <= 512 THEN length(rest)
-      WHEN hex(substr(rest, 513, 1)) NOT BETWEEN '80' AND 'BF' THEN 512
-      WHEN hex(substr(rest, 512, 1)) NOT BETWEEN '80' AND 'BF' THEN 511
-      WHEN hex(substr(rest, 511, 1)) NOT BETWEEN '80' AND 'BF' THEN 510 ELSE 509 END),
-    substr(rest, 1 + CASE WHEN length(rest) <= 512 THEN length(rest)
-      WHEN hex(substr(rest, 513, 1)) NOT BETWEEN '80' AND 'BF' THEN 512
-      WHEN hex(substr(rest, 512, 1)) NOT BETWEEN '80' AND 'BF' THEN 511
-      WHEN hex(substr(rest, 511, 1)) NOT BETWEEN '80' AND 'BF' THEN 510 ELSE 509 END)
+    substr(rest, 1, iif(length(rest) <= 512, length(rest),
+      iif(hex(substr(rest, 513, 1)) NOT BETWEEN '80' AND 'BF', 512,
+      iif(hex(substr(rest, 512, 1)) NOT BETWEEN '80' AND 'BF', 511,
+      iif(hex(substr(rest, 511, 1)) NOT BETWEEN '80' AND 'BF', 510, 509))))),
+    substr(rest, 1 + iif(length(rest) <= 512, length(rest),
+      iif(hex(substr(rest, 513, 1)) NOT BETWEEN '80' AND 'BF', 512,
+      iif(hex(substr(rest, 512, 1)) NOT BETWEEN '80' AND 'BF', 511,
+      iif(hex(substr(rest, 511, 1)) NOT BETWEEN '80' AND 'BF', 510, 509)))))
   FROM peel WHERE length(rest) > 0)
 SELECT id, k, chunk FROM peel WHERE k > 0;
 
@@ -649,11 +655,11 @@ INSERT INTO tag_key_walk (id, k, p, cp)
 WITH RECURSIVE walk(id, k, chunk, p, cp) AS (
   SELECT id, k, chunk, 1, unicode(CAST(substr(chunk, 1, 4) AS TEXT)) FROM tag_key_chunks
   UNION ALL
-  SELECT id, k, chunk, p + CASE WHEN cp < 0x80 THEN 1 WHEN cp < 0x800 THEN 2 WHEN cp < 0x10000 THEN 3 ELSE 4 END,
+  SELECT id, k, chunk, p + iif(cp < 0x80, 1, iif(cp < 0x800, 2, iif(cp < 0x10000, 3, 4))),
     unicode(CAST(substr(chunk,
-      p + CASE WHEN cp < 0x80 THEN 1 WHEN cp < 0x800 THEN 2 WHEN cp < 0x10000 THEN 3 ELSE 4 END, 4) AS TEXT))
+      p + iif(cp < 0x80, 1, iif(cp < 0x800, 2, iif(cp < 0x10000, 3, 4))), 4) AS TEXT))
   FROM walk
-  WHERE p + CASE WHEN cp < 0x80 THEN 1 WHEN cp < 0x800 THEN 2 WHEN cp < 0x10000 THEN 3 ELSE 4 END <= length(chunk))
+  WHERE p + iif(cp < 0x80, 1, iif(cp < 0x800, 2, iif(cp < 0x10000, 3, 4))) <= length(chunk))
 SELECT id, k, p, coalesce(cp, -1) FROM walk;
 
 DROP TABLE tag_key_chunks;
@@ -698,16 +704,16 @@ WITH RECURSIVE nfc(id, n, x, xn, b, t, g, o) AS (
   SELECT id, 0, NULL, 0, 0, NULL, 0, 0 FROM tag_renames
   UNION ALL
   SELECT q.id, q.n,
-    CASE WHEN c.composite IS NOT NULL AND (nfc.b = 0 OR (q.rank > 0 AND nfc.b < q.rank)) THEN c.composite
-      WHEN q.rank = 0 THEN q.piece ELSE nfc.x END,
-    CASE WHEN c.composite IS NOT NULL AND (nfc.b = 0 OR (q.rank > 0 AND nfc.b < q.rank)) THEN nfc.xn
-      WHEN q.rank = 0 THEN q.n ELSE nfc.xn END,
-    CASE WHEN c.composite IS NOT NULL AND (nfc.b = 0 OR (q.rank > 0 AND nfc.b < q.rank)) THEN nfc.b
-      WHEN q.rank = 0 OR nfc.x IS NULL THEN 0 ELSE q.rank END,
-    CASE WHEN c.composite IS NOT NULL AND (nfc.b = 0 OR (q.rank > 0 AND nfc.b < q.rank)) THEN NULL
-      WHEN q.rank > 0 THEN char(q.piece) WHEN nfc.x IS NOT NULL THEN char(nfc.x) END,
-    CASE WHEN nfc.x IS NULL THEN q.n ELSE nfc.xn END,
-    CASE WHEN nfc.x IS NULL OR q.rank = 0 THEN 0 ELSE q.n END
+    iif(c.composite IS NOT NULL AND (nfc.b = 0 OR (q.rank > 0 AND nfc.b < q.rank)),
+      c.composite, iif(q.rank = 0, q.piece, nfc.x)),
+    iif(c.composite IS NOT NULL AND (nfc.b = 0 OR (q.rank > 0 AND nfc.b < q.rank)),
+      nfc.xn, iif(q.rank = 0, q.n, nfc.xn)),
+    iif(c.composite IS NOT NULL AND (nfc.b = 0 OR (q.rank > 0 AND nfc.b < q.rank)),
+      nfc.b, iif(q.rank = 0 OR nfc.x IS NULL, 0, q.rank)),
+    iif(c.composite IS NOT NULL AND (nfc.b = 0 OR (q.rank > 0 AND nfc.b < q.rank)),
+      NULL, iif(q.rank > 0, char(q.piece), iif(nfc.x IS NOT NULL, char(nfc.x), NULL))),
+    iif(nfc.x IS NULL, q.n, nfc.xn),
+    iif(nfc.x IS NULL OR q.rank = 0, 0, q.n)
   FROM nfc JOIN tag_nfc_queue q ON q.id = nfc.id AND q.n = nfc.n + 1
     LEFT JOIN tag_nfc_pairs c ON c.first = nfc.x AND c.second = q.piece)
 SELECT id, g, o, t FROM nfc WHERE t IS NOT NULL;
@@ -746,27 +752,24 @@ DROP INDEX status_tags_public;
 DROP INDEX status_tags_name;
 
 UPDATE OR IGNORE status_tags
-SET name = (SELECT r.new_name FROM tag_renames r WHERE r.id = CASE WHEN length(CAST(status_tags.name AS BLOB)) <= 1024
-    THEN (SELECT q.id FROM tag_renames q INDEXED BY tag_renames_short
-      WHERE q.name = status_tags.name AND length(CAST(q.name AS BLOB)) <= 1024)
-    ELSE (SELECT q.id FROM tag_renames q INDEXED BY sqlite_autoindex_tag_renames_1
-      WHERE q.name = status_tags.name) END)
+SET name = (SELECT r.new_name FROM tag_renames r WHERE r.id = iif(length(CAST(status_tags.name AS BLOB)) <= 1024,
+  (SELECT q.id FROM tag_renames q INDEXED BY tag_renames_short
+    WHERE q.name = status_tags.name AND length(CAST(q.name AS BLOB)) <= 1024),
+  (SELECT q.id FROM tag_renames q INDEXED BY sqlite_autoindex_tag_renames_1 WHERE q.name = status_tags.name)))
 WHERE status_id IN (SELECT status_id FROM tag_status_moves)
   AND EXISTS (SELECT 1 FROM tag_status_moves m WHERE m.status_id = status_tags.status_id
-    AND m.id = CASE WHEN length(CAST(status_tags.name AS BLOB)) <= 1024
-      THEN (SELECT q.id FROM tag_renames q INDEXED BY tag_renames_short
-        WHERE q.name = status_tags.name AND length(CAST(q.name AS BLOB)) <= 1024)
-      ELSE (SELECT q.id FROM tag_renames q INDEXED BY sqlite_autoindex_tag_renames_1
-        WHERE q.name = status_tags.name) END);
+    AND m.id = iif(length(CAST(status_tags.name AS BLOB)) <= 1024,
+      (SELECT q.id FROM tag_renames q INDEXED BY tag_renames_short
+        WHERE q.name = status_tags.name AND length(CAST(q.name AS BLOB)) <= 1024),
+      (SELECT q.id FROM tag_renames q INDEXED BY sqlite_autoindex_tag_renames_1 WHERE q.name = status_tags.name)));
 
 DELETE FROM status_tags
 WHERE status_id IN (SELECT status_id FROM tag_status_moves)
   AND EXISTS (SELECT 1 FROM tag_status_moves m WHERE m.status_id = status_tags.status_id
-    AND m.id = CASE WHEN length(CAST(status_tags.name AS BLOB)) <= 1024
-      THEN (SELECT q.id FROM tag_renames q INDEXED BY tag_renames_short
-        WHERE q.name = status_tags.name AND length(CAST(q.name AS BLOB)) <= 1024)
-      ELSE (SELECT q.id FROM tag_renames q INDEXED BY sqlite_autoindex_tag_renames_1
-        WHERE q.name = status_tags.name) END);
+    AND m.id = iif(length(CAST(status_tags.name AS BLOB)) <= 1024,
+      (SELECT q.id FROM tag_renames q INDEXED BY tag_renames_short
+        WHERE q.name = status_tags.name AND length(CAST(q.name AS BLOB)) <= 1024),
+      (SELECT q.id FROM tag_renames q INDEXED BY sqlite_autoindex_tag_renames_1 WHERE q.name = status_tags.name)));
 
 DROP TABLE tag_status_moves;
 
@@ -786,11 +789,10 @@ WITHOUT ROWID;
 
 INSERT INTO tag_moves (id, account_id, name)
 SELECT f.id, f.account_id, r.new_name FROM tag_follows f CROSS JOIN tag_renames r
-  ON r.id = CASE WHEN length(CAST(f.name AS BLOB)) <= 1024
-    THEN (SELECT q.id FROM tag_renames q INDEXED BY tag_renames_short
-      WHERE q.name = f.name AND length(CAST(q.name AS BLOB)) <= 1024)
-    ELSE (SELECT q.id FROM tag_renames q INDEXED BY sqlite_autoindex_tag_renames_1
-      WHERE q.name = f.name) END
+  ON r.id = iif(length(CAST(f.name AS BLOB)) <= 1024,
+    (SELECT q.id FROM tag_renames q INDEXED BY tag_renames_short
+      WHERE q.name = f.name AND length(CAST(q.name AS BLOB)) <= 1024),
+    (SELECT q.id FROM tag_renames q INDEXED BY sqlite_autoindex_tag_renames_1 WHERE q.name = f.name))
 WHERE f.name GLOB '*[^0-9_a-z]*';
 
 INSERT INTO tag_keeps (account_id, name, id)
@@ -817,11 +819,10 @@ DELETE FROM tag_keeps;
 
 INSERT INTO tag_moves (id, account_id, name)
 SELECT f.id, f.account_id, r.new_name FROM featured_tags f CROSS JOIN tag_renames r
-  ON r.id = CASE WHEN length(CAST(f.name AS BLOB)) <= 1024
-    THEN (SELECT q.id FROM tag_renames q INDEXED BY tag_renames_short
-      WHERE q.name = f.name AND length(CAST(q.name AS BLOB)) <= 1024)
-    ELSE (SELECT q.id FROM tag_renames q INDEXED BY sqlite_autoindex_tag_renames_1
-      WHERE q.name = f.name) END
+  ON r.id = iif(length(CAST(f.name AS BLOB)) <= 1024,
+    (SELECT q.id FROM tag_renames q INDEXED BY tag_renames_short
+      WHERE q.name = f.name AND length(CAST(q.name AS BLOB)) <= 1024),
+    (SELECT q.id FROM tag_renames q INDEXED BY sqlite_autoindex_tag_renames_1 WHERE q.name = f.name))
 WHERE f.name GLOB '*[^0-9_a-z]*';
 
 INSERT INTO tag_keeps (account_id, name, id)
@@ -860,19 +861,18 @@ SELECT name, top, max_score, max_score_at FROM (
     row_number() OVER (PARTITION BY name ORDER BY max_score DESC, max_score_at DESC) AS place
   FROM (SELECT r.new_name AS name, t.score, t.max_score, t.max_score_at
       FROM trend_tags t CROSS JOIN tag_renames r
-        ON r.id = CASE WHEN length(CAST(t.name AS BLOB)) <= 1024
-          THEN (SELECT q.id FROM tag_renames q INDEXED BY tag_renames_short
-            WHERE q.name = t.name AND length(CAST(q.name AS BLOB)) <= 1024)
-          ELSE (SELECT q.id FROM tag_renames q INDEXED BY sqlite_autoindex_tag_renames_1
-            WHERE q.name = t.name) END
+        ON r.id = iif(length(CAST(t.name AS BLOB)) <= 1024,
+          (SELECT q.id FROM tag_renames q INDEXED BY tag_renames_short
+            WHERE q.name = t.name AND length(CAST(q.name AS BLOB)) <= 1024),
+          (SELECT q.id FROM tag_renames q INDEXED BY sqlite_autoindex_tag_renames_1 WHERE q.name = t.name))
     UNION ALL
     SELECT t.name, t.score, t.max_score, t.max_score_at
       FROM trend_tags o CROSS JOIN tag_renames r
-        ON r.id = CASE WHEN length(CAST(o.name AS BLOB)) <= 1024
-          THEN (SELECT q.id FROM tag_renames q INDEXED BY tag_renames_short
-            WHERE q.name = o.name AND length(CAST(q.name AS BLOB)) <= 1024)
-          ELSE (SELECT q.id FROM tag_renames q INDEXED BY sqlite_autoindex_tag_renames_1
-            WHERE q.name = o.name) END CROSS JOIN trend_tags t ON t.name = r.new_name))
+        ON r.id = iif(length(CAST(o.name AS BLOB)) <= 1024,
+          (SELECT q.id FROM tag_renames q INDEXED BY tag_renames_short
+            WHERE q.name = o.name AND length(CAST(q.name AS BLOB)) <= 1024),
+          (SELECT q.id FROM tag_renames q INDEXED BY sqlite_autoindex_tag_renames_1 WHERE q.name = o.name))
+        CROSS JOIN trend_tags t ON t.name = r.new_name))
 WHERE place = 1 AND typeof(name) = 'text' AND length(CAST(name AS BLOB)) BETWEEN 1 AND 1024
     AND instr(CAST(name AS BLOB), x'00') = 0 AND length(name) <= 256
     AND name NOT GLOB ('*[' || char(1) || '-/:-^`{-' || char(127) || ']*');
@@ -911,19 +911,17 @@ SELECT name, trendable, reviewed_at FROM (
     row_number() OVER (PARTITION BY name ORDER BY reviewed_at DESC, trendable) AS place
   FROM (SELECT r.new_name AS name, t.trendable, t.reviewed_at
       FROM tag_trend_reviews t CROSS JOIN tag_renames r
-        ON r.id = CASE WHEN length(CAST(t.name AS BLOB)) <= 1024
-          THEN (SELECT q.id FROM tag_renames q INDEXED BY tag_renames_short
-            WHERE q.name = t.name AND length(CAST(q.name AS BLOB)) <= 1024)
-          ELSE (SELECT q.id FROM tag_renames q INDEXED BY sqlite_autoindex_tag_renames_1
-            WHERE q.name = t.name) END
+        ON r.id = iif(length(CAST(t.name AS BLOB)) <= 1024,
+          (SELECT q.id FROM tag_renames q INDEXED BY tag_renames_short
+            WHERE q.name = t.name AND length(CAST(q.name AS BLOB)) <= 1024),
+          (SELECT q.id FROM tag_renames q INDEXED BY sqlite_autoindex_tag_renames_1 WHERE q.name = t.name))
     UNION ALL
     SELECT t.name, t.trendable, t.reviewed_at
       FROM tag_trend_reviews o CROSS JOIN tag_renames r
-        ON r.id = CASE WHEN length(CAST(o.name AS BLOB)) <= 1024
-          THEN (SELECT q.id FROM tag_renames q INDEXED BY tag_renames_short
-            WHERE q.name = o.name AND length(CAST(q.name AS BLOB)) <= 1024)
-          ELSE (SELECT q.id FROM tag_renames q INDEXED BY sqlite_autoindex_tag_renames_1
-            WHERE q.name = o.name) END
+        ON r.id = iif(length(CAST(o.name AS BLOB)) <= 1024,
+          (SELECT q.id FROM tag_renames q INDEXED BY tag_renames_short
+            WHERE q.name = o.name AND length(CAST(q.name AS BLOB)) <= 1024),
+          (SELECT q.id FROM tag_renames q INDEXED BY sqlite_autoindex_tag_renames_1 WHERE q.name = o.name))
       CROSS JOIN tag_trend_reviews t ON t.name = r.new_name))
 WHERE place = 1 AND typeof(name) = 'text' AND length(CAST(name AS BLOB)) BETWEEN 1 AND 1024
     AND instr(CAST(name AS BLOB), x'00') = 0 AND length(name) <= 256

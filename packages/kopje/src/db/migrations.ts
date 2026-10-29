@@ -177,5 +177,5 @@ export const MIGRATIONS: readonly { name: string; sql: string; foreignKeys?: "un
   { name: "0084_family_job_attempts", sql: m0084, foreignKeys: "unchanged" },
   { name: "0085_retraction_staging", sql: m0085 },
   { name: "0086_authorized_apps", sql: m0086, foreignKeys: "unchanged" },
-  { name: "0087_tag_key_fixed_points", sql: m0087 },
+  { name: "0087_tag_key_fixed_points", sql: m0087, foreignKeys: "unchanged" },
 ];

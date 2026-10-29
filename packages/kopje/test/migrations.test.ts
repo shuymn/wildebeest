@@ -11012,12 +11012,26 @@ describe("0087_tag_key_fixed_points", () => {
       }),
       { numRuns: 20_000 },
     );
-    const bound = `length(CAST(name AS BLOB)) <= ${byteBound}
-  THEN CASE WHEN instr(CAST(name AS BLOB), x'00') = 0 THEN length(name) <= ${length} END END`;
+    const bound = `iif(length(CAST(name AS BLOB)) <= ${byteBound},
+    iif(instr(CAST(name AS BLOB), x'00') = 0, length(name) <= ${length}, NULL), NULL)`;
     expect(SQL.split(bound)).toHaveLength(6);
     expect(SQL.split(trendTagNameCheckSql("name"))).toHaveLength(3);
     expect(SQL).toContain(`s.visibility IN ${DISTRIBUTABLE_SQL}`);
   }, 60_000);
+
+  it("is declared foreignKeys: unchanged, so its upgrade skips the whole-Store foreign key check", async () => {
+    expect(MIGRATIONS[at]?.foreignKeys).toBe("unchanged");
+    const store = freshStore();
+    await runInDurableObject(store, async (_instance, state) => {
+      await kernel(state, MIGRATIONS.slice(0, at)).upgrade();
+      const logs: Record<string, unknown>[] = [];
+      const upgraded = await kernel(state, MIGRATIONS.slice(0, at + 1), { log: (entry) => logs.push(entry) }).upgrade();
+      expect(upgraded).toMatchObject({ ok: true, applied: [NAME] });
+      expect(logs).toContainEqual(
+        expect.objectContaining({ event: "kopje.store.upgrade.start", foreignKeyCheck: "skipped" }),
+      );
+    });
+  });
 });
 
 describe("0087_tag_key_fixed_points under stale statistics", () => {
