@@ -8,6 +8,12 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-10-29
+
+The second release, published under the npm dist-tag `latest`. Two changes refuse what 0.1.0 accepted:
+`/oauth/authorize` answers only on the instance's domain, and `/admin/config` refuses a `domain` that is not a domain
+name (see Security).
+
 ### Changed
 
 - The instance template keeps the instance updated with Dependabot (`.github/dependabot.yml`) instead of Renovate
@@ -30,8 +36,7 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
   now applied twice, which test-node/tag-key-fixed-points.test.ts proves enough from the runtime's Unicode tables.
   Migration `0087_tag_key_fixed_points` renames the stored names that were not fixed points and merges the rows that
   meet (a status's hashtags, follows, featured hashtags, trends and reviews), sending nothing; a name past its input
-  bound or not well-formed, only an imported one, stays as stored. The file is declared to keep every reference, so the
-  upgrade skips the whole-Store foreign key check: 4.3 s on the benchmark store, within the 20 s budget. Clients see
+  bound or not well-formed, only an imported one, stays as stored (its cost is under Instance changes). Clients see
   such a hashtag under its composed name, and a follower may keep both of two merged featured hashtags
   ([docs/mastodon-deviations.md](docs/mastodon-deviations.md), Hashtags). `wrangler.jsonc`: unchanged.
 - `/setup`'s Access step, refused while another run holds it, no longer says the wait is at most two minutes: a
@@ -52,6 +57,16 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
   account by the instance's domain (threat model WEB-1). `/admin/config` (`kopje-admin config`) now stores `domain` as
   `/setup` does, lowercase with IDNA to ASCII, and refuses a value that is not a domain name (an IP address, a port, a
   path or a trailing dot). No migration; `wrangler.jsonc`: unchanged.
+
+### Instance changes
+
+- Store schema: adds one migration (0087), applied on the first request after the deploy; a rollback to an earlier
+  version needs the point-in-time restore described in [docs/upgrade.md](docs/upgrade.md). On the representative
+  store defined in `test/bench/migration-cost.ts`, migration 0087 took 5,849–6,043 ms (median 6,033 ms) in three runs
+  of the migration bench workflow on a 4-CPU GitHub-hosted runner, in workerd's local Durable Object SQLite. It
+  changes no reference, so the upgrade skips the Store-wide foreign-key check; an upgrade retried after a failure runs
+  that check, estimated at 14,088 ms on the same store.
+- `wrangler.jsonc`: unchanged.
 
 ## [0.1.0] - 2026-10-28
 
