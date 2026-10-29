@@ -119,7 +119,10 @@ describe("migration lint", () => {
   });
 
   // Work tables and recreated indexes, judged against the files before (`earlier`).
-  const EARLIER = ["CREATE TABLE t (a, b); CREATE INDEX i ON t (a); CREATE UNIQUE INDEX u ON t (b);"];
+  const EARLIER = [
+    `CREATE TABLE t (a, b); CREATE INDEX i ON t (a); CREATE UNIQUE INDEX u ON t (b);
+		CREATE INDEX iq ON t ("a"); CREATE INDEX il ON t (a) WHERE b = 'x'; CREATE INDEX ir ON t (a) WHERE b > 1;`,
+  ];
   it.each([
     ["a work table with a REFERENCES", "CREATE TABLE w (a REFERENCES t (a)); DROP TABLE w;"],
     [
@@ -138,8 +141,27 @@ describe("migration lint", () => {
     ["an index recreated before it is dropped", "CREATE INDEX IF NOT EXISTS i ON t (a); DROP INDEX i;"],
     ["a UNIQUE index dropped and recreated", "DROP INDEX u; CREATE UNIQUE INDEX u ON t (b);"],
     ["a UNIQUE index on a real table", "CREATE UNIQUE INDEX v ON t (a);"],
+    [
+      "a work index under IF NOT EXISTS named as an earlier UNIQUE index",
+      "CREATE TABLE w (b); CREATE UNIQUE INDEX IF NOT EXISTS u ON w (b); DROP INDEX u; DROP TABLE w;",
+    ],
+    ["an index recreated on another quoted column", 'DROP INDEX iq; CREATE INDEX iq ON t ("b");'],
+    ["an index recreated with another string", "DROP INDEX il; CREATE INDEX il ON t (a) WHERE b = 'y';"],
+    ["an index recreated with another number", "DROP INDEX ir; CREATE INDEX ir ON t (a) WHERE b > 2;"],
   ])("refuses %s", (_label, sql) => {
     expect(unchangedProblem(sql, EARLIER)).not.toBeNull();
+  });
+
+  it("reads the earlier files whole, CASE included, and refuses when one cannot be read", () => {
+    const sql = "DROP INDEX i; CREATE INDEX i ON t (a);";
+    // The last earlier file makes i UNIQUE after a CASE: dropping and recreating it plain is refused.
+    const remade = [
+      "CREATE TABLE t (a); CREATE INDEX i ON t (a);",
+      "SELECT CASE WHEN 1 THEN 2 END; DROP INDEX i;\nCREATE UNIQUE INDEX i ON t (a);",
+    ];
+    expect(unchangedProblem(sql, remade)).toMatch(/creates it again as it was/);
+    expect(unchangedProblem(sql, [remade[0]!])).toBeNull();
+    expect(unchangedProblem(sql, [remade[0]!, "SELECT CASE WHEN 1 THEN 2;"])).toMatch(/cannot be read/);
   });
 
   it("refuses a work table that an earlier file names after REFERENCES, or after a quoted name", () => {
@@ -157,6 +179,12 @@ describe("migration lint", () => {
 			DROP INDEX w_b; DROP TABLE w;`,
     ],
     ["an index dropped and recreated as it was", "DROP INDEX i; UPDATE t SET a = 1; CREATE INDEX i ON t (a);"],
+    [
+      "indexes recreated with their quoted names, strings and numbers, spaced and cased otherwise",
+      `DROP INDEX iq; DROP INDEX il; DROP INDEX ir; create index iq on t ( "a" );
+			CREATE INDEX il ON t (a) -- a comment
+			WHERE b = 'x'; CREATE INDEX ir ON t (a) WHERE b > 1;`,
+    ],
   ])("accepts %s", (_label, sql) => {
     expect(unchangedProblem(sql, EARLIER)).toBeNull();
   });
@@ -241,6 +269,85 @@ describe.each(DECLARED.map((m) => [m.name]))("%s applied to a populated Store", 
       expect(after.tables).toEqual(before.tables);
       expect(after.unique).toEqual(expect.arrayContaining(before.unique));
       expect(sql.exec("PRAGMA foreign_key_check").toArray()).toEqual([]);
+    });
+  });
+});
+
+// The premise the declaration's argument rests on (Migration in src/platform/store-kernel.ts): every reference's
+// column has its parent key's declared type, so the immediate check, which compares by the parent's affinity, and the
+// whole-Store check agree on which parent a child matches (with different types, an INSERT OR REPLACE can delete a
+// parent a child still matches, and only the whole-Store check finds the orphan). Each reference of the schema each
+// declared file runs on, and of the latest.
+describe("the references of the schema a declared file runs on", () => {
+  const mismatches = (sql: SqlStorage): { pairs: number; wrong: string[] } => {
+    const tables = sql
+      .exec<{ name: string }>(
+        "SELECT name FROM sqlite_master WHERE type = 'table' AND substr(name, 1, 4) <> '_cf_' AND name <> 'sqlite_sequence'",
+      )
+      .toArray()
+      .map((row) => row.name);
+    const typeOf = (table: string, column: string) =>
+      sql
+        .exec<{ type: string }>("SELECT type FROM pragma_table_info(?) WHERE name = ?", table, column)
+        .toArray()[0]
+        ?.type.toUpperCase() ?? null;
+    let pairs = 0;
+    const wrong: string[] = [];
+    for (const table of tables) {
+      const keys = sql
+        .exec<{ id: number; seq: number; table: string; from: string; to: string | null }>(
+          'SELECT id, seq, "table", "from", "to" FROM pragma_foreign_key_list(?)',
+          table,
+        )
+        .toArray();
+      for (const key of keys) {
+        const parentKey =
+          key.to ??
+          sql
+            .exec<{ name: string }>("SELECT name FROM pragma_table_info(?) WHERE pk > 0 ORDER BY pk", key.table)
+            .toArray()[key.seq]?.name ??
+          null;
+        const child = typeOf(table, key.from);
+        const parent = parentKey === null ? null : typeOf(key.table, parentKey);
+        pairs++;
+        if (child === null || parent === null || child !== parent) {
+          wrong.push(`${table}.${key.from} (${child}) -> ${key.table}.${parentKey} (${parent})`);
+        }
+      }
+    }
+    return { pairs, wrong };
+  };
+
+  it("gives each reference its parent key's declared type", async () => {
+    const store = freshStore();
+    await runInDurableObject(store, async (_instance, state) => {
+      const sql = state.storage.sql;
+      await state.storage.deleteAlarm();
+      const wrong: string[] = [];
+      let pairs = 0;
+      for (const [at, m] of MIGRATIONS.entries()) {
+        if (m.foreignKeys === "unchanged") {
+          expect(await kernel(state, MIGRATIONS.slice(0, at)).upgrade()).toMatchObject({ ok: true });
+          const found = mismatches(sql);
+          wrong.push(...found.wrong.map((w) => `before ${m.name}: ${w}`));
+          pairs = found.pairs;
+        }
+      }
+      expect(await kernel(state).upgrade()).toMatchObject({ ok: true });
+      const latest = mismatches(sql);
+      wrong.push(...latest.wrong.map((w) => `latest: ${w}`));
+      expect(wrong).toEqual([]);
+      expect([pairs, latest.pairs].every((n) => n > 50)).toBe(true);
+    });
+  }, 120_000);
+
+  it("finds a reference whose column has another type than its parent key, and a key named by the primary key", async () => {
+    const store = freshStore();
+    await runInDurableObject(store, (_instance, state) => {
+      const sql = state.storage.sql;
+      sql.exec("CREATE TABLE p (id TEXT PRIMARY KEY, k TEXT UNIQUE)");
+      sql.exec("CREATE TABLE ch (f INTEGER REFERENCES p (id), g TEXT REFERENCES p)");
+      expect(mismatches(sql)).toEqual({ pairs: 2, wrong: ["ch.f (INTEGER) -> p.id (TEXT)"] });
     });
   });
 });

@@ -9,7 +9,10 @@ export type Migration = {
   // 'unchanged': a reviewed claim that the file leaves every reference and every referenced key of the Store as it was,
   // so the whole-Store check after it can be skipped. The Store enforces foreign keys immediately (no migration may
   // defer them or turn them off: no PRAGMA, no DEFERRABLE), so each statement that writes rows is checked as it runs
-  // and cannot leave a violation behind; what the check would still find is a reference that went stale without a row
+  // and cannot leave a violation behind. That holds because every reference's column has its parent key's declared
+  // type (test/migration-lint.test.ts, "the references of the schema a declared file runs on"): with different
+  // types, an INSERT OR REPLACE can delete a parent that a child still matches by affinity, and only the whole-Store
+  // check finds the orphan. What the check would still find is a reference that went stale without a row
   // being written: a table created, dropped, rebuilt or renamed under existing references, a reference added over
   // existing rows, or a key a reference names removed or replaced. A declared file does none of those, except work
   // tables: a table it creates with no REFERENCES, that no migration names after REFERENCES (so no row refers to it,
