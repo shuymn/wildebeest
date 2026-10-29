@@ -592,7 +592,8 @@ An import never touches configuration:
 
 They are set only with the explicit config operation, `GET`/`POST /admin/config` with
 `{ "values": { "<name>": "<value>" | null } }`. Either an Access admin calls it, or `IMPORT_TOKEN` while the Store is
-in bootstrap. It is refused while an import runs.
+in bootstrap. It is refused while an import runs. `domain` is stored as `/setup` stores it, lowercase with IDNA
+to ASCII, and a value that is not a domain name (an IP address, a port, a path or a trailing dot) is refused.
 
 The cutover takes the instance values from the legacy settings and sets them with
 `kopje-admin config --import-token name=value ...`, before or after importing the dump. Once the Access values make

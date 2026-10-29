@@ -10,16 +10,21 @@ import { after, before, beforeEach, describe, it } from "node:test";
 const script = new URL("./test-affected.sh", import.meta.url).pathname;
 const GIT = ["-c", "user.name=t", "-c", "user.email=t@example.com", "-c", "commit.gpgsign=false"];
 
+/** @type {string} */
 let work;
+/** @type {string} */
 let bin;
+/** @type {string} */
 let repo;
 
+/** @param {string[]} args */
 function git(...args) {
   const result = spawnSync("git", ["-C", repo, ...GIT, ...args], { encoding: "utf8" });
   assert.equal(result.status, 0, result.stderr);
   return result.stdout.trim();
 }
 
+/** @param {string[]} paths */
 function suites(...paths) {
   const result = spawnSync("bash", [script, "suites"], { input: paths.join("\n"), encoding: "utf8" });
   assert.equal(result.status, 0, result.stderr);
@@ -32,6 +37,10 @@ function suites(...paths) {
 }
 
 // Runs the script in the checkout with the hook's environment unless env says otherwise.
+/**
+ * @param {Record<string, string>} [env]
+ * @param {string[]} args
+ */
 function run(env = { TEST_AFFECTED_SKIP_PASSED: "1" }, ...args) {
   writeFileSync(join(work, "pnpm.log"), "");
   const result = spawnSync("bash", [script, ...args], {
@@ -42,6 +51,10 @@ function run(env = { TEST_AFFECTED_SKIP_PASSED: "1" }, ...args) {
   return { status: result.status, stderr: result.stderr, pnpm: readFileSync(join(work, "pnpm.log"), "utf8").trim() };
 }
 
+/**
+ * @param {boolean} kopje
+ * @param {boolean} kopjeCode
+ */
 const B = (kopje, kopjeCode) => ({ kopje: `${kopje}`, kopje_code: `${kopjeCode}` });
 
 describe("suites", () => {

@@ -16,8 +16,11 @@ import {
   withManifestVersion,
 } from "./kopje-release-lib.mjs";
 
+/** @type {string} */
 let work;
+/** @type {string} */
 let tarball;
+/** @type {string} */
 let integrity;
 
 before(() => {
@@ -32,11 +35,17 @@ before(() => {
 after(() => rmSync(work, { recursive: true, force: true }));
 
 // A stub command: answers `view`/`release view` with the given result, records every call, and succeeds otherwise.
+/**
+ * @typedef {import("./kopje-release-lib.mjs").Ran} Ran
+ * @param {Record<string, Ran>} answers
+ */
 function stub(answers) {
+  /** @type {string[][]} */
   const calls = [];
+  /** @param {string[]} args */
   const command = (args) => {
     calls.push(args);
-    const answer = answers[args[0] === "release" ? `${args[0]} ${args[1]}` : args[0]];
+    const answer = answers[args[0] === "release" ? `${args[0]} ${args[1]}` : /** @type {string} */ (args[0])];
     return answer ?? { code: 0, stdout: "", stderr: "" };
   };
   return { command, calls };
@@ -59,9 +68,10 @@ describe("publish", () => {
     assert.equal(result, "published");
     const publishes = npm.calls.filter((args) => args[0] === "publish");
     assert.equal(publishes.length, 1);
-    assert.equal(publishes[0][1], tarball);
-    assert.deepEqual(publishes[0].slice(2, 6), ["--access", "public", "--provenance", "--tag"]);
-    assert.equal(publishes[0][6], "latest");
+    const published = /** @type {string[]} */ (publishes[0]);
+    assert.equal(published[1], tarball);
+    assert.deepEqual(published.slice(2, 6), ["--access", "public", "--provenance", "--tag"]);
+    assert.equal(published[6], "latest");
   });
 
   it("treats an empty answer from npm view as a version not on npm", () => {
@@ -142,7 +152,7 @@ describe("createRelease", () => {
     assert.equal(createRelease({ ...release(), prerelease: true, gh: gh.command, log: quiet }), "created");
     const creates = gh.calls.filter((args) => args[1] === "create");
     assert.equal(creates.length, 1);
-    const args = creates[0];
+    const args = /** @type {string[]} */ (creates[0]);
     assert.equal(args[2], "kopje-v1.2.3");
     assert.ok(args.includes("--verify-tag"));
     assert.ok(args.includes("--prerelease"));
@@ -195,15 +205,25 @@ describe("withManifestVersion", () => {
 
 describe("mainChecked", () => {
   const sha = "a".repeat(40);
+  /**
+   * @param {string} status
+   * @param {string | null} [conclusion]
+   */
   const run = (status, conclusion = null) => ({ head_sha: sha, status, conclusion, html_url: `run-${status}` });
 
   // gh answers the listings in turn (the last one repeats), and each sleep moves the clock by its duration.
+  /**
+   * @param {(object[] | Ran)[]} listings
+   * @param {Partial<Parameters<typeof mainChecked>[0]>} [options]
+   */
   function check(listings, options = {}) {
     let clock = 0;
+    /** @type {string[][]} */
     const calls = [];
+    /** @param {string[]} args */
     const gh = (args) => {
       calls.push(args);
-      const listing = listings[Math.min(calls.length, listings.length) - 1];
+      const listing = /** @type {object[] | Ran} */ (listings[Math.min(calls.length, listings.length) - 1]);
       return Array.isArray(listing)
         ? { code: 0, stdout: JSON.stringify({ workflow_runs: listing }), stderr: "" }
         : listing;
@@ -212,7 +232,7 @@ describe("mainChecked", () => {
       repo: "o/r",
       sha,
       gh,
-      sleep: (ms) => {
+      sleep: (/** @type {number} */ ms) => {
         clock += ms;
         return Promise.resolve();
       },

@@ -50,7 +50,7 @@ export async function readDumpFile(io, path) {
   if (!firstLine.startsWith(HEADER_PREFIX)) {
     throw new Error(`${path} is not a kopje dump (no header line)`);
   }
-  const header = JSON.parse(firstLine.slice(HEADER_PREFIX.length));
+  const header = /** @type {DumpFile["header"]} */ (JSON.parse(firstLine.slice(HEADER_PREFIX.length)));
   // Work on bytes: the probe may start inside a multi-byte character of the body.
   const tailStart = Math.max(newline + 1, size - TAIL_PROBE);
   const tail = await io.read(path, tailStart, size - tailStart);
@@ -72,8 +72,8 @@ export async function readDumpFile(io, path) {
   if (lineStart === -1) {
     throw new Error(`${path} has no trailer`);
   }
-  const trailer = JSON.parse(
-    decoder.decode(tail.subarray(lineStart + TRAILER_PREFIX.length, tail.length - endBytes.length)),
+  const trailer = /** @type {DumpFile["trailer"]} */ (
+    JSON.parse(decoder.decode(tail.subarray(lineStart + TRAILER_PREFIX.length, tail.length - endBytes.length)))
   );
   const bodyEnd = tailStart + lineStart;
   return { header, trailer, bodyStart: newline + 1, bodyEnd };

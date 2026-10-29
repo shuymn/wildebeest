@@ -511,7 +511,7 @@ describe("follows toward remote accounts", () => {
       const round = await claim(h.store, NOW, token);
       expect(round.deliveries).toHaveLength(1);
       const [delivery] = round.deliveries;
-      sent.push([JSON.parse(delivery?.body ?? "{}").type, delivery?.inbox ?? ""]);
+      sent.push([(JSON.parse(delivery?.body ?? "{}") as { type: string }).type, delivery?.inbox ?? ""]);
       await complete(h.store, delivery?.id ?? "", token, NOW, outcome);
     }
     expect(sent).toEqual([

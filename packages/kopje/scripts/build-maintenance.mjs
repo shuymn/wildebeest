@@ -21,7 +21,7 @@ const wrangler = join(dirname(createRequire(import.meta.url).resolve("wrangler/p
 
 export const MAINTENANCE_WORKER_LIMIT_KIB = 32;
 const MAINTENANCE_RENDER_LIMIT_KIB = 1024;
-export const MAINTENANCE_FILES = ["maintenance-worker.js", "maintenance-render.js"];
+export const MAINTENANCE_FILES = /** @type {const} */ (["maintenance-worker.js", "maintenance-render.js"]);
 
 /** @param {string} text */
 export function gzipKiB(text) {
@@ -57,7 +57,7 @@ export function moduleExports(text) {
  */
 export function buildMaintenance(outDir, { metafileDir } = {}) {
   mkdirSync(outDir, { recursive: true });
-  const sizes = {};
+  const sizes = /** @type {Record<(typeof MAINTENANCE_FILES)[number], number>} */ ({});
   for (const file of MAINTENANCE_FILES) {
     const entry = join("src", file.replace(/\.js$/, ".ts"));
     const work = mkdtempSync(join(tmpdir(), "kopje-maintenance-"));

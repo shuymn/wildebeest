@@ -1,0 +1,15 @@
+{
+  "extends": "../packages/kopje/tsconfig.base.json",
+  "compilerOptions": {
+    "target": "es2024",
+    "lib": ["es2024"],
+    "module": "nodenext",
+    "moduleResolution": "nodenext",
+    "typeRoots": ["../packages/kopje/node_modules/@types"],
+    "types": ["node"],
+    "allowJs": true,
+    "checkJs": true,
+    "noEmit": true
+  },
+  "include": ["*.mjs", "../deploy/scripts/*.mjs"]
+}

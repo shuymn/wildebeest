@@ -98,7 +98,7 @@ describe("the Access admin’s writes", () => {
       identity: ACCESS.email,
     });
     // A surrogate pair is never split: 199 units, then the pair would pass 200.
-    expect(JSON.parse(rows.at(-1)!.detail).excerpt).toBe("x".repeat(199));
+    expect((JSON.parse(rows.at(-1)!.detail) as { excerpt: string }).excerpt).toBe("x".repeat(199));
     expect(await store.adminAnnouncements(BUILD, {})).toMatchObject({
       announcements: [{ id: later.id }, { id: now.id }],
       next: null,

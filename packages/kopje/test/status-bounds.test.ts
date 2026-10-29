@@ -2203,7 +2203,8 @@ describe("status applications (RES-2, RES-3)", () => {
   });
 
   const bytes = (prefix: string, byte: number, length: number) =>
-    new Uint8Array([...new TextEncoder().encode(prefix), ...Array(length - prefix.length).fill(byte)]).buffer;
+    new Uint8Array([...new TextEncoder().encode(prefix), ...Array.from({ length: length - prefix.length }, () => byte)])
+      .buffer;
   const utf8Bytes = (value: string | ArrayBuffer) => (typeof value === "string" ? utf8Length(value) : value.byteLength);
   const SITE = "https://kopje.test/";
   const ASCII_SITE = SITE.padEnd(APP_WEBSITE_LIMIT, "u");
