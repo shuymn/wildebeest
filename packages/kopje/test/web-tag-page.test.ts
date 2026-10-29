@@ -294,12 +294,12 @@ describe("the hashtag page", () => {
     }
   });
 
-  it("reads the key posting stores for a name that normalizes differently twice", async () => {
-    // U+1100 U+0301 U+1161: normalized once (as posting stores the hashtag), U+1100 U+1161; normalized again, U+AC00.
-    // The page reads the key of one normalization, so the post is on the page its own text names.
+  it("reads the key posting stores for a name whose single pass is no fixed point", async () => {
+    // U+1100 U+0301 U+1161: one pass leaves U+1100 U+1161, the second U+AC00, the key posting stores (#1257). The page
+    // of either spelling reads that key, and names it as canonical.
     const h = await community(["alice"]);
     const name = "\u1100\u0301\u1161";
-    const key = "\u1100\u1161";
+    const key = "\uAC00";
     const status = await post(h, h.users.alice, { status: `#${name} hi` });
     expect(await sql(h.store, "SELECT name FROM status_tags WHERE status_id = ?", status.id)).toEqual([{ name: key }]);
     const response = await h.request(`/tags/${encodeURIComponent(name)}`);
