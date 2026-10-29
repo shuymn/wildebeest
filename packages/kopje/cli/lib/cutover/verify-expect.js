@@ -127,8 +127,9 @@ function languageOf(p) {
   return null;
 }
 
-// A hashtag as status_tags names it: Mastodon's HashtagNormalizer#normalize, written out here apart from Kopje's
-// (src/domain/tag-name.ts) so that verify-conversion checks the converter's names. NFKC; each code point lowercased
+// A hashtag as status_tags names it: Mastodon's HashtagNormalizer#normalize (hashtagPass) applied twice (hashtagName),
+// written out here apart from Kopje's (src/domain/tag-name.ts) so that verify-conversion checks the converter's names.
+// NFKC; each code point lowercased
 // (String#downcase has no final-sigma rule); a letter of ASCIIFolding's table replaced by its ASCII letter; and only the
 // characters Tag::HASHTAG_INVALID_CHARS_RE does not match kept: Alphabetic, decimal digits, Thai U+0E47 to U+0E4E and
 // the separators _, U+00B7, U+30FB and U+200C. So a received Hashtag's # goes with the other characters no hashtag
@@ -139,9 +140,9 @@ const FOLDED_LETTERS =
 const ASCII_LETTERS =
   "AAAAAAaaaaaaAaAaAaCcCcCcCcCcDdDdDdEEEEeeeeEeEeEeEeEeGgGgGgGgHhHhIIIIiiiiIiIiIiIiIiJjKkkLlLlLlLlLlNnNnNnNnnNnOOOOOOooooooOoOoOoRrRrRrSsSsSsSssTtTtTtUUUUuuuuUuUuUuUuUuUuWwYyyYyYZzZzZz";
 const HASHTAG_CHARACTER = /^[\p{Alphabetic}\p{Nd}\u0E47-\u0E4E_\u00B7\u30FB\u200C]$/u;
-/** @param {unknown} value */
-const hashtagName = (value) =>
-  [...text(value).normalize("NFKC")]
+/** @param {string} value */
+const hashtagPass = (value) =>
+  [...value.normalize("NFKC")]
     .flatMap((c) => [...c.toLowerCase()])
     .map((c) => {
       const at = FOLDED_LETTERS.indexOf(c);
@@ -149,6 +150,10 @@ const hashtagName = (value) =>
     })
     .filter((c) => HASHTAG_CHARACTER.test(c))
     .join("");
+// What one pass leaves can compose (U+1100 U+0301 U+1161 leaves U+1100 U+1161): the second pass composes it, and a
+// third would change nothing (test-node/tag-key-fixed-points.test.ts).
+/** @param {unknown} value */
+const hashtagName = (value) => hashtagPass(hashtagPass(text(value)));
 
 /** @param {unknown} value whether a legacy value is JSON text, as the Store requires of follows.languages */
 function isJsonText(value) {

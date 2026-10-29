@@ -24,6 +24,16 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
 
 ### Fixed
 
+- A hashtag's name is now a fixed point of its normalization: normalizing a name gives the name back. The single pass
+  could leave characters that compose (U+1100 U+0301 U+1161 left U+1100 U+1161, which a second pass makes U+AC00), so
+  a hashtag posted under one spelling could be followed, listed or searched under another and not meet. The pass is
+  now applied twice, which test-node/tag-key-fixed-points.test.ts proves enough from the runtime's Unicode tables.
+  Migration `0087_tag_key_fixed_points` renames the stored names that were not fixed points and merges the rows that
+  meet (a status's hashtags, follows, featured hashtags, trends and reviews), sending nothing; a name past its input
+  bound or not well-formed, only an imported one, stays as stored. The file is declared to keep every reference, so the
+  upgrade skips the whole-Store foreign key check: 4.3 s on the benchmark store, within the 20 s budget. Clients see
+  such a hashtag under its composed name, and a follower may keep both of two merged featured hashtags
+  ([docs/mastodon-deviations.md](docs/mastodon-deviations.md), Hashtags). `wrangler.jsonc`: unchanged.
 - `/setup`'s Access step, refused while another run holds it, no longer says the wait is at most two minutes: a
   stalled run keeps the step for its lease and the grace after it, 2.5 minutes, which the message now states.
 - A public page's pager no longer offers a newer or older page where nothing lies: a full page offered the side past

@@ -6,10 +6,23 @@ import { activeDump, admitFlags, flagRefusal, PITR_RESTORING, readFlags, rebuild
 export type Migration = {
   readonly name: string;
   readonly sql: string;
-  // 'unchanged': a reviewed claim that the file creates, drops, rebuilds or renames no table, adds no reference and
-  // removes or replaces no key. test/migration-lint.test.ts holds a declared file to statements that cannot (a guard
-  // against an author's mistake, not a proof against a hostile file: migrations are written and reviewed here) and
-  // applies it to a populated Store. Not checksummed. Without it, the upgrade checks every reference in the Store.
+  // 'unchanged': a reviewed claim that the file leaves every reference and every referenced key of the Store as it was,
+  // so the whole-Store check after it can be skipped. The Store enforces foreign keys immediately (no migration may
+  // defer them or turn them off: no PRAGMA, no DEFERRABLE), so each statement that writes rows is checked as it runs
+  // and cannot leave a violation behind. That holds because every reference's column has its parent key's declared
+  // type (test/migration-lint.test.ts, "the references of the schema a declared file runs on"): with different
+  // types, an INSERT OR REPLACE can delete a parent that a child still matches by affinity, and only the whole-Store
+  // check finds the orphan. What the check would still find is a reference that went stale without a row
+  // being written: a table created, dropped, rebuilt or renamed under existing references, a reference added over
+  // existing rows, or a key a reference names removed or replaced. A declared file does none of those, except work
+  // tables: a table it creates with no REFERENCES, that no migration names after REFERENCES (so no row refers to it,
+  // and dropping it, which deletes its rows, cascades nothing), and that it drops before it ends, so the schema after
+  // the file holds no trace of it; and an index that is not UNIQUE (no reference can name it) dropped and created again
+  // exactly as it was. test/migration-lint.test.ts holds a declared file to these statements, in a narrow dialect (a
+  // guard against an author's mistake, not a proof against a hostile file: migrations are written and reviewed here),
+  // and applies it to a populated Store, comparing the schema before and after it: no reference names a work table,
+  // none is left, and every index is as it was. Not checksummed. Without it, the upgrade checks every reference in the
+  // Store.
   readonly foreignKeys?: "unchanged";
 };
 

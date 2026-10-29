@@ -185,12 +185,14 @@ describe("cutover import of a converted legacy export", () => {
       (m) => m.url === "https://files.remote.example/m/1.mp4",
     );
     expect(clip).toMatchObject({ remote_url: "https://files.remote.example/m/1.mp4", blurhash: null });
-    // Its Hashtag and legacy's recorded names, as Kopje names them: number signs dropped.
+    // Its Hashtag and legacy's recorded names, as Kopje names them: number signs dropped, and the recorded
+    // U+1100 U+0301 U+1161, which one pass leaves as U+1100 U+1161, under its fixed point U+AC00 (#1257).
     expect(status.tags).toEqual([
       expect.objectContaining({ name: "foo" }),
       expect.objectContaining({ name: "hash" }),
       expect.objectContaining({ name: "wide" }),
       expect.objectContaining({ name: "wildebeest" }),
+      { name: "\uAC00", url: "https://kopje.test/tags/%EA%B0%80" },
     ]);
     expect(status.favourites_count).toBe(2);
     expect(status.reblogs_count).toBe(1);

@@ -150,9 +150,9 @@ document to ActivityPub clients while its status is public or unlisted; anything
 
 **Content.** Status content, earlier versions and bios go through Kopje's HTML sanitizer, so the Store holds only HTML
 it would have stored itself (HTML-1). Source text, spoilers, sensitivity, hashtags, mentions and edit history carry
-over; hashtags are named as Kopje names them (Mastodon's normalization: NFKC, lowercase, Latin letters with diacritics
-folded to ASCII, and the characters a hashtag cannot hold, such as `#`, dropped), from a `Hashtag` tag's name and a
-`note_hashtags` value alike; and a status's language is read as Kopje reads a remote object's (the primary subtag of the
+over; hashtags are named as Kopje names them (Mastodon's normalization applied twice: NFKC, lowercase, Latin letters
+with diacritics folded to ASCII, and the characters a hashtag cannot hold, such as `#`, dropped, then the same again so
+that what is left composes), from a `Hashtag` tag's name and a `note_hashtags` value alike; and a status's language is read as Kopje reads a remote object's (the primary subtag of the
 first language in `contentMap`, else `nameMap`, `summaryMap`, when it is two or three letters); remote statuses and
 actors keep the legacy JSON as `raw`, byte for byte. A lone surrogate in carried text (half of a character outside the
 Basic Multilingual Plane, as a cut string leaves it in legacy JSON) cannot be stored as UTF-8, so it becomes U+FFFD,
