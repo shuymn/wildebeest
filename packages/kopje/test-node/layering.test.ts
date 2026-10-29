@@ -1,3 +1,4 @@
+import type { Node } from "oxc-parser";
 import { describe, expect, it } from "vitest";
 
 import { guardFixtures, inventoryDiff, ownerOf, parse, resolve, sources, walk, type Source } from "./source-scan.js";
@@ -167,13 +168,27 @@ const CAPTURES = {
   "src/domain/inbox.ts removeBoost": 1,
 };
 
+// Whether `callee` names streamDelete: the name itself, or a static member (`m.streamDelete`, `m["streamDelete"]`).
+function namesCapture(callee: Node): boolean {
+  if (callee.type === "Identifier") {
+    return callee.name === "streamDelete";
+  }
+  if (callee.type !== "MemberExpression") {
+    return false;
+  }
+  const { property } = callee;
+  return callee.computed
+    ? property.type === "Literal" && property.value === "streamDelete"
+    : property.type === "Identifier" && property.name === "streamDelete";
+}
+
 function captureProblems(files: readonly Source[]): string[] {
   const found: string[] = [];
   const owners = new Map<string, string>();
   for (const source of files) {
     const { program, code } = parse(source);
     walk(program, (node) => {
-      if (node.type === "CallExpression" && node.callee.type === "Identifier" && node.callee.name === "streamDelete") {
+      if (node.type === "CallExpression" && namesCapture(node.callee)) {
         const owner = ownerOf(program, node.start);
         const key = `${source.path} ${owner?.name ?? "(top level)"}`;
         found.push(key);
@@ -205,6 +220,14 @@ describe("the streaming delete capture sites", () => {
         "a capture under a budget": [
           "function extra(budget: JobBudget, db: Db): void {\n\tstreamDelete(db, 'x', 0)\n}",
           "src/domain/probe.ts extra runs under a budget",
+        ],
+        "a capture through a namespace import": [
+          "import * as streaming from './streaming'\nfunction extra(db: Db): void {\n\tstreaming.streamDelete(db, 'x', 0)\n}",
+          "src/domain/probe.ts extra has 1, expected 0",
+        ],
+        "a capture through a computed member": [
+          "import * as streaming from './streaming'\nfunction extra(db: Db): void {\n\tstreaming['streamDelete'](db, 'x', 0)\n}",
+          "src/domain/probe.ts extra has 1, expected 0",
         ],
       },
       passed: { "a capture named in a comment": "// streamDelete(db, id, now) runs above.\nf()" },

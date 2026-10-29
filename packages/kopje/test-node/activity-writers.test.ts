@@ -9,8 +9,10 @@ import { guardFixtures, inventoryDiff, ownerOf, parse, sources, walk, type Sourc
 // function that inserts one, so neither counts. The writers below count, as the runtime tests show: a post and a boost
 // (test/instance-activity.test.ts, "instance activity: what counts"), a registration and its first login
 // (test/setup.test.ts, "records the account's registration and its first login with the bootstrap" and the SETUP-3
-// rollbacks; test/account-invitations.test.ts, an invited account's). This inventory fails on any other writer, which
-// then needs a witness of its own.
+// rollbacks; test/account-invitations.test.ts, an invited account's). This inventory fails on any other function that
+// inserts a local account, or a status in the same function that calls allocateLocalId; such a writer then needs a
+// witness of its own. A status insert whose local id comes from another function (a caller, or around a savepoint
+// callback) is not seen.
 
 const SOURCES = sources("src");
 

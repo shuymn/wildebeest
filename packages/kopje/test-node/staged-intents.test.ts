@@ -14,15 +14,18 @@ const SOURCES = sources("src");
 
 const EXPECTED = { "src/domain/deliveries.ts dropSettledActivity": 1 };
 
-// A DELETE of outbound_activities in code (comments blanked), the table quoted or not, across line breaks.
+// A DELETE of outbound_activities in a string or template literal's decoded text (escapes resolved, an interpolation
+// read as a space), the table quoted or not, across line breaks; each counted at its literal's owner.
 const INTENT_DELETE = /\bDELETE\s+FROM\s+["`[]?outbound_activities\b/gi;
 
 function sites(all: readonly Source[]): string[] {
   return all.flatMap((source) => {
-    const { program, code } = parse(source);
-    return [...code.matchAll(INTENT_DELETE)].map(
-      (m) => `${source.path} ${ownerOf(program, m.index)?.name ?? "(top level)"}`,
-    );
+    const { program, literals } = parse(source);
+    return literals.flatMap((literal) => {
+      const text = literal.parts.map((part) => ("text" in part ? part.text : " ")).join("");
+      const owner = `${source.path} ${ownerOf(program, literal.node.start)?.name ?? "(top level)"}`;
+      return [...text.matchAll(INTENT_DELETE)].map(() => owner);
+    });
   });
 }
 
@@ -44,6 +47,14 @@ describe("the deletes of an outbound intent", () => {
         "a newline between FROM and the table": [
           'const drop = (db) => db.run(`DELETE FROM\n\t\t"outbound_activities" WHERE id = ?`, id)',
           "src/domain/probe.ts drop has 1, expected 0",
+        ],
+        "an escaped quote around the table": [
+          'const quoted = (db) => db.run("DELETE FROM \\"outbound_activities\\" WHERE id = ?", id)',
+          "src/domain/probe.ts quoted has 1, expected 0",
+        ],
+        "an escaped newline before the table": [
+          'const escaped = (db) => db.run("DELETE FROM\\noutbound_activities WHERE id = ?", id)',
+          "src/domain/probe.ts escaped has 1, expected 0",
         ],
       },
       passed: { "a delete named in a comment": "// DELETE FROM outbound_activities\nf()" },
