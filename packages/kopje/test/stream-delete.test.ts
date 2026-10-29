@@ -280,6 +280,29 @@ describe("R32: a status's boosts in its capture", () => {
     expect(row!.lists.length + row!.boosts.length).toBeLessThanOrEqual(200);
   });
 
+  it("captures a local boost removed by unreblog, by its own id, before it is hidden", async () => {
+    const t = await setup();
+    await listen(t, ALICE);
+    const status = await localStatus(t, { status: "boosted", visibility: "public" }, "dave");
+    const reblog = await t.request(`/api/v1/statuses/${status.id}/reblog`, {
+      method: "POST",
+      headers: { authorization: `Bearer ${t.tokens.alice}` },
+    });
+    expect(reblog.status).toBe(200);
+    const { id: boostId } = await reblog.json<{ id: string }>();
+    const unreblog = await t.request(`/api/v1/statuses/${status.id}/unreblog`, {
+      method: "POST",
+      headers: { authorization: `Bearer ${t.tokens.alice}` },
+    });
+    expect(unreblog.status).toBe(200);
+    expect(await unreblog.json()).toMatchObject({ id: status.id, reblogged: false });
+    // unreblog hides the boost and records its delete job; the API harness only enqueues the job.
+    expect(await sql(t.store, "SELECT withdrawn, visibility FROM statuses WHERE id = ?", boostId)).toEqual([
+      { withdrawn: 1, visibility: "direct" },
+    ]);
+    expect(await captures(t)).toEqual([{ subject: boostId, account_id: ALICE, boosts: [] }]);
+  });
+
   it("captures nothing while nobody listening may view the status", async () => {
     const t = await setup();
     const status = await localStatus(t, { status: "unheard", visibility: "public" }, "dave");

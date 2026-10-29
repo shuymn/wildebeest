@@ -1264,6 +1264,69 @@ describe("a staged retraction across calls (RES-6)", () => {
     expect(last.done).toBe(true);
     expect(await t.left()).toBe(0);
   }, 120_000);
+
+  it("keeps its intent while every chunk it has written is delivered, and writes the rest", async () => {
+    const t = await prepared(EMPTY, (sql) => followers(sql, 12), ONLY_FOLLOWERS);
+    expect(await t.until(STAGE_MIN_ROWS, async () => (await t.staging())?.phase === "emit")).toBe(false);
+    const counts = async () =>
+      (
+        await sql<{ targets: number; deliveries: number; reach: number; intent: number; staged: number }>(
+          t.store,
+          `SELECT (SELECT count(*) FROM outbound_targets WHERE activity_id = ?1) AS targets,
+						(SELECT count(*) FROM deliveries WHERE activity_id = ?1) AS deliveries,
+						(SELECT count(*) FROM retraction_reach) AS reach,
+						(SELECT count(*) FROM outbound_activities WHERE id = ?1) AS intent,
+						(SELECT count(*) FROM outbound_activities WHERE id = ?1 AND staged IS NOT NULL) AS staged`,
+          t.intent,
+        )
+      )[0]!;
+    // A partial write-out: a chunk written, reach rows left for later calls.
+    expect((await t.call(STAGE_MIN_ROWS)).done).toBe(false);
+    expect((await t.staging())?.phase).toBe("emit");
+    const partial = await counts();
+    expect(partial.targets).toBeGreaterThan(0);
+    expect(partial.reach).toBeGreaterThan(0);
+    // Claims and delivers every row of the intent until it holds none: each completion drops its row and asks
+    // dropSettledActivity to delete the intent, which only its staged IS NULL refuses.
+    const delivered: string[] = [];
+    const drain = async () => {
+      for (let round = 0; round < 50; round++) {
+        const left = await counts();
+        if (left.targets === 0 && left.deliveries === 0) {
+          return;
+        }
+        const claim = await t.store.claimDeliveries(BUILD, { now: NOW, leaseToken: `drain-${round}` });
+        for (const d of claim.deliveries) {
+          const [row] = await sql<{ activity_id: string; inbox_url: string }>(
+            t.store,
+            "SELECT CAST(activity_id AS TEXT) AS activity_id, inbox_url FROM deliveries WHERE id = CAST(? AS INTEGER)",
+            d.id,
+          );
+          expect(row?.activity_id).toBe(t.intent);
+          const completion = await t.store.completeDelivery(BUILD, {
+            id: d.id,
+            leaseToken: `drain-${round}`,
+            now: NOW,
+            outcome: { kind: "delivered", status: 202 },
+          });
+          expect(completion.status).toBe("delivered");
+          delivered.push(row!.inbox_url);
+        }
+      }
+      throw new Error("the deliveries did not drain");
+    };
+    await drain();
+    expect(delivered.length).toBeGreaterThan(0);
+    expect(await counts()).toMatchObject({ targets: 0, deliveries: 0, intent: 1, staged: 1 });
+    expect((await counts()).reach).toBeGreaterThan(0);
+    // The rest is written, and once endStaging clears staged the same statement deletes the settled intent.
+    expect(await t.finish()).toBe(true);
+    await drain();
+    expect(delivered.toSorted()).toEqual(inboxesOf(t.oracle).toSorted());
+    expect(new Set(delivered).size).toBe(12);
+    expect(await t.left()).toBe(0);
+    expect((await counts()).intent).toBe(0);
+  }, 120_000);
 });
 
 // The staging the intent's staged names, set to `phase` with the staged rows `rows` inserts (?1: its id), as an import

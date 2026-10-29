@@ -365,6 +365,18 @@ describe("a failing job is isolated, backs off and parks", () => {
   });
 });
 
+// R32: alice listening on `user` (a registry row; no socket is needed for the capture), and the delete events
+// captured with the accounts each names.
+const listen = (store: StoreStub) =>
+  sql(store, "INSERT INTO stream_subscriptions (account_id, stream_key, sockets) VALUES (?, 'user', 1)", ALICE);
+
+const captures = (store: StoreStub) =>
+  sql<{ subject: string; account_id: string }>(
+    store,
+    `SELECT e.subject, v.account_id FROM stream_events e JOIN stream_delete_viewers v ON v.event_id = e.id
+		WHERE e.kind = 'delete' ORDER BY e.id, v.account_id`,
+  );
+
 describe("a request’s first batch", () => {
   // bob's public status with a hashtag and a mention of alice, stored through his Create.
   async function tagged() {
@@ -385,6 +397,7 @@ describe("a request’s first batch", () => {
 
   it("rolls a failing first batch back after its writes, and commits the Delete’s retraction and hide (202)", async () => {
     const { t, bob, note, id } = await tagged();
+    await listen(t.store);
     expect(await sql(t.store, "SELECT account_id FROM status_mentions WHERE status_id = ?", id)).toEqual([
       { account_id: ALICE },
     ]);
@@ -401,8 +414,10 @@ describe("a request’s first batch", () => {
     expect(await sql(t.store, "SELECT account_id FROM status_mentions WHERE status_id = ?", id)).toEqual([
       { account_id: ALICE },
     ]);
-    // The request's own writes committed: the retraction, the hide, and the job with its attempt.
+    // The request's own writes committed: the retraction, the streaming delete's capture (R32), the hide, and the job
+    // with its attempt.
     expect(await sql(t.store, "SELECT 1 AS x FROM inbound_retractions WHERE target_uri = ?", note.id)).not.toEqual([]);
+    expect(await captures(t.store)).toEqual([{ subject: id, account_id: ALICE }]);
     expect(await sql(t.store, "SELECT withdrawn, visibility, content FROM statuses WHERE id = ?", id)).toEqual([
       { withdrawn: 1, visibility: "direct", content: "" },
     ]);
@@ -1093,6 +1108,30 @@ describe("the hide of a shown status before a deletion’s batch", () => {
     expect(written).toBeLessThanOrEqual(JOB_BATCHES_PER_RUN * PURGE_BATCH);
     expect(written).toBeGreaterThan(JOB_BATCHES_PER_RUN * PURGE_BATCH - 10);
   }, 60_000);
+
+  it("captures no streaming delete for a redelivered Delete whose job exists, and hides its status (R32)", async () => {
+    const t = await setup();
+    const bob = await mastodonActor(t.web, "bob");
+    await followed(t, bob);
+    await listen(t.store);
+    const notes = [mastodonNote(bob), mastodonNote(bob)];
+    const ids: string[] = [];
+    for (const note of notes) {
+      expect(await t.post(bob, create(bob, note))).toBe(202);
+      ids.push((await statusRow(t.store, note.id))!.id);
+    }
+    // The first status's delete job exists while the status is still shown (an older build's job, or an import).
+    await insertJob(t.store, { kind: "delete", key: ids[0]!, actor: bob.uri, at: NOW });
+    for (const note of notes) {
+      expect(await t.post(bob, remove(bob, note.id))).toBe(202);
+    }
+    // Each Delete reached its status (each is hidden, or removed whole by its first batch); only the one that
+    // created its job captured, though the listener alice could view both.
+    for (const id of ids) {
+      expect(await visibility(t.store, id)).not.toEqual([{ withdrawn: 0, visibility: "public" }]);
+    }
+    expect(await captures(t.store)).toEqual([{ subject: ids[1], account_id: ALICE }]);
+  });
 
   it("leaves an imported parked job’s status shown until a delivery or retry-all reaches it", async () => {
     const t = await setup();
