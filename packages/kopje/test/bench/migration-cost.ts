@@ -139,6 +139,10 @@ const SHAPE = {
   cards: 200_000,
   pendingCards: 10_000,
   featuredTags: 100_000,
+  tagNames: 20_000,
+  tagRows: 200_000,
+  skewedRows: 100_000,
+  skewedFeatures: 100_000,
   inboundJobs: 10_000,
   revocations: 10_000,
   familyJobs: 1_000,
@@ -179,6 +183,13 @@ it("applies the migration to the benchmark store within the budget", async () =>
   const inboundJobs = Math.min(Math.round(SHAPE.inboundJobs * scale), statuses);
   const revocations = Math.round(SHAPE.revocations * scale);
   const familyJobs = Math.min(Math.round(SHAPE.familyJobs * scale), accounts - SHAPE.local);
+  const hasTagKeys = at > MIGRATIONS.findIndex((m) => m.name === "0057_trends");
+  const tagRows = Math.min(Math.round(SHAPE.tagRows * scale), statuses);
+  const skewedRows = Math.min(Math.round(SHAPE.skewedRows * scale), Math.max(statuses - tagRows, 0));
+  const skewedFeatures = Math.max(
+    0,
+    Math.min(Math.round(SHAPE.skewedFeatures * scale), 2 * (accounts - SHAPE.local - 20_000)),
+  );
 
   const store = freshStore();
   // One call: between calls, the Store's own alarm would apply every migration.
@@ -574,6 +585,88 @@ it("applies the migration to the benchmark store within the budget", async () =>
         MAX_FEATURED_TAGS,
       );
     }
+    // Hashtag keys a single pass left (from 0057_trends on, when every table of a key exists; 0087 repairs them):
+    // SHAPE.tagNames non-ASCII names, a status_tags row of each on SHAPE.tagRows statuses in turn; a key of a large
+    // range (SHAPE.skewedRows statuses, in either spelling of 가) that every local account and SHAPE.skewedFeatures / 2
+    // remote accounts feature and every local account follows in both spellings; trend_tags at its cap and
+    // tag_trend_reviews at theirs, each name in both spellings.
+    if (hasTagKeys) {
+      // Of the names: stable Hangul syllables (no trigger), jamo L V T, Greek letters with U+0345 (α, η and ω
+      // compose), Hebrew letters with their points out of class order, and one name at the input bound and one past it.
+      run(`CREATE TABLE bench_tag_names (n INTEGER PRIMARY KEY, name TEXT NOT NULL)`);
+      run(
+        `WITH RECURSIVE n(i) AS (SELECT 0 UNION ALL SELECT i + 1 FROM n WHERE i < ?1 - 3)
+				INSERT INTO bench_tag_names (n, name)
+				SELECT i, CASE
+					WHEN i < ?1 / 2 THEN char(0xAC00 + i % 11172, 0xAC00 + i / 11172)
+					WHEN i < ?1 / 2 + 1000 THEN char(0x1100 + (i - ?1 / 2) % 19, 0x1161 + (i - ?1 / 2) / 19 % 21,
+						0x11A8 + (i - ?1 / 2) / 399)
+					WHEN i < ?1 * 3 / 4 THEN char(0x3B1 + i % 25, 0x345) || i
+					ELSE char(0x5D0 + i % 27, 0x5BC, 0x5B0) || i END
+				FROM n`,
+        SHAPE.tagNames,
+      );
+      run(
+        `INSERT INTO bench_tag_names (n, name) VALUES
+					(?1 - 2, replace(hex(zeroblob(149999)), '00', char(0x627)) || char(0x653)),
+					(?1 - 1, replace(hex(zeroblob(150000)), '00', char(0x627)) || char(0x653))`,
+        SHAPE.tagNames,
+      );
+      for (let start = 0; start < tagRows; start += batch) {
+        run(
+          `WITH RECURSIVE n(i) AS (SELECT ?1 UNION ALL SELECT i + 1 FROM n WHERE i < ?2 - 1)
+					INSERT INTO status_tags (status_id, name, public)
+					SELECT CAST(500000000000000000 + i AS TEXT), (SELECT name FROM bench_tag_names WHERE n = i % ?3), 1 FROM n
+					WHERE ?2 > ?1`,
+          start,
+          Math.min(start + batch, tagRows),
+          SHAPE.tagNames,
+        );
+      }
+      run("DROP TABLE bench_tag_names");
+      run(
+        `WITH RECURSIVE n(i) AS (SELECT ?1 UNION ALL SELECT i + 1 FROM n WHERE i < ?2 - 1)
+				INSERT INTO status_tags (status_id, name, public)
+				SELECT CAST(500000000000000000 + i AS TEXT), CASE WHEN i % 2 = 0 THEN char(0x1100, 0x1161) ELSE char(0xAC00) END, 1
+				FROM n WHERE ?2 > ?1`,
+        tagRows,
+        tagRows + skewedRows,
+      );
+      run(
+        `INSERT INTO featured_tags (id, account_id, name, display_name)
+				SELECT CAST(810000000000000000 + 2 * CAST(substr(account_id, 2) AS INTEGER) AS TEXT), account_id,
+					char(0x1100, 0x1161), char(0x1100, 0x1161) FROM local_accounts
+				UNION ALL SELECT CAST(810000000000000001 + 2 * CAST(substr(account_id, 2) AS INTEGER) AS TEXT), account_id,
+					char(0xAC00), char(0xAC00) FROM local_accounts`,
+      );
+      run(
+        `WITH RECURSIVE n(i) AS (SELECT 0 UNION ALL SELECT i + 1 FROM n WHERE i < ?1 - 1)
+				INSERT INTO featured_tags (id, account_id, name, display_name)
+				SELECT CAST(820000000000000000 + i AS TEXT), CAST(100000000000000000 + 20000 + i / 2 AS TEXT),
+					CASE WHEN i % 2 = 0 THEN char(0x1100, 0x1161) ELSE char(0xAC00) END,
+					CASE WHEN i % 2 = 0 THEN char(0x1100, 0x1161) ELSE char(0xAC00) END
+				FROM n WHERE ?1 > 0`,
+        skewedFeatures,
+      );
+      run(
+        `INSERT INTO tag_follows (account_id, name)
+				SELECT account_id, char(0x1100, 0x1161) FROM local_accounts UNION ALL SELECT account_id, char(0xAC00) FROM local_accounts`,
+      );
+      // Each name as its jamo L V and as the syllable they compose, with its number: MAX_TREND_TAGS / 2 trends and
+      // MAX_TREND_REVIEWS / 2 reviews, each in both spellings.
+      for (const [table, columns, values, rows] of [
+        ["trend_tags", "name, score, max_score, max_score_at", `1, 2, '${now}'`, 250],
+        ["tag_trend_reviews", "name, trendable, reviewed_at", `i % 2, '${now}'`, 10_000],
+      ] as const) {
+        run(
+          `WITH RECURSIVE n(i) AS (SELECT 0 UNION ALL SELECT i + 1 FROM n WHERE i < ?1 / 2 - 1)
+					INSERT INTO ${table} (${columns})
+					SELECT char(0x1100 + i % 19, 0x1161 + i / 19 % 21) || i, ${values} FROM n
+					UNION ALL SELECT char(0xAC00 + (i % 19 * 21 + i / 19 % 21) * 28) || i, ${values} FROM n`,
+          rows,
+        );
+      }
+    }
     // Inbound jobs: the deletion of status i, by its author, every other one done (kept JOB_RETENTION_MS).
     run(
       `WITH RECURSIVE n(i) AS (SELECT 0 UNION ALL SELECT i + 1 FROM n WHERE i < ?1 - 1)
@@ -702,6 +795,8 @@ it("applies the migration to the benchmark store within the budget", async () =>
       );
     }
     const count = (table: string) => sql.exec<{ n: number }>(`SELECT count(*) AS n FROM ${table}`).one().n;
+    // The rows under the jamo spelling of 가, which 0087_tag_key_fixed_points renames.
+    const jamoKeys = () => count("status_tags INDEXED BY status_tags_name WHERE name = char(0x1100, 0x1161)");
     const seeded = {
       accounts: count("accounts"),
       local: count("local_accounts"),
@@ -736,6 +831,7 @@ it("applies the migration to the benchmark store within the budget", async () =>
         count("notification_dismissals"),
       ],
       journal: fullJournal ? count("stream_events") : 0,
+      jamoKeys: jamoKeys(),
     };
     expect(sql.exec("SELECT count(*) AS n FROM kopje_migrations").one().n).toBe(at);
 
@@ -755,8 +851,9 @@ it("applies the migration to the benchmark store within the budget", async () =>
       testKernel(state, migrations, { log: (entry) => logs.push(entry) }).upgrade(),
     );
     const foreignKeyCheck = logs.find((entry) => entry.event === "kopje.store.upgrade.start")?.foreignKeyCheck;
+    const jamoLeft = jamoKeys();
     if (foreignKeyCheck !== "skipped") {
-      return { seeded, measured: { result, ms, foreignKeyCheck, retryEstimateMs: ms } };
+      return { seeded, measured: { result, ms, foreignKeyCheck, retryEstimateMs: ms, jamoLeft } };
     }
     // A marker-bearing upgrade after the files: the marker written as the kernel writes it before its first file, then
     // the retry on a fresh kernel, which finds nothing pending and verifies the whole Store.
@@ -774,14 +871,16 @@ it("applies the migration to the benchmark store within the budget", async () =>
       expect.objectContaining({ event: "kopje.store.upgrade.start", foreignKeyCheck: "store" }),
     );
     await state.storage.deleteAlarm();
-    return { seeded, measured: { result, ms, foreignKeyCheck, retryEstimateMs: ms + resumedMs } };
+    return { seeded, measured: { result, ms, foreignKeyCheck, retryEstimateMs: ms + resumedMs, jamoLeft } };
   });
   expect(seeded).toMatchObject({ accounts, local: SHAPE.local, statuses, notifications, reports, inboundJobs });
   if (at > MIGRATIONS.findIndex((migration) => migration.name === "0067_status_cards")) {
     expect(seeded).toMatchObject({ cards, pendingCards });
   }
   if (at > MIGRATIONS.findIndex((migration) => migration.name === "0025_remote_collections")) {
-    expect(seeded).toMatchObject({ featuredTags });
+    expect(seeded).toMatchObject({
+      featuredTags: featuredTags + (hasTagKeys ? 2 * SHAPE.local + skewedFeatures : 0),
+    });
   }
   if (at > MIGRATIONS.findIndex((migration) => migration.name === "0033_quotes")) {
     expect(seeded).toMatchObject({ revocations });
@@ -790,6 +889,10 @@ it("applies the migration to the benchmark store within the budget", async () =>
     expect(seeded).toMatchObject({ familyJobs: [familyJobs, familyJobs, SHAPE.local, familyJobs] });
   }
   expect(measured.result).toMatchObject({ ok: true, applied });
+  // The hashtag keys were there to repair, and the repair ran.
+  if (hasTagKeys && applied.includes("0087_tag_key_fixed_points") && skewedRows > 0) {
+    expect([seeded.jamoKeys > 0, measured.jamoLeft]).toEqual([true, 0]);
+  }
   const { ms, foreignKeyCheck, retryEstimateMs } = measured;
   console.log(JSON.stringify({ migrations: applied, scale, seeded, ms, budgetMs, foreignKeyCheck, retryEstimateMs }));
   if (scale >= 1 && foreignKeyCheck === "skipped") {

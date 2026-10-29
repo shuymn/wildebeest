@@ -1,6 +1,8 @@
 import { runDurableObjectAlarm, runInDurableObject } from "cloudflare:test";
+import fc from "fast-check";
 import { describe, expect, it, vi } from "vitest";
 
+import { STATUSES_ID_INDEX } from "../src/db/indexes";
 import { MIGRATIONS } from "../src/db/migrations";
 import { Db } from "../src/db/sql";
 import { DISTRIBUTABLE_SQL, REACHES_FOLLOWERS_SQL, REQUIRES_MENTION_SQL } from "../src/domain/audience";
@@ -12,8 +14,10 @@ import { runNotificationRequestJobs } from "../src/domain/notification-requests"
 import { readOperation, sessionOperation, writeOperation } from "../src/domain/operation";
 import { storeRemoteStatus } from "../src/domain/remote-statuses";
 import { actOnReport, fileRemoteReports, getAdminReport } from "../src/domain/reports";
+import { MAX_TAG_LENGTH, TAG_NAME_BYTES } from "../src/domain/status-bounds";
+import { MAX_RAW_LENGTH } from "../src/domain/status-text";
 import { moderationRound, runModerationJobs } from "../src/domain/suspension";
-import { normalizeTag } from "../src/domain/tag-name";
+import { normalizeOnce, normalizeTag } from "../src/domain/tag-name";
 import { parseRemoteStatus } from "../src/federation/remote-status";
 import {
   EMOJI_EDGE_LIMIT,
@@ -124,6 +128,7 @@ import {
   textSql,
   valuesOf,
 } from "./stored-bounds-fixtures";
+import { deriveTagKeyTables, seconds } from "./tag-key-tables";
 
 // The shipped migrations, in order; test-only files are named after them (9999_*).
 const NAMES = MIGRATIONS.map((m) => m.name);
@@ -10606,4 +10611,603 @@ describe("0086_authorized_apps", () => {
       expect(sql.exec("SELECT authorized FROM oauth_clients").one()).toEqual({ authorized: 0 });
     });
   });
+});
+
+describe("0087_tag_key_fixed_points", () => {
+  const NAME = "0087_tag_key_fixed_points";
+  const at = NAMES.indexOf(NAME);
+  const SQL = MIGRATIONS[at]?.sql ?? "";
+  const u = (...cps: number[]) => String.fromCodePoint(...cps);
+  const [ALICE, BOB, CAROL] = ["100000000000000001", "100000000000000002", "100000000000000003"];
+  // 가 spelled as its jamo (the single pass's key of U+1100 U+0301 U+1161) and composed; 각 as L V T and LV T.
+  const [J, G, JT, GT, K] = [u(0x1100, 0x1161), u(0xac00), u(0x1100, 0x1161, 0x11a8), u(0xac00, 0x11a8), u(0xac01)];
+  // α U+0345 (the single pass's key of α - U+0345) and ᾳ.
+  const [A1, A2] = [u(0x3b1, 0x345), u(0x1fb3)];
+
+  function accounts(sql: SqlStorage): void {
+    for (const [id, name, domain] of [
+      [ALICE, "alice", null],
+      [BOB, "bob", null],
+      [CAROL, "carol", "remote.test"],
+    ] as const) {
+      sql.exec(
+        "INSERT INTO accounts (id, uri, username, domain) VALUES (?, 'https://' || coalesce(?2, 'kopje.test') || '/u/' || ?3, ?3, ?2)",
+        id,
+        domain,
+        name,
+      );
+      if (domain === null) {
+        sql.exec(
+          "INSERT INTO local_accounts (account_id, email, privkey, privkey_salt, pubkey) VALUES (?, ? || '@example.com', X'00', X'00', 'k')",
+          id,
+          name,
+        );
+      }
+    }
+  }
+
+  function status(sql: SqlStorage, n: number, account: string, visibility: string, tags: string[]): string {
+    const id = String(200000000000000000n + BigInt(n));
+    sql.exec(
+      "INSERT INTO statuses (id, uri, account_id, visibility, published_at) VALUES (?, ?, ?, ?, ?)",
+      id,
+      `https://kopje.test/ap/o/${n}`,
+      account,
+      visibility,
+      `2026-10-01T00:${String(n).padStart(2, "0")}:00.000Z`,
+    );
+    for (const tag of tags) {
+      sql.exec(
+        "INSERT INTO status_tags (status_id, name, public) VALUES (?, ?, ?)",
+        id,
+        tag,
+        visibility === "public" ? 1 : 0,
+      );
+    }
+    return id;
+  }
+
+  const hexOf = (text: string) =>
+    [...new TextEncoder().encode(text)].map((b) => b.toString(16).toUpperCase().padStart(2, "0")).join("");
+
+  it("renames every table's keys to their fixed points and merges what meets, sending nothing", async () => {
+    expect(at).toBeGreaterThan(-1);
+    const store = freshStore();
+    await runInDurableObject(store, async (_instance, state) => {
+      const sql = state.storage.sql;
+      expect(await kernel(state, MIGRATIONS.slice(0, at)).upgrade()).toMatchObject({ ok: true });
+      accounts(sql);
+      const s1 = status(sql, 1, ALICE, "public", [J, G]);
+      const s2 = status(sql, 2, ALICE, "unlisted", [J]);
+      const s3 = status(sql, 3, ALICE, "private", [G]);
+      const s4 = status(sql, 4, BOB, "public", [JT]);
+      const s5 = status(sql, 5, BOB, "public", [GT]);
+      const s6 = status(sql, 6, ALICE, "public", [A1]);
+      const s7 = status(sql, 7, CAROL, "public", [J]);
+      // Names the repair leaves: at the input bound (150,000 code points and 300,000 bytes at once) it is repaired;
+      // just past the code points (150,001 of 150,005 bytes), just past the bytes (100,001 of 300,003), malformed
+      // UTF-8, a NUL, ASCII only, a character no key holds (A), and a BLOB stay as stored.
+      const atBound = `${u(0x627).repeat(149_999)}${u(0x653)}`;
+      const pastLength = `${"a".repeat(149_999)}${J}`;
+      const pastBytes = `${u(0x1100).repeat(100_000)}${u(0x1161)}`;
+      expect([[...atBound].length, new TextEncoder().encode(atBound).length]).toEqual([150_000, 300_000]);
+      expect([[...pastLength].length, [...pastBytes].length]).toEqual([150_001, 100_001]);
+      expect(new TextEncoder().encode(pastBytes).length).toBe(300_003);
+      const s8 = status(sql, 8, ALICE, "public", [atBound, pastLength, pastBytes, "abc", `A${J}`]);
+      sql.exec(
+        `INSERT INTO status_tags (status_id, name, public) VALUES (?1, CAST(x'E18480E185A1FF' AS TEXT), 1),
+					(?1, char(0x1100, 0, 0x1161), 1), (?1, x'E18480E185A1', 1)`,
+        s8,
+      );
+      const excluded = sql
+        .exec<{ name: string }>(
+          "SELECT hex(name) AS name FROM status_tags WHERE status_id = ? AND name <> ?",
+          s8,
+          atBound,
+        )
+        .toArray()
+        .map((row) => row.name)
+        .toSorted();
+      expect(excluded).toHaveLength(7);
+      // alice followed the jamo spelling first, bob the composed one; alice and bob each 각 in some spelling.
+      for (const [account, name] of [
+        [ALICE, J],
+        [ALICE, G],
+        [BOB, G],
+        [BOB, J],
+        [ALICE, JT],
+        [ALICE, GT],
+        [BOB, GT],
+      ] as const) {
+        sql.exec("INSERT INTO tag_follows (account_id, name) VALUES (?, ?)", account, name);
+      }
+      // Featured: alice the jamo spelling first, bob the composed one first, carol (remote) both; alice ᾳ, which only
+      // receives a moved status. The counts are wrong on purpose: the recount sets the local ones.
+      const feature = (id: string, account: string, name: string, display: string) =>
+        sql.exec(
+          `INSERT INTO featured_tags (id, account_id, name, display_name, statuses_count, last_status_at)
+					VALUES (?, ?, ?, ?, 9, '2020-01-01T00:00:00.000Z')`,
+          `7000000000000000${id}`,
+          account,
+          name,
+          display,
+        );
+      feature("01", ALICE, J, `${u(0x1100)}${u(0x301)}${u(0x1161)}`);
+      feature("02", ALICE, G, G);
+      feature("03", BOB, G, G);
+      feature("04", BOB, J, J);
+      feature("05", ALICE, A2, A2);
+      feature("06", CAROL, J, J);
+      feature("07", CAROL, G, G);
+      // trend_tags at its cap of 250, two spellings with equal peaks; tag_trend_reviews at its cap of 10,000, two
+      // spellings decided at the same time, two at different times.
+      sql.exec(
+        `WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < 247)
+				INSERT INTO trend_tags (name, score, max_score, max_score_at)
+				SELECT printf('f%04d', i), 1, 1, '2026-10-01T00:00:00.000Z' FROM n`,
+      );
+      for (const [name, score, max, time] of [
+        [J, 2, 5, "2026-10-01T00:00:00.000Z"],
+        [G, 3, 5, "2026-10-02T00:00:00.000Z"],
+        [JT, 1, 4, "2026-10-03T00:00:00.000Z"],
+      ] as const) {
+        sql.exec(
+          "INSERT INTO trend_tags (name, score, max_score, max_score_at) VALUES (?, ?, ?, ?)",
+          name,
+          score,
+          max,
+          time,
+        );
+      }
+      sql.exec(
+        `WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < 9996)
+				INSERT INTO tag_trend_reviews (name, trendable, reviewed_at)
+				SELECT printf('r%05d', i), 1, '2026-10-01T00:00:00.000Z' FROM n`,
+      );
+      for (const [name, trendable, time] of [
+        [J, 1, "2026-10-01T00:00:00.000Z"],
+        [G, 0, "2026-10-01T00:00:00.000Z"],
+        [JT, 0, "2026-10-01T00:00:00.000Z"],
+        [GT, 1, "2026-10-02T00:00:00.000Z"],
+      ] as const) {
+        sql.exec(
+          "INSERT INTO tag_trend_reviews (name, trendable, reviewed_at) VALUES (?, ?, ?)",
+          name,
+          trendable,
+          time,
+        );
+      }
+      expect(sql.exec("SELECT count(*) AS n FROM trend_tags").one().n).toBe(MAX_TREND_TAGS);
+      expect(sql.exec("SELECT count(*) AS n FROM tag_trend_reviews").one().n).toBe(MAX_TREND_REVIEWS);
+
+      expect(await kernel(state, MIGRATIONS.slice(0, at + 1)).upgrade()).toMatchObject({ ok: true, applied: [NAME] });
+
+      const tagged = sql
+        .exec<{ status_id: string; name: string; public: number }>(
+          "SELECT status_id, name, public FROM status_tags WHERE status_id <> ? ORDER BY status_id, name",
+          s8,
+        )
+        .toArray();
+      expect(tagged).toEqual([
+        { status_id: s1, name: G, public: 1 },
+        { status_id: s2, name: G, public: 0 },
+        { status_id: s3, name: G, public: 0 },
+        { status_id: s4, name: K, public: 1 },
+        { status_id: s5, name: K, public: 1 },
+        { status_id: s6, name: A2, public: 1 },
+        { status_id: s7, name: G, public: 1 },
+      ]);
+      const left = sql
+        .exec<{ name: string }>("SELECT hex(name) AS name FROM status_tags WHERE status_id = ?", s8)
+        .toArray()
+        .map((row) => row.name);
+      expect(left.toSorted()).toEqual([...excluded, hexOf(`${u(0x627).repeat(149_998)}${u(0x622)}`)].toSorted());
+      expect(sql.exec("SELECT id, account_id, name FROM tag_follows ORDER BY id").toArray()).toEqual([
+        { id: 1, account_id: ALICE, name: G },
+        { id: 3, account_id: BOB, name: G },
+        { id: 5, account_id: ALICE, name: K },
+        { id: 7, account_id: BOB, name: K },
+      ]);
+      expect(
+        sql
+          .exec(
+            "SELECT id, account_id, name, display_name, statuses_count, last_status_at FROM featured_tags ORDER BY id",
+          )
+          .toArray(),
+      ).toEqual([
+        // alice's public and unlisted originals with 가, the newest by id s2.
+        {
+          id: "700000000000000001",
+          account_id: ALICE,
+          name: G,
+          display_name: `${u(0x1100)}${u(0x301)}${u(0x1161)}`,
+          statuses_count: 2,
+          last_status_at: "2026-10-01T00:02:00.000Z",
+        },
+        {
+          id: "700000000000000003",
+          account_id: BOB,
+          name: G,
+          display_name: G,
+          statuses_count: 0,
+          last_status_at: null,
+        },
+        {
+          id: "700000000000000005",
+          account_id: ALICE,
+          name: A2,
+          display_name: A2,
+          statuses_count: 1,
+          last_status_at: "2026-10-01T00:06:00.000Z",
+        },
+        // A remote account's featured hashtags are counted when read.
+        {
+          id: "700000000000000006",
+          account_id: CAROL,
+          name: G,
+          display_name: J,
+          statuses_count: 9,
+          last_status_at: "2020-01-01T00:00:00.000Z",
+        },
+      ]);
+      expect(
+        sql
+          .exec("SELECT name, score, max_score, max_score_at FROM trend_tags WHERE name NOT GLOB 'f*' ORDER BY name")
+          .toArray(),
+      ).toEqual([
+        { name: G, score: 3, max_score: 5, max_score_at: "2026-10-02T00:00:00.000Z" },
+        { name: K, score: 1, max_score: 4, max_score_at: "2026-10-03T00:00:00.000Z" },
+      ]);
+      expect(sql.exec("SELECT count(*) AS n FROM trend_tags").one().n).toBe(MAX_TREND_TAGS - 1);
+      expect(
+        sql
+          .exec("SELECT name, trendable, reviewed_at FROM tag_trend_reviews WHERE name NOT GLOB 'r*' ORDER BY name")
+          .toArray(),
+      ).toEqual([
+        { name: G, trendable: 0, reviewed_at: "2026-10-01T00:00:00.000Z" },
+        { name: K, trendable: 1, reviewed_at: "2026-10-02T00:00:00.000Z" },
+      ]);
+      expect(sql.exec("SELECT count(*) AS n FROM outbound_activities").one()).toEqual({ n: 0 });
+      expect(
+        tableNames(sql).filter((table) => /^tag_(key|nfc|renames|keeps|trend_moves|review|featured)/.test(table)),
+      ).toEqual([]);
+      expect(sql.exec("PRAGMA foreign_key_check").toArray()).toEqual([]);
+    });
+  }, 120_000);
+
+  it("names every generated key as normalizeTag names what it was made from, in each table", async () => {
+    const tables = deriveTagKeyTables();
+    const second = seconds(tables);
+    const pool: number[] = [0x2d, 0x20, 0x41, 0xc0, 0x130, 0x200d, 0xf39];
+    for (let cp = 0; cp < 0x110000; cp++) {
+      const composes = tables.pieces.has(cp) || second.has(cp) || tables.rank.has(cp) || (cp >= 0x1100 && cp <= 0x11ff);
+      if (tables.eligible[cp] === 1 && composes) {
+        pool.push(cp);
+      }
+    }
+    for (const key of tables.pairs.keys()) {
+      pool.push(Math.floor(key / 0x110000), key % 0x110000);
+    }
+    // Jamo, Greek with U+0345, alef and waw with U+0653 to U+0655, two-part Indic vowels, marks with a class and
+    // the separators a pass drops, so that many single-pass keys are no fixed point.
+    const narrow = [
+      [0x1100, 0x1101, 0x1112, 0x1161, 0x1162, 0x1175, 0x11a8, 0x11c2, 0xac00, 0xac01],
+      [0x391, 0x3b1, 0x397, 0x3b7, 0x3a9, 0x3c9, 0x1f00, 0x301, 0x313, 0x342, 0x345],
+      [
+        0x627, 0x648, 0x64a, 0x653, 0x654, 0x655, 0x9c7, 0x9be, 0x9d7, 0xb47, 0xb3e, 0xb56, 0xbc6, 0xbbe, 0x1025,
+        0x102e,
+      ],
+      [0x5b0, 0x5b4, 0x5bc, 0x64b, 0x650, 0xe38, 0xf71, 0xf72, 0xf80, 0x2d, 0x20, 0xf39, 0x200d, 0x41, 0xc0],
+    ].flat();
+    const raws = [
+      ...fc
+        .sample(fc.array(fc.constantFrom(...pool), { minLength: 1, maxLength: 10 }), { numRuns: 20_000, seed: 1257 })
+        .map((cps) => u(...cps)),
+      ...fc
+        .sample(fc.array(fc.constantFrom(...narrow), { minLength: 2, maxLength: 8 }), { numRuns: 20_000, seed: 1257 })
+        .map((cps) => u(...cps)),
+      ...fc.sample(fc.string({ unit: "binary", minLength: 1, maxLength: 16 }), { numRuns: 5000, seed: 1257 }),
+      ...[
+        [0x1100, 0x301, 0x1161],
+        [0x1100, 0x2d, 0x1161, 0x2d, 0x11a8],
+        [0x391, 0x301, 0x345],
+        [0x3b1, 0x2d, 0x345],
+        [0x627, 0x301, 0x653],
+        [0x9c7, 0xf39, 0x9be],
+        [0xc0, 0x345, 0x2d, 0x5b0],
+        [0x1100, 0x1161, 0x345, 0x11a8, 0x345],
+      ].map((cps) => u(...cps)),
+    ];
+    // Each single-pass key once, with what the fixed point is.
+    const keys = new Map<string, string>();
+    for (const raw of raws) {
+      const key = normalizeOnce(raw);
+      if (key !== "" && /[^0-9_a-z]/.test(key)) {
+        keys.set(key, normalizeTag(raw));
+      }
+    }
+    const list = [...keys.keys()];
+    expect(list.filter((key) => keys.get(key) !== key).length).toBeGreaterThan(200);
+    const store = freshStore();
+    await runInDurableObject(store, async (_instance, state) => {
+      const sql = state.storage.sql;
+      await kernel(state, MIGRATIONS.slice(0, at)).upgrade();
+      accounts(sql);
+      const json = JSON.stringify(list);
+      sql.exec(
+        `INSERT INTO statuses (id, uri, account_id, visibility, published_at)
+				SELECT CAST(200000000000000000 + key AS TEXT), 'https://kopje.test/ap/o/' || key, ?2, 'public',
+					'2026-10-01T00:00:00.000Z' FROM json_each(?1)`,
+        json,
+        ALICE,
+      );
+      sql.exec(
+        `INSERT INTO status_tags (status_id, name, public)
+				SELECT CAST(200000000000000000 + key AS TEXT), value, 1 FROM json_each(?)`,
+        json,
+      );
+      sql.exec("INSERT INTO tag_follows (account_id, name) SELECT ?2, value FROM json_each(?1)", json, ALICE);
+      sql.exec(
+        `INSERT INTO featured_tags (id, account_id, name, display_name)
+				SELECT CAST(700000000000000000 + key AS TEXT), ?2, value, value FROM json_each(?1)`,
+        json,
+        CAROL,
+      );
+      sql.exec(
+        `INSERT INTO trend_tags (name, score, max_score, max_score_at)
+				SELECT value, 1, 1, '2026-10-01T00:00:00.000Z' FROM json_each(?) WHERE key < 250`,
+        json,
+      );
+      sql.exec(
+        `INSERT INTO tag_trend_reviews (name, trendable, reviewed_at)
+				SELECT value, 1, '2026-10-01T00:00:00.000Z' FROM json_each(?) WHERE key < 10000`,
+        json,
+      );
+      expect(await kernel(state, MIGRATIONS.slice(0, at + 1)).upgrade()).toMatchObject({ ok: true });
+      const fixed = (subset: string[]) => [...new Set(subset.map((key) => keys.get(key)!))].toSorted(byText);
+      const names = (query: string) =>
+        sql
+          .exec<{ name: string }>(query)
+          .toArray()
+          .map((row) => row.name)
+          .toSorted(byText);
+      const mismatches = sql
+        .exec<{ i: number; name: string }>(
+          "SELECT CAST(status_id AS INTEGER) - 200000000000000000 AS i, name FROM status_tags",
+        )
+        .toArray()
+        .filter((row) => keys.get(list[row.i]!) !== row.name)
+        .map((row) => ({ key: list[row.i], migrated: row.name, normalized: keys.get(list[row.i]!) }));
+      expect(mismatches).toEqual([]);
+      expect(names("SELECT name FROM tag_follows")).toEqual(fixed(list));
+      expect(names("SELECT name FROM featured_tags")).toEqual(fixed(list));
+      expect(names("SELECT name FROM trend_tags")).toEqual(fixed(list.slice(0, 250)));
+      expect(names("SELECT name FROM tag_trend_reviews")).toEqual(fixed(list.slice(0, 10_000)));
+    });
+  }, 300_000);
+
+  it("takes its input bound from the writers' own bounds, so every key a writer stored is repaired", () => {
+    // A status's hashtag holds at most MAX_RAW_LENGTH UTF-16 code units, and a single pass leaves at most so many code
+    // points and bytes for each: NFKC composes across characters but never lengthens, and lowercase, fold and the
+    // drop act on each character alone. A received Hashtag's key holds at most MAX_TAG_LENGTH code units; follows,
+    // features and reviews hold MAX_TAG_LENGTH code points and TAG_NAME_BYTES bytes.
+    let points = 0;
+    let bytes = 0;
+    for (let cp = 0; cp < 0x110000; cp++) {
+      if (cp >= 0xd800 && cp <= 0xdfff) {
+        continue;
+      }
+      const c = u(cp);
+      const once = normalizeOnce(c);
+      points = Math.max(points, [...once].length / c.length);
+      bytes = Math.max(bytes, new TextEncoder().encode(once).length / c.length);
+    }
+    expect([points, bytes]).toEqual([15, 30]);
+    const length = Math.max(MAX_RAW_LENGTH * points, MAX_TAG_LENGTH);
+    const byteBound = Math.max(MAX_RAW_LENGTH * bytes, TAG_NAME_BYTES, 4 * MAX_TAG_LENGTH);
+    fc.assert(
+      fc.property(fc.string({ unit: "binary", maxLength: 40 }), (text) => {
+        const once = normalizeOnce(text);
+        return [...once].length <= points * text.length && new TextEncoder().encode(once).length <= bytes * text.length;
+      }),
+      { numRuns: 20_000 },
+    );
+    const bound = `length(CAST(name AS BLOB)) <= ${byteBound}
+  THEN CASE WHEN instr(CAST(name AS BLOB), x'00') = 0 THEN length(name) <= ${length} END END`;
+    expect(SQL.split(bound)).toHaveLength(6);
+    expect(SQL.split(trendTagNameCheckSql("name"))).toHaveLength(3);
+    expect(SQL).toContain(`s.visibility IN ${DISTRIBUTABLE_SQL}`);
+  }, 60_000);
+});
+
+describe("0087_tag_key_fixed_points under stale statistics", () => {
+  const NAME = "0087_tag_key_fixed_points";
+  const at = NAMES.indexOf(NAME);
+  const STATEMENTS = (MIGRATIONS[at]?.sql ?? "")
+    .split("\n")
+    .filter((line) => !line.startsWith("--"))
+    .join("\n")
+    .split(";\n")
+    .map((statement) => statement.trim())
+    .filter((statement) => statement !== "");
+  const u = (...cps: number[]) => String.fromCodePoint(...cps);
+  const [J, G] = [u(0x1100, 0x1161), u(0xac00)];
+
+  // A Store at 0086 with statistics taken over one status, then grown: `unrelated` status_tags rows under ASCII names
+  // (the seed's scan reads them, nothing else does), `ranged` public statuses spread over `locals` local accounts and
+  // tagged 가 in either spelling, each account (local or one of `remotes` remote ones) featuring both spellings, and
+  // each local one following one. Each statement of the file is planned (EXPLAIN QUERY PLAN) and run in turn.
+  async function upgradeReads(shape: { unrelated: number; ranged: number; locals: number; remotes: number }) {
+    const store = freshStore();
+    return runInDurableObject(store, async (_instance, state) => {
+      const sql = state.storage.sql;
+      await kernel(state, MIGRATIONS.slice(0, at)).upgrade();
+      const account = (i: number, local: boolean) => {
+        const id = String(100000000000000000n + BigInt(i));
+        sql.exec(
+          "INSERT INTO accounts (id, uri, username, domain) VALUES (?1, 'https://' || ?2 || '/u/' || ?1, 'u' || ?1, ?3)",
+          id,
+          local ? "kopje.test" : "remote.test",
+          local ? null : "remote.test",
+        );
+        if (local) {
+          sql.exec(
+            `INSERT INTO local_accounts (account_id, email, privkey, privkey_salt, pubkey)
+						VALUES (?1, ?1 || '@example.com', X'00', X'00', 'k')`,
+            id,
+          );
+        }
+      };
+      account(1, true);
+      sql.exec(
+        `INSERT INTO statuses (id, uri, account_id, visibility, published_at)
+				VALUES ('200000000000000001', 'https://kopje.test/ap/o/1', '100000000000000001', 'public',
+					'2026-10-01T00:00:00.000Z')`,
+      );
+      sql.exec(
+        "INSERT INTO status_tags (status_id, name, public) VALUES ('200000000000000001', 'seed', 1), ('200000000000000001', ?, 1)",
+        J,
+      );
+      sql.exec("ANALYZE");
+      for (let i = 2; i <= shape.locals; i++) {
+        account(i, true);
+      }
+      for (let i = 0; i < shape.remotes; i++) {
+        account(10_000 + i, false);
+      }
+      sql.exec(
+        `WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < ?1)
+				INSERT INTO statuses (id, uri, account_id, visibility, published_at)
+				SELECT printf('3%017d', i), 'https://kopje.test/ap/o/u' || i, '100000000000000001', 'public',
+					'2026-10-01T00:00:00.000Z' FROM n`,
+        shape.unrelated,
+      );
+      sql.exec(
+        `INSERT INTO status_tags (status_id, name, public)
+				SELECT id, 'ascii' || substr(id, 12), 1 FROM statuses WHERE id GLOB '3*'`,
+      );
+      sql.exec(
+        `WITH RECURSIVE n(i) AS (SELECT 0 UNION ALL SELECT i + 1 FROM n WHERE i < ?1 - 1)
+				INSERT INTO statuses (id, uri, account_id, visibility, published_at)
+				SELECT printf('4%017d', i), 'https://kopje.test/ap/o/r' || i,
+					CAST(100000000000000001 + i % CAST(?2 AS INTEGER) AS TEXT), 'public', '2026-10-01T00:00:00.000Z' FROM n`,
+        shape.ranged,
+        shape.locals,
+      );
+      sql.exec(
+        `INSERT INTO status_tags (status_id, name, public)
+				SELECT id, CASE WHEN CAST(substr(id, 2) AS INTEGER) % 2 = 0 THEN ?1 ELSE ?2 END, 1 FROM statuses
+				WHERE id GLOB '4*'`,
+        J,
+        G,
+      );
+      sql.exec(
+        `INSERT INTO featured_tags (id, account_id, name, display_name)
+				SELECT printf('5%017d', 2 * row_number() OVER (ORDER BY id)), id, ?1, ?1 FROM accounts
+				UNION ALL SELECT printf('5%017d', 2 * row_number() OVER (ORDER BY id) + 1), id, ?2, ?2 FROM accounts`,
+        J,
+        G,
+      );
+      sql.exec("INSERT INTO tag_follows (account_id, name) SELECT account_id, ?1 FROM local_accounts", J);
+      const plans: { statement: string; plan: string[]; read: number }[] = [];
+      for (const statement of STATEMENTS) {
+        const plan = sql
+          .exec<{ detail: string }>(`EXPLAIN QUERY PLAN ${statement}`)
+          .toArray()
+          .map((row) => row.detail);
+        const cursor = sql.exec(statement);
+        cursor.toArray();
+        plans.push({ statement, plan, read: cursor.rowsRead });
+      }
+      const counted = sql
+        .exec<{ n: number }>(
+          `SELECT sum(statuses_count) AS n FROM featured_tags
+					WHERE name = ? AND account_id IN (SELECT account_id FROM local_accounts)`,
+          G,
+        )
+        .one().n;
+      return { plans, read: plans.reduce((sum, p) => sum + p.read, 0), counted };
+    });
+  }
+
+  const planOf = (plans: { statement: string; plan: string[] }[], start: string) =>
+    plans.filter((p) => p.statement.startsWith(start)).flatMap((p) => p.plan);
+
+  it("walks status_tags only by name and statuses only by key, under statistics taken before the data grew", async () => {
+    const { plans, counted } = await upgradeReads({ unrelated: 20_000, ranged: 2000, locals: 20, remotes: 1000 });
+    // Every local account's 100 statuses, and the seed's.
+    expect(counted).toBe(2001);
+    const lines = plans.flatMap((p) => p.plan);
+    // The seed's pass over status_tags is the only scan of status_tags or statuses; the other scans are passes over
+    // tag_follows and featured_tags (as 0019's) and over the capped trend tables.
+    const scans = lines.filter((line) =>
+      /^SCAN (status_tags|statuses|s|tag_follows|featured_tags|f|trend_tags|tag_trend_reviews|o)\b/.test(line),
+    );
+    expect(scans.filter((line) => /^SCAN (status_tags|statuses|s)\b/.test(line))).toEqual([
+      "SCAN status_tags USING COVERING INDEX status_tags_name",
+    ]);
+    expect(new Set(scans)).toEqual(
+      new Set([
+        "SCAN f",
+        "SCAN f USING COVERING INDEX sqlite_autoindex_tag_follows_1",
+        "SCAN featured_tags USING COVERING INDEX sqlite_autoindex_featured_tags_2",
+        "SCAN o",
+        "SCAN status_tags USING COVERING INDEX status_tags_name",
+        "SCAN tag_follows USING COVERING INDEX sqlite_autoindex_tag_follows_1",
+        "SCAN tag_trend_reviews",
+        "SCAN trend_tags",
+      ]),
+    );
+    expect(planOf(plans, "UPDATE OR IGNORE status_tags")).toEqual(
+      expect.arrayContaining([
+        "SEARCH status_tags USING INDEX status_tags_name (name=?)",
+        "SEARCH r USING INDEX sqlite_autoindex_tag_renames_1 (name=?)",
+      ]),
+    );
+    expect(planOf(plans, "DELETE FROM status_tags")).toContain(
+      "SEARCH status_tags USING INDEX status_tags_name (name=?)",
+    );
+    const recount = planOf(plans, "INSERT INTO tag_featured_counts");
+    expect(recount).toContain("SEARCH t USING COVERING INDEX status_tags_name (name=?)");
+    expect(recount).toContain(`SEARCH s USING INDEX ${STATUSES_ID_INDEX} (id=?)`);
+    expect(planOf(plans, "INSERT INTO tag_featured_rows")).toContain(
+      "SEARCH f USING INDEX featured_tags_account_id (account_id=?)",
+    );
+    expect(planOf(plans, "UPDATE featured_tags SET (statuses_count")[0]).toMatch(/^SEARCH featured_tags .*\(id=\?\)$/);
+    for (const keeps of plans.filter((p) => p.statement.startsWith("INSERT INTO tag_keeps"))) {
+      expect(keeps.plan.some((line) => /^SEARCH g .*\(account_id=\? AND name=\?\)$/.test(line))).toBe(true);
+    }
+    for (const table of ["tag_trend_moves", "tag_review_moves"]) {
+      expect(planOf(plans, `INSERT INTO ${table}`)).toContain("SEARCH t USING PRIMARY KEY (name=?)");
+    }
+    // The nfc recursion reads each piece by key, and its composite by key.
+    expect(planOf(plans, "INSERT INTO tag_nfc_out")).toEqual(
+      expect.arrayContaining([
+        "SEARCH q USING PRIMARY KEY (id=? AND n=?)",
+        "SEARCH c USING PRIMARY KEY (first=? AND second=?) LEFT-JOIN",
+      ]),
+    );
+  }, 300_000);
+
+  it("reads each row a bounded number of times, and a key featured by every local account once", async () => {
+    const base = { unrelated: 20_000, ranged: 2000, locals: 20, remotes: 1000 };
+    const measure = async (shape: typeof base) => (await upgradeReads(shape)).read;
+    const before = await measure(base);
+    const unrelated = (await measure({ ...base, unrelated: 40_000 })) - before;
+    const ranged = (await measure({ ...base, ranged: 4000 })) - before;
+    const remotes = (await measure({ ...base, remotes: 2000 })) - before;
+    // The same 2,000 statuses over 40 local accounts: the recount reads the key's range once, not once per account.
+    const locals = (await measure({ ...base, locals: 40 })) - before;
+    console.info({ event: "migration-0087.reads", before, unrelated, ranged, remotes, locals });
+    // An unrelated row is read by the seed's scan alone.
+    expect(unrelated).toBeGreaterThanOrEqual(20_000);
+    expect(unrelated).toBeLessThanOrEqual(1.1 * 20_000);
+    // A renamed row: the seed's scan, the merge's seek and the delete's, the recount's seek and its status by key.
+    expect(ranged).toBeLessThanOrEqual(8 * 2000);
+    // A remote account: its two featured rows, read by the seed's pass, both merge passes and the rename.
+    expect(remotes).toBeLessThanOrEqual(12 * 2 * 1000);
+    // A local account adds its two featured rows and a follow, each read a few times, and nothing per status: a
+    // recount that read the key's range for each account featuring it would add 2,000 for each.
+    expect(locals).toBeLessThanOrEqual(100 * 20);
+  }, 600_000);
 });

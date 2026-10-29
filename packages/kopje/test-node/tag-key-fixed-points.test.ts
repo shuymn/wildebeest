@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+
 import fc from "fast-check";
 import { describe, expect, it } from "vitest";
 
@@ -7,8 +9,10 @@ import {
   composite,
   deriveTagKeyTables,
   hex,
+  migrationRows,
   seconds,
   tableNfc,
+  tagKeyRows,
   type TagKeyTables,
 } from "../test/tag-key-tables.js";
 
@@ -167,6 +171,11 @@ describe("hashtag keys are fixed points (#1257)", () => {
       142_990, 964, 55,
     ]);
     expect(TABLES.pairs.size).toBe(961);
+  });
+
+  it("holds the tables 0087_tag_key_fixed_points holds", () => {
+    const sql = readFileSync(new URL("../migrations/0087_tag_key_fixed_points.sql", import.meta.url), "utf8");
+    expect(migrationRows(sql)).toEqual(tagKeyRows(TABLES));
   });
 
   it("leaves only eligible characters, whose NFKD is their NFD", () => {
