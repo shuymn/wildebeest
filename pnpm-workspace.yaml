@@ -39,7 +39,7 @@ catalog:
   fast-check: 4.10.2
   oxc-parser: 0.155.0
   parse5: 8.0.1
-  vite: 6.4.5
+  vite: 7.3.7
   vitest: 5.0.5
 
   # Lint, format, unused files, dependencies and exports (knip.json), and the Git hooks.
