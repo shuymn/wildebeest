@@ -411,6 +411,13 @@ Search (`/api/v2/search`, `/api/v1/accounts/search`):
 
 Hashtags (the `Tag` entity):
 
+- A hashtag's name is Mastodon's `HashtagNormalizer#normalize` applied twice (`normalizeTag`), a fixed point: where
+  Mastodon's single pass drops a character or sorts marks and leaves two characters that compose (U+1100 U+0301 U+1161
+  leaves U+1100 U+1161), Kopje's name is the composed one (U+AC00), where Mastodon names one tag by the single pass and
+  another by its second. Every spelling, the single pass's included, reaches the composed name, so a status, follow,
+  featured hashtag, timeline, page or search names it as clients see it; a received post is filed under it whatever
+  its `Hashtag`'s `href` names. Names stored before (0087_tag_key_fixed_points) were renamed and merged without an
+  activity, so a Mastodon follower of an account whose two featured hashtags merged may keep both.
 - `history` is counted again on every read from the stored statuses: public originals, by the UTC day of their
   publication (Mastodon counts a status on the day it receives it), with `accounts` exact (Mastodon's is a HyperLogLog
   estimate). A deleted status and the statuses of an unavailable author leave the counts (Mastodon never decrements
