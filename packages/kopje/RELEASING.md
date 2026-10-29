@@ -101,6 +101,10 @@ A pull request adds its notes under `## [Unreleased]` in `CHANGELOG.md`; a relea
    fail to install. This step is what makes the button install the new version. To try the button from a branch before
    merging, open `https://deploy.workers.cloudflare.com/?url=https://github.com/shuymn/kopje/tree/<branch>/deploy`; the
    branch name must not contain `/`, or the button cannot tell it from the directory path.
+5. Rotate the stylesheet and script: run `node scripts/build-assets.mjs` on `main` and commit what it changes in a
+   pull request. Once the tag is reachable, `src/web/asset-versions.ts` must name the new release's files as the
+   previous ones and `public/assets/` drops the release before it, so the Node suite (`test-node/stylesheet.test.ts`)
+   fails on every branch until this lands.
 
 ### If the publish or release job fails
 
