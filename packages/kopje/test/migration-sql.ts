@@ -103,16 +103,17 @@ function statements(sql: string, tokens: SqlToken[]): Statement[] | string {
 const DML = new Set(["INSERT", "UPDATE", "DELETE", "REPLACE", "SELECT", "WITH"]);
 
 const isPunct = (token: SqlToken | undefined, text: string): boolean => token?.kind === "punct" && token.text === text;
+const isString = (token: SqlToken | undefined): boolean => token?.kind === "other" && token.text === "'";
 
 // The work tables a declared file creates and drops, and the indexes of other tables it drops (each of which it
 // creates again): what the dynamic checks of test/migration-lint.test.ts compare against the schema before and after
 // the file. Only for a file unchangedProblem accepts.
 export type DeclaredObjects = { workTables: string[]; droppedIndexes: string[] };
 
-// A file declared foreignKeys: 'unchanged', judged before it runs. It is written in a narrow dialect: every name a
-// plain unquoted ASCII word, never schema-qualified or quoted (a quoted string is a value, not a name), and no IF
-// [NOT] EXISTS or TEMP anywhere. It may hold only statements that cannot change a reference or a key of the schema it
-// leaves:
+// A file declared foreignKeys: 'unchanged', judged before it runs. It is written in a narrow dialect, in every
+// statement (DDL, triggers, DML and the table a write names): every name a plain unquoted ASCII word, never
+// schema-qualified (main.) or quoted (a quoted string is a value, never a name), and no IF [NOT] EXISTS or TEMP
+// anywhere. It may hold only statements that cannot change a reference or a key of the schema it leaves:
 //   ALTER TABLE <name> ADD [COLUMN] ... with no REFERENCES and no generated column (GENERATED, or AS followed by '(');
 //   CREATE TRIGGER (its body's writes are checked as they run) and DROP TRIGGER (a trigger holds no key or
 //   reference); CREATE INDEX that is not UNIQUE;
@@ -146,6 +147,14 @@ export function declaredObjects(sql: string): DeclaredObjects | string {
   );
   if (ifExists !== undefined || tokens.some((t) => isWord(t, "TEMP") || isWord(t, "TEMPORARY"))) {
     return "IF [NOT] EXISTS and TEMP are not allowed";
+  }
+  // A qualified name in any statement: the schema main before '.', or a string on either side of one (SQLite takes a
+  // string where a name is expected).
+  const qualified = tokens.find(
+    (t, i) => isPunct(t, ".") && (isWord(tokens[i - 1], "MAIN") || isString(tokens[i - 1]) || isString(tokens[i + 1])),
+  );
+  if (qualified !== undefined) {
+    return "a schema-qualified or quoted name is not allowed";
   }
   const split = statements(sql, tokens);
   if (typeof split === "string") {
@@ -197,7 +206,9 @@ export function declaredObjects(sql: string): DeclaredObjects | string {
         return `CREATE UNIQUE INDEX on ${table}, a table the file did not create, is not allowed`;
       }
     } else if (word(0) === "DROP" && word(1) === "TRIGGER") {
-      continue;
+      if (name(2) === null || s.length !== 3) {
+        return "DROP TRIGGER needs a plain name";
+      }
     } else if (word(0) === "DROP" && word(1) === "TABLE") {
       const table = name(2);
       if (table === null || s.length !== 3 || !work.has(table)) {
@@ -223,6 +234,22 @@ export function declaredObjects(sql: string): DeclaredObjects | string {
       droppedIndexes.push(index);
     } else if (!DML.has(word(0) ?? "")) {
       return `${word(0) ?? s[0]?.text ?? ""} is not allowed`;
+    } else {
+      // The table a write names: after INTO, UPDATE (and its OR clause) and DELETE FROM, a plain word.
+      const target = s.findIndex(
+        (t, i) => isWord(t, "INTO") || (isWord(t, "UPDATE") && !isWord(s[i - 1], "OR")) || isWord(t, "DELETE"),
+      );
+      if (target !== -1) {
+        let at = target + 1;
+        if (isWord(s[target], "UPDATE") && isWord(s[at], "OR")) {
+          at += 2;
+        } else if (isWord(s[target], "DELETE")) {
+          at += isWord(s[at], "FROM") ? 1 : 0;
+        }
+        if (name(at) === null) {
+          return `a write to ${s[at]?.text ?? ""}, which is not a plain name, is not allowed`;
+        }
+      }
     }
   }
   const left = [...work];

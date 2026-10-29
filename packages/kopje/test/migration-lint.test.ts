@@ -135,6 +135,13 @@ describe("migration lint", () => {
     ["IF EXISTS on a trigger", "DROP TRIGGER IF EXISTS x;"],
     ["a write to the TEMP schema", "INSERT INTO temp.w SELECT 1;"],
     ["an index on a schema-qualified table", "CREATE INDEX i ON main.t (a);"],
+    ["a trigger dropped under quoted names", "DROP TRIGGER 'main'.'tr';"],
+    ["a trigger dropped under a quoted name", "DROP TRIGGER 'tr';"],
+    ["an update of a schema-qualified table", "UPDATE main.t SET a = 1;"],
+    ["an insert into a quoted table", "INSERT INTO 't' VALUES (1);"],
+    ["a delete from a quoted table", "DELETE FROM 't';"],
+    ["an update OR IGNORE of a quoted table", "UPDATE OR IGNORE 't' SET a = 1;"],
+    ["a read of a schema-qualified table", "SELECT a FROM main.t;"],
     [
       "a work index under IF NOT EXISTS",
       "CREATE TABLE w (b); CREATE UNIQUE INDEX IF NOT EXISTS u ON w (b); DROP INDEX u; DROP TABLE w;",
