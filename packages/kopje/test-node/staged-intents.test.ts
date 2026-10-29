@@ -23,8 +23,9 @@ function sites(all: readonly Source[]): string[] {
     const { program, literals } = parse(source);
     return literals.flatMap((literal) => {
       const text = literal.parts.map((part) => ("text" in part ? part.text : " ")).join("");
-      const owner = `${source.path} ${ownerOf(program, literal.node.start)?.name ?? "(top level)"}`;
-      return [...text.matchAll(INTENT_DELETE)].map(() => owner);
+      return [...text.matchAll(INTENT_DELETE)].map(
+        () => `${source.path} ${ownerOf(program, literal.node.start)?.name ?? "(top level)"}`,
+      );
     });
   });
 }

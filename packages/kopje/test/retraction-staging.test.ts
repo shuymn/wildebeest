@@ -1317,8 +1317,9 @@ describe("a staged retraction across calls (RES-6)", () => {
     };
     await drain();
     expect(delivered.length).toBeGreaterThan(0);
-    expect(await counts()).toMatchObject({ targets: 0, deliveries: 0, intent: 1, staged: 1 });
-    expect((await counts()).reach).toBeGreaterThan(0);
+    const afterDrain = await counts();
+    expect(afterDrain).toMatchObject({ targets: 0, deliveries: 0, intent: 1, staged: 1 });
+    expect(afterDrain.reach).toBeGreaterThan(0);
     // The rest is written, and once endStaging clears staged the same statement deletes the settled intent.
     expect(await t.finish()).toBe(true);
     await drain();
