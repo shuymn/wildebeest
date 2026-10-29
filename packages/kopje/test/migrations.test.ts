@@ -11158,15 +11158,20 @@ describe("0087_tag_key_fixed_points under stale statistics", () => {
         "SCAN trend_tags",
       ]),
     );
-    expect(planOf(plans, "UPDATE OR IGNORE status_tags")).toEqual(
-      expect.arrayContaining([
-        "SEARCH status_tags USING INDEX status_tags_name (name=?)",
-        "SEARCH r USING INDEX sqlite_autoindex_tag_renames_1 (name=?)",
-      ]),
+    // The rows under an old name are read through status_tags_name, then renamed and deleted by their key while the
+    // name indexes are rebuilt.
+    expect(planOf(plans, "INSERT INTO tag_status_moves")).toContain(
+      "SEARCH t USING COVERING INDEX status_tags_name (name=?)",
     );
-    expect(planOf(plans, "DELETE FROM status_tags")).toContain(
-      "SEARCH status_tags USING INDEX status_tags_name (name=?)",
-    );
+    for (const statement of ["UPDATE OR IGNORE status_tags", "DELETE FROM status_tags"]) {
+      expect(planOf(plans, statement)).toEqual(
+        expect.arrayContaining([
+          "SEARCH status_tags USING PRIMARY KEY (status_id=?)",
+          "SEARCH m USING PRIMARY KEY (status_id=?)",
+          "SEARCH r USING INTEGER PRIMARY KEY (rowid=?)",
+        ]),
+      );
+    }
     const recount = planOf(plans, "INSERT INTO tag_featured_counts");
     expect(recount).toContain("SEARCH t USING COVERING INDEX status_tags_name (name=?)");
     expect(recount).toContain(`SEARCH s USING INDEX ${STATUSES_ID_INDEX} (id=?)`);
@@ -11199,11 +11204,12 @@ describe("0087_tag_key_fixed_points under stale statistics", () => {
     // The same 2,000 statuses over 40 local accounts: the recount reads the key's range once, not once per account.
     const locals = (await measure({ ...base, locals: 40 })) - before;
     console.info({ event: "migration-0087.reads", before, unrelated, ranged, remotes, locals });
-    // An unrelated row is read by the seed's scan alone.
-    expect(unrelated).toBeGreaterThanOrEqual(20_000);
-    expect(unrelated).toBeLessThanOrEqual(1.1 * 20_000);
-    // A renamed row: the seed's scan, the merge's seek and the delete's, the recount's seek and its status by key.
-    expect(ranged).toBeLessThanOrEqual(8 * 2000);
+    // An unrelated row is read by the seed's scan, and twice by each of the two name indexes' rebuilds.
+    expect(unrelated).toBeGreaterThanOrEqual(5 * 20_000);
+    expect(unrelated).toBeLessThanOrEqual(5.5 * 20_000);
+    // A renamed row: the seed's scan, the moves' seek and their table, the rename's and the delete's lookups by key,
+    // both rebuilds, the recount's seek and its status by key.
+    expect(ranged).toBeLessThanOrEqual(18 * 2000);
     // A remote account: its two featured rows, read by the seed's pass, both merge passes and the rename.
     expect(remotes).toBeLessThanOrEqual(12 * 2 * 1000);
     // A local account adds its two featured rows and a follow, each read a few times, and nothing per status: a

@@ -35,22 +35,26 @@
 --   counts them (src/domain/featured-tags.ts); a remote account's are counted when read.
 --
 -- Cost: the file creates work tables, so it is not declared foreignKeys: 'unchanged' and the upgrade checks every
--- reference of the Store. Each table's names are read once to find the names with another character (status_tags
--- through status_tags_name, each row; the others whole); each such name's bytes are cut into chunks of 512 and
--- walked, with a range lookup per character in the fixed-size tables, sorted, and composed with a key lookup per
--- piece. Then each renamed name's status_tags rows are read through status_tags_name and renamed where they stand;
--- tag_follows and featured_tags are read once more for their rows under a renamed name, and each account's row of the
--- new name is looked up by its key; trend_tags and tag_trend_reviews (capped) are read whole. The recount reads the
--- local accounts' featured hashtags through featured_tags_account_id, each new name among them once through
--- status_tags_name, and each of its statuses by key. A name of n bytes copies O(n^2 / 1024) bytes while it is cut
--- (about 88 MB at the bound); a key past the page size makes every seek of status_tags_name that compares with it
--- read it whole, so the rows renamed near such keys cost the most.
+-- reference of the Store (workerd refuses TEMP tables). Each table's names are read once to find the names with
+-- another character (status_tags through status_tags_name, each row; the others whole); each such name's bytes are
+-- cut into chunks of 512 and walked, with a range lookup per character in the fixed-size tables, sorted, and composed
+-- with a key lookup per piece. Then each renamed name's status_tags rows are read through status_tags_name, renamed
+-- or deleted by their key, and status_tags_name and status_tags_public are built again (each reads every status_tags
+-- row once and sorts it); tag_follows and featured_tags are read once more for their rows under a renamed name, and
+-- each account's row of the new name is looked up by its key; trend_tags and tag_trend_reviews (capped) are read
+-- whole. The recount reads the local accounts' featured hashtags through featured_tags_account_id, each new name
+-- among them once through status_tags_name, and each of its statuses by key. A name of n bytes copies O(n^2 / 1024)
+-- bytes while it is cut (about 88 MB at the bound). A seek compares with every key on its way and reads one that
+-- overflows a page whole, so no seek here goes through an index that holds such names where it can be avoided:
+-- tag_renames is looked up by the first 64 characters of a name (tag_renames_k), the moved status_tags rows by their
+-- key and the rename's id, and the name indexes are rebuilt rather than updated a row at a time (renaming 50,000 rows
+-- next to a name of 300,000 bytes took about 7 s through status_tags_name, against 1.7 s for both rebuilds).
 -- Measured on the benchmark store of test/bench/migration-cost.ts (1,000,000 accounts, 2,000,000 statuses, and its
 -- 20,000 hashtag names on 200,000 status_tags rows, one at the input bound and one past it, 100,000 rows of one
 -- renamed key featured by every local account and 50,000 remote ones, trend_tags and tag_trend_reviews at their
--- caps) in workerd's local Durable Object SQLite, the whole Store's foreign keys verified: 17,598 and 17,625 ms in two
--- runs for the upgrade of this file through the kernel (its statements about 10.5 s of it), within the budget of 20 s,
--- at a load average of about 2.
+-- caps) in workerd's local Durable Object SQLite, the whole Store's foreign keys verified: 11,171 and 11,192 ms in
+-- two runs for the upgrade of this file through the kernel (its statements about 4.3 s of it, the foreign key check
+-- about 6 s), within the budget of 20 s, at a load average of about 2.
 
 CREATE TABLE tag_key_chars (first INTEGER PRIMARY KEY, last INTEGER NOT NULL);
 
@@ -586,7 +590,7 @@ SELECT 0x1100 + l.v, 0x1161 + m.v, 0xAC00 + (l.v * 21 + m.v) * 28 FROM l, m
 UNION ALL
 SELECT 0xAC00 + (l.v * 21 + m.v) * 28, 0x11A7 + t.v, 0xAC00 + (l.v * 21 + m.v) * 28 + t.v FROM l, m, t;
 
-CREATE TABLE tag_renames (id INTEGER PRIMARY KEY, name TEXT NOT NULL UNIQUE, new_name TEXT);
+CREATE TABLE tag_renames (id INTEGER PRIMARY KEY, name TEXT NOT NULL UNIQUE, new_name TEXT, k TEXT);
 
 INSERT OR IGNORE INTO tag_renames (name)
 SELECT DISTINCT name FROM status_tags INDEXED BY status_tags_name
@@ -716,13 +720,43 @@ DELETE FROM tag_renames WHERE new_name IS NULL OR new_name = name;
 
 CREATE INDEX tag_renames_new_name ON tag_renames (new_name);
 
--- status_tags: one row per status and name, its public the status's. Each row is renamed where it stands, unless its
--- status already holds the new name; the rows left under an old name are such duplicates and go.
-UPDATE OR IGNORE status_tags INDEXED BY status_tags_name
-SET name = (SELECT r.new_name FROM tag_renames r WHERE r.name = status_tags.name)
-WHERE name IN (SELECT name FROM tag_renames);
+-- A name's first 64 characters: lookups by name seek this key, then compare the whole name, so that a seek never
+-- compares with a long name that overflows a page (which reads it whole).
+UPDATE tag_renames SET k = substr(name, 1, 64);
 
-DELETE FROM status_tags INDEXED BY status_tags_name WHERE name IN (SELECT name FROM tag_renames);
+CREATE INDEX tag_renames_k ON tag_renames (k);
+
+-- status_tags: one row per status and name, its public the status's. The rows under an old name are read through
+-- status_tags_name; then its two name indexes go while each row is renamed where it stands by its key (unless its
+-- status already holds the new name; the rows left under an old name are such duplicates and go), and are built again
+-- as 0000_initial and 0004_status_tags_public made them. A seek of status_tags_name compares with every key on its
+-- way, read whole when it overflows a page, so a renamed row next to a long name cost a read of that name per seek
+-- (a 300,000-byte one: 50,000 renamed rows took seconds); the rebuild sorts the rows once instead.
+CREATE TABLE tag_status_moves (status_id TEXT NOT NULL, id INTEGER NOT NULL, PRIMARY KEY (status_id, id))
+WITHOUT ROWID;
+
+INSERT INTO tag_status_moves (status_id, id)
+SELECT t.status_id, r.id FROM tag_renames r CROSS JOIN status_tags t INDEXED BY status_tags_name ON t.name = r.name;
+
+DROP INDEX status_tags_public;
+
+DROP INDEX status_tags_name;
+
+UPDATE OR IGNORE status_tags
+SET name = (SELECT r.new_name FROM tag_status_moves m CROSS JOIN tag_renames r ON r.id = m.id
+  WHERE m.status_id = status_tags.status_id AND r.name = status_tags.name)
+WHERE status_id IN (SELECT status_id FROM tag_status_moves) AND EXISTS (SELECT 1 FROM tag_status_moves m
+  CROSS JOIN tag_renames r ON r.id = m.id WHERE m.status_id = status_tags.status_id AND r.name = status_tags.name);
+
+DELETE FROM status_tags WHERE status_id IN (SELECT status_id FROM tag_status_moves) AND EXISTS (SELECT 1
+  FROM tag_status_moves m CROSS JOIN tag_renames r ON r.id = m.id
+  WHERE m.status_id = status_tags.status_id AND r.name = status_tags.name);
+
+DROP TABLE tag_status_moves;
+
+CREATE INDEX status_tags_name ON status_tags (name, status_id);
+
+CREATE INDEX status_tags_public ON status_tags (name, status_id) WHERE public = 1;
 
 -- tag_follows and featured_tags: the rows under an old name, read in one pass, with their new name; of each account
 -- and new name, the lowest id among them and the account's row of the new name is kept, the others go, and the kept
@@ -735,7 +769,8 @@ CREATE TABLE tag_keeps (account_id TEXT NOT NULL, name TEXT NOT NULL, id NOT NUL
 WITHOUT ROWID;
 
 INSERT INTO tag_moves (id, account_id, name)
-SELECT f.id, f.account_id, r.new_name FROM tag_follows f CROSS JOIN tag_renames r ON r.name = f.name
+SELECT f.id, f.account_id, r.new_name FROM tag_follows f CROSS JOIN tag_renames r INDEXED BY tag_renames_k
+  ON r.k = substr(f.name, 1, 64) AND r.name = f.name
 WHERE f.name GLOB '*[^0-9_a-z]*';
 
 INSERT INTO tag_keeps (account_id, name, id)
@@ -761,7 +796,8 @@ DELETE FROM tag_moves;
 DELETE FROM tag_keeps;
 
 INSERT INTO tag_moves (id, account_id, name)
-SELECT f.id, f.account_id, r.new_name FROM featured_tags f CROSS JOIN tag_renames r ON r.name = f.name
+SELECT f.id, f.account_id, r.new_name FROM featured_tags f CROSS JOIN tag_renames r INDEXED BY tag_renames_k
+  ON r.k = substr(f.name, 1, 64) AND r.name = f.name
 WHERE f.name GLOB '*[^0-9_a-z]*';
 
 INSERT INTO tag_keeps (account_id, name, id)
@@ -798,10 +834,12 @@ SELECT name, top, max_score, max_score_at FROM (
   SELECT name, max(score) OVER (PARTITION BY name) AS top, max_score, max_score_at,
     row_number() OVER (PARTITION BY name ORDER BY max_score DESC, max_score_at DESC) AS place
   FROM (SELECT r.new_name AS name, t.score, t.max_score, t.max_score_at
-      FROM trend_tags t CROSS JOIN tag_renames r ON r.name = t.name
+      FROM trend_tags t CROSS JOIN tag_renames r INDEXED BY tag_renames_k
+        ON r.k = substr(t.name, 1, 64) AND r.name = t.name
     UNION ALL
     SELECT t.name, t.score, t.max_score, t.max_score_at
-      FROM trend_tags o CROSS JOIN tag_renames r ON r.name = o.name CROSS JOIN trend_tags t ON t.name = r.new_name))
+      FROM trend_tags o CROSS JOIN tag_renames r INDEXED BY tag_renames_k
+        ON r.k = substr(o.name, 1, 64) AND r.name = o.name CROSS JOIN trend_tags t ON t.name = r.new_name))
 WHERE place = 1 AND typeof(name) = 'text' AND length(CAST(name AS BLOB)) BETWEEN 1 AND 1024
     AND instr(CAST(name AS BLOB), x'00') = 0 AND length(name) <= 256
     AND name NOT GLOB ('*[' || char(1) || '-/:-^`{-' || char(127) || ']*');
@@ -823,10 +861,12 @@ SELECT name, trendable, reviewed_at FROM (
   SELECT name, trendable, reviewed_at,
     row_number() OVER (PARTITION BY name ORDER BY reviewed_at DESC, trendable) AS place
   FROM (SELECT r.new_name AS name, t.trendable, t.reviewed_at
-      FROM tag_trend_reviews t CROSS JOIN tag_renames r ON r.name = t.name
+      FROM tag_trend_reviews t CROSS JOIN tag_renames r INDEXED BY tag_renames_k
+        ON r.k = substr(t.name, 1, 64) AND r.name = t.name
     UNION ALL
     SELECT t.name, t.trendable, t.reviewed_at
-      FROM tag_trend_reviews o CROSS JOIN tag_renames r ON r.name = o.name
+      FROM tag_trend_reviews o CROSS JOIN tag_renames r INDEXED BY tag_renames_k
+        ON r.k = substr(o.name, 1, 64) AND r.name = o.name
       CROSS JOIN tag_trend_reviews t ON t.name = r.new_name))
 WHERE place = 1 AND typeof(name) = 'text' AND length(CAST(name AS BLOB)) BETWEEN 1 AND 1024
     AND instr(CAST(name AS BLOB), x'00') = 0 AND length(name) <= 256

@@ -31,7 +31,7 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
   Migration `0087_tag_key_fixed_points` renames the stored names that were not fixed points and merges the rows that
   meet (a status's hashtags, follows, featured hashtags, trends and reviews), sending nothing; a name past its input
   bound or not well-formed, only an imported one, stays as stored. The upgrade checks every reference of the Store:
-  17.6 s on the benchmark store, within the 20 s budget. Clients see such a hashtag under its composed name, and a
+  11.2 s on the benchmark store, within the 20 s budget. Clients see such a hashtag under its composed name, and a
   follower may keep both of two merged featured hashtags ([docs/mastodon-deviations.md](docs/mastodon-deviations.md),
   Hashtags). `wrangler.jsonc`: unchanged.
 - `/setup`'s Access step, refused while another run holds it, no longer says the wait is at most two minutes: a
