@@ -1,35 +1,72 @@
-import { readdirSync, readFileSync } from "node:fs";
-import { fileURLToPath } from "node:url";
-
 import { describe, expect, it } from "vitest";
+
+import { guardFixtures, inventoryDiff, ownerOf, parse, sources, type Source } from "./source-scan.js";
 
 // RES-6: an outbound intent still staging (outbound_activities.staged set) is never deleted, so a retraction's staging
 // row (retraction_stagings) needs no foreign key to it: its end is marked when staged is cleared
-// (outbound_activities_staging_ended, migration 0085_retraction_staging). Every delete of an intent in src/ requires
-// staged IS NULL in its own statement.
-const root = fileURLToPath(new URL("../src/", import.meta.url));
+// (outbound_activities_staging_ended, migration 0085_retraction_staging). The one delete of an intent,
+// dropSettledActivity, refuses it by its own staged IS NULL, which the runtime tests show: a retraction staging over
+// calls (test/retraction-staging.test.ts, "keeps its intent while every chunk it has written is delivered") and a
+// moderation staging's replaceWaiting (test/admin-suspension.test.ts, "sends the restoration to a non-follower even
+// when the profile is edited before it is staged"). This inventory fails on any other delete, which then needs a
+// witness of its own.
+const SOURCES = sources("src");
 
-function sources(dir: string): string[] {
-  return readdirSync(dir, { withFileTypes: true }).flatMap((entry) =>
-    entry.isDirectory() ? sources(`${dir}${entry.name}/`) : /\.tsx?$/.test(entry.name) ? [`${dir}${entry.name}`] : [],
-  );
+const EXPECTED = { "src/domain/deliveries.ts dropSettledActivity": 1 };
+
+// A DELETE of outbound_activities in code (comments blanked), the table quoted or not, across line breaks.
+const INTENT_DELETE = /\bDELETE\s+FROM\s+["`[]?outbound_activities\b/gi;
+
+function sites(all: readonly Source[]): string[] {
+  return all.flatMap((source) => {
+    const { program, code } = parse(source);
+    return [...code.matchAll(INTENT_DELETE)].map(
+      (m) => `${source.path} ${ownerOf(program, m.index)?.name ?? "(top level)"}`,
+    );
+  });
 }
 
-// The text of each template or string literal holding a DELETE of outbound_activities, up to its closing quote.
-function intentDeletes(text: string): string[] {
-  return [...text.matchAll(/DELETE FROM outbound_activities\b[^`'"]*/g)].map((m) => m[0]);
-}
+const violations = (all: readonly Source[]) => inventoryDiff(sites(all), EXPECTED);
 
 describe("the deletes of an outbound intent", () => {
-  it("each require staged IS NULL", () => {
-    const deletes = sources(root).flatMap((path) => intentDeletes(readFileSync(path, "utf8")));
-    expect(deletes.length).toBeGreaterThan(0);
-    expect(deletes.filter((statement) => !/\bstaged IS NULL\b/.test(statement))).toEqual([]);
+  it("are dropSettledActivity's one statement", () => {
+    expect(violations(SOURCES)).toEqual([]);
   });
 
-  it("finds a delete that does not", () => {
-    expect(intentDeletes("db.run(`DELETE FROM outbound_activities WHERE id = ?`)")).toEqual([
-      "DELETE FROM outbound_activities WHERE id = ?",
-    ]);
-  });
+  guardFixtures(
+    violations,
+    {
+      flagged: {
+        "a second site": [
+          "export function sweep(db) {\n\tdb.run('DELETE FROM outbound_activities WHERE id = ?', id)\n}",
+          "src/domain/probe.ts sweep has 1, expected 0",
+        ],
+        "a newline between FROM and the table": [
+          'const drop = (db) => db.run(`DELETE FROM\n\t\t"outbound_activities" WHERE id = ?`, id)',
+          "src/domain/probe.ts drop has 1, expected 0",
+        ],
+      },
+      passed: { "a delete named in a comment": "// DELETE FROM outbound_activities\nf()" },
+    },
+    { over: SOURCES },
+  );
+
+  guardFixtures(
+    violations,
+    {
+      flagged: {
+        "a second delete in the same function": [
+          [
+            "function dropSettledActivity(db, id) {",
+            "\tdb.run('DELETE FROM outbound_activities WHERE id = ? AND staged IS NULL', id)",
+            "\tdb.run('DELETE FROM outbound_activities WHERE id = ?', id)",
+            "}",
+          ].join("\n"),
+          "src/domain/deliveries.ts dropSettledActivity has 2, expected 1",
+        ],
+      },
+      passed: {},
+    },
+    { path: "src/domain/deliveries.ts", over: SOURCES },
+  );
 });

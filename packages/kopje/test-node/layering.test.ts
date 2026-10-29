@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { editOnce, guardFixtures, parse, resolve, sources, statement, walk, type Source } from "./source-scan.js";
+import { guardFixtures, inventoryDiff, ownerOf, parse, resolve, sources, walk, type Source } from "./source-scan.js";
 
 // worker -> app/jobs -> {mastodon, federation, web} -> domain -> {db, platform, security}
 // A module may import its own layer or any lower one. Top-level files (worker.ts, store.ts, version.ts) are the entry
@@ -148,139 +148,99 @@ describe("module layering", () => {
   });
 });
 
-// R32 (docs/visibility.md): a streaming delete is captured (streamDelete in src/domain/streaming.ts) once, before the
-// first change to the status's audience, at exactly four sites; none runs under a batch's budget (JobBudget,
-// RowBudget), and a status's boosts removed inside batches are covered by the original's capture. A remote boost's
-// removal (removeBoost, from deleteObject and undoInteraction) captures before it hides or deletes the boost.
-const SITES: readonly [file: string, name: string, changes: readonly string[]][] = [
-  [
-    "src/domain/statuses.ts",
-    "deleteStatus",
-    ["removeReblog(", "beginRetraction(", "UPDATE statuses SET withdrawn", "UPDATE media_attachments"],
-  ],
-  ["src/domain/statuses.ts", "unreblog", ["removeReblog("]],
-  ["src/domain/inbox.ts", "deleteObject", ["runJobBatch("]],
-  ["src/domain/inbox.ts", "removeBoost", ["hideRemoteStatus(", "DELETE FROM statuses"]],
-];
-
-// The code (comments blanked) of the top-level function or const `name` of `file`.
-function body(files: readonly Source[], file: string, name: string): string | undefined {
-  const source = files.find((s) => s.path === file);
-  if (source === undefined) {
-    return undefined;
-  }
-  const { program, code } = parse(source);
-  for (const statement of program.body) {
-    const declaration = statement.type === "ExportNamedDeclaration" ? statement.declaration : statement;
-    const named =
-      (declaration?.type === "FunctionDeclaration" && declaration.id?.name === name) ||
-      (declaration?.type === "VariableDeclaration" &&
-        declaration.declarations.some((d) => d.id.type === "Identifier" && d.id.name === name));
-    if (named) {
-      return code.slice(statement.start, statement.end);
-    }
-  }
-  return undefined;
-}
+// R32 (docs/visibility.md): a streaming delete is captured (streamDelete in src/domain/streaming.ts) at exactly these
+// four sites. That each captures once, before the first change to the status's audience, and keeps its capture when a
+// batch fails, the runtime tests show (test/stream-delete.test.ts unless named):
+// - deleteStatus: the captures of a status's boosts and its tombstone, and the streaming suite;
+// - unreblog: "captures a local boost removed by unreblog, by its own id, before it is hidden";
+// - deleteObject: "names the viewers a mention authorized, once, through every batch and a redelivery", and in
+//   test/inbound-job-isolation.test.ts a failing first batch that keeps its capture and a redelivered Delete whose job
+//   exists that captures nothing;
+// - removeBoost: "captures a remote boost removed by Delete or Undo, by its own id".
+// This inventory fails on any other site, which then needs a witness of its own. No capture function runs under a
+// batch's budget (JobBudget, RowBudget): a capture a budget could skip is invisible to those tests, which never
+// exhaust one before it.
+const CAPTURES = {
+  "src/domain/statuses.ts deleteStatus": 1,
+  "src/domain/statuses.ts unreblog": 1,
+  "src/domain/inbox.ts deleteObject": 1,
+  "src/domain/inbox.ts removeBoost": 1,
+};
 
 function captureProblems(files: readonly Source[]): string[] {
   const found: string[] = [];
-  for (const [file, name, changes] of SITES) {
-    const text = body(files, file, name);
-    if (text === undefined) {
-      found.push(`${file} has no ${name}`);
-      continue;
-    }
-    const capture = text.indexOf("streamDelete(");
-    if (capture === -1) {
-      found.push(`${name} does not capture`);
-    }
-    for (const change of changes) {
-      const at = text.indexOf(change);
-      if (at === -1) {
-        found.push(`${name} has no ${change}`);
-      } else if (capture > at) {
-        found.push(`${name} captures after ${change}`);
+  const owners = new Map<string, string>();
+  for (const source of files) {
+    const { program, code } = parse(source);
+    walk(program, (node) => {
+      if (node.type === "CallExpression" && node.callee.type === "Identifier" && node.callee.name === "streamDelete") {
+        const owner = ownerOf(program, node.start);
+        const key = `${source.path} ${owner?.name ?? "(top level)"}`;
+        found.push(key);
+        if (owner !== null) {
+          owners.set(key, code.slice(owner.start, owner.end));
+        }
       }
-    }
-    if (/\b(?:Job|Row)?Budget\b/.test(text)) {
-      found.push(`${name} runs under a budget`);
-    }
+    });
   }
-  // A remote status's delete is captured only when its job is created: the job row is the persisted marker.
-  const created =
-    /const created = db\.first\(\s*`INSERT INTO inbound_jobs[^`]*ON CONFLICT DO NOTHING\s*RETURNING key`[^]*?if \(created !== undefined\) \{\s*streamDelete\(/;
-  if (!created.test(body(files, "src/domain/inbox.ts", "deleteObject") ?? "")) {
-    found.push("deleteObject captures other than when its job is created");
-  }
-  const calls = files
-    .flatMap((source) => [...parse(source).code.matchAll(/\bstreamDelete\(/g)].map(() => source.path))
-    .toSorted();
-  const expected = [
-    "src/domain/inbox.ts",
-    "src/domain/inbox.ts",
-    "src/domain/statuses.ts",
-    "src/domain/statuses.ts",
-    // Its declaration.
-    "src/domain/streaming.ts",
-  ];
-  if (calls.join() !== expected.join()) {
-    found.push(`streamDelete is named at ${calls.join(", ")}`);
-  }
-  return found;
+  const budgets = [...owners]
+    .filter(([, text]) => /\b(?:Job|Row)?Budget\b/.test(text))
+    .map(([key]) => `${key} runs under a budget`);
+  return [...inventoryDiff(found, CAPTURES), ...budgets.toSorted()];
 }
 
 describe("the streaming delete capture sites", () => {
-  it("captures at the four sites, before the audience changes, and nowhere else", () => {
+  it("are the four sites, none under a budget", () => {
     expect(captureProblems(SOURCES)).toEqual([]);
   });
 
-  // Each fixture is inbox.ts as it is, edited, among the real sources.
-  const inbox = SOURCES.find((s) => s.path === "src/domain/inbox.ts")?.text ?? "";
-  const BOOST = statement("streamDelete(db, boost.id, now)");
-  const RECOUNT = statement("recountStatus(db, boost.original)");
-  const SIGNATURE = /function removeBoost\(\s*db: Db,/;
-  const ON_CREATE =
-    /^([ \t]*)if \(created !== undefined\) \{\s*streamDelete\(db, status\.id, now\);?\s*hideRemoteStatus\(db, status\.id\);?\s*\}/m;
   guardFixtures(
     captureProblems,
     {
       flagged: {
-        "a capture in a comment only": [
-          editOnce(inbox, BOOST, "$1// streamDelete(db, boost.id, now)"),
-          "removeBoost does not capture",
-        ],
-        "a capture after the change": [
-          editOnce(
-            editOnce(inbox, BOOST, ""),
-            RECOUNT,
-            "$1streamDelete(db, boost.id, now)\n$1recountStatus(db, boost.original)",
-          ),
-          "removeBoost captures after hideRemoteStatus(",
-        ],
-        "a capture under a JobBudget": [
-          editOnce(inbox, SIGNATURE, "function removeBoost(budget: JobBudget, db: Db,"),
-          "removeBoost runs under a budget",
-        ],
-        "a capture under a RowBudget": [
-          editOnce(inbox, SIGNATURE, "function removeBoost(budget: RowBudget, db: Db,"),
-          "removeBoost runs under a budget",
-        ],
-        "a capture outside the job creation": [
-          editOnce(
-            inbox,
-            ON_CREATE,
-            "$1streamDelete(db, status.id, now)\n$1if (created !== undefined) {\n$1\thideRemoteStatus(db, status.id)\n$1}",
-          ),
-          "deleteObject captures other than when its job is created",
-        ],
         "a fifth site": [
-          `${inbox}\nfunction extra(db: Db): void {\n\tstreamDelete(db, 'x', 0)\n}\n`,
-          `streamDelete is named at ${["inbox", "inbox", "inbox", "statuses", "statuses", "streaming"].map((m) => `src/domain/${m}.ts`).join(", ")}`,
+          "function extra(db: Db): void {\n\tstreamDelete(db, 'x', 0)\n}",
+          "src/domain/probe.ts extra has 1, expected 0",
+        ],
+        "a capture under a budget": [
+          "function extra(budget: JobBudget, db: Db): void {\n\tstreamDelete(db, 'x', 0)\n}",
+          "src/domain/probe.ts extra runs under a budget",
         ],
       },
-      passed: { "a capture named in a comment": `${inbox}\n// streamDelete(db, id, now) runs above.\n` },
+      passed: { "a capture named in a comment": "// streamDelete(db, id, now) runs above.\nf()" },
     },
-    { path: "src/domain/inbox.ts", over: SOURCES },
+    { over: SOURCES },
+  );
+
+  guardFixtures(
+    captureProblems,
+    {
+      flagged: {
+        "a second capture in the same function": [
+          [
+            "export const unreblog = (db: Db, id: string) => {",
+            "\tstreamDelete(db, id, 0)",
+            "\tstreamDelete(db, id, 0)",
+            "}",
+            "export const deleteStatus = (db: Db, id: string) => streamDelete(db, id, 0)",
+          ].join("\n"),
+          "src/domain/statuses.ts unreblog has 2, expected 1",
+        ],
+        "a capture function under a RowBudget": [
+          [
+            "export const unreblog = (db: Db, id: string) => streamDelete(db, id, 0)",
+            "export const deleteStatus = (db: Db, id: string, budget: RowBudget) => streamDelete(db, id, 0)",
+          ].join("\n"),
+          "src/domain/statuses.ts deleteStatus runs under a budget",
+        ],
+      },
+      passed: {
+        "the two sites alone": [
+          "export const unreblog = (db: Db, id: string) => streamDelete(db, id, 0)",
+          "export const deleteStatus = (db: Db, id: string) => streamDelete(db, id, 0)",
+        ].join("\n"),
+      },
+    },
+    { path: "src/domain/statuses.ts", over: SOURCES },
   );
 });
