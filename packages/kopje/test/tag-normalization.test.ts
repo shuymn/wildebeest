@@ -57,10 +57,10 @@ const FIXED_POINTS: [string, string][] = [
   [`${"a".repeat(255)}\u1100\u0301\u1161`, `${"a".repeat(255)}\uAC00`],
 ];
 
-// Characters NFC composes or reorders after a pass drops what stood between them, separators a pass drops, and capitals:
-// Hangul jamo; Greek vowels and the marks they take with U+0345; alef, waw, yeh and heh with U+0653 to U+0655; Indic and
-// Myanmar vowels of two parts; Alphabetic marks with a class (Hebrew points, Arabic harakat, Thai, Tibetan and Telugu
-// vowel signs); -, space, U+0301, U+0F39 and U+200D; capitals.
+// Characters NFC composes or reorders after a pass drops what stood between them, separators a pass drops, and
+// capitals: Hangul jamo; Greek vowels and the marks they take with U+0345; alef, waw, yeh and heh with U+0653 to
+// U+0655; Indic and Myanmar vowels of two parts; Alphabetic marks with a class (Hebrew points, Arabic harakat, Thai,
+// Tibetan and Telugu vowel signs); -, space, U+0301, U+0F39 and U+200D; capitals.
 const TARGETED = [
   ...range(0x1100, 0x1112),
   ...range(0x1161, 0x1175),

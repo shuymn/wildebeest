@@ -4,12 +4,12 @@
 // in workerd, so the proof holds for the Store's runtime and for the migration's SQL.
 //
 // A character is eligible when normalizeOnce keeps it as it is: NFKC leaves it, it is lowercase, and it is no letter of
-// the folding table and no character a hashtag cannot hold. Combining classes are not exposed by JavaScript, so they are
-// read from canonical reordering: a nonstarter is a character that reorders against U+0334 (class 1) or U+0345 (class
-// 240, the highest), and the class order is the order NFD sorts two of them in. A primary composite Y (NFC leaves it,
-// its NFD has two or more code points) composes from NFC of its NFD without the last code point, followed by that last
-// one: in canonical order the pair NFC meets is that one, and no other (a pair whose mark has a lower class than its
-// first character's last piece is never reached, as NFC sorts the marks of a run first).
+// the folding table and no character a hashtag cannot hold. Combining classes are not exposed by JavaScript, so they
+// are read from canonical reordering: a nonstarter is a character that reorders against U+0334 (class 1) or U+0345
+// (class 240, the highest), and the class order is the order NFD sorts two of them in. A primary composite Y (NFC
+// leaves it, its NFD has two or more code points) composes from NFC of its NFD without the last code point, followed by
+// that last one: in canonical order the pair NFC meets is that one, and no other (a pair whose mark has a lower class
+// than its first character's last piece is never reached, as NFC sorts the marks of a run first).
 
 import { normalizeOnce } from "../src/domain/tag-name.js";
 

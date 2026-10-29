@@ -27,11 +27,11 @@ export function normalizeOnce(name: string): string {
   return out.replace(INVALID, "");
 }
 
-// status_tags.name: normalizeOnce applied twice, a fixed point (normalizeTag(normalizeTag(x)) === normalizeTag(x)). Every
-// character normalizeOnce leaves is one it keeps as it is, so the second pass is NFC of the first's result, and NFC of
-// such a name holds only such characters again; test-node/tag-key-fixed-points.test.ts proves this from the runtime's
-// Unicode tables. Mastodon's key, wherever its single pass is already a fixed point, is unchanged. ASCII needs no second
-// pass. Empty when nothing is left, which is no hashtag.
+// status_tags.name: normalizeOnce applied twice, a fixed point (normalizeTag(normalizeTag(x)) === normalizeTag(x)).
+// Every character normalizeOnce leaves is one it keeps as it is, so the second pass is NFC of the first's result, and
+// NFC of such a name holds only such characters again; test-node/tag-key-fixed-points.test.ts proves this from the
+// runtime's Unicode tables. Mastodon's key, wherever its single pass is already a fixed point, is unchanged. ASCII
+// needs no second pass. Empty when nothing is left, which is no hashtag.
 export function normalizeTag(name: string): string {
   const once = normalizeOnce(name);
   return /^[\0-\x7f]*$/.test(once) ? once : normalizeOnce(once);
