@@ -16,8 +16,7 @@ export function forbiddenProblem(sql: string): string | null {
   return found === undefined ? null : `${found.text} is not allowed in a migration`;
 }
 
-// A statement's tokens, whether it is a trigger, and where it ends in the text (its ';', or the end).
-type Statement = { tokens: SqlToken[]; trigger: boolean; end: number };
+type Statement = { tokens: SqlToken[]; trigger: boolean };
 
 const BLOCK_WORDS = new Set(["BEGIN", "CASE", "END"]);
 
@@ -39,13 +38,13 @@ function statements(sql: string, tokens: SqlToken[]): Statement[] | string {
   let current: SqlToken[] = [];
   let blocks: ("BEGIN" | "CASE")[] = [];
   let body: "none" | "open" | "closed" = "none";
-  const end = (at: number): string | null => {
+  const end = (): string | null => {
     const trigger = startsTrigger(current);
     if (trigger && (blocks.length > 0 || body !== "closed")) {
       return "a trigger statement must end with the END of its body";
     }
     if (current.length > 0) {
-      out.push({ tokens: current, trigger, end: at });
+      out.push({ tokens: current, trigger });
     }
     current = [];
     blocks = [];
@@ -60,7 +59,7 @@ function statements(sql: string, tokens: SqlToken[]): Statement[] | string {
       return "an unquoted identifier longer than 256 characters is not allowed";
     }
     if (t.kind === "punct" && t.text === ";" && blocks.length === 0) {
-      const problem = end(t.at);
+      const problem = end();
       if (problem !== null) {
         return problem;
       }
@@ -98,272 +97,136 @@ function statements(sql: string, tokens: SqlToken[]): Statement[] | string {
       }
     }
   }
-  return blocks.length > 0 ? "unterminated BEGIN or CASE" : (end(sql.length) ?? out);
+  return blocks.length > 0 ? "unterminated BEGIN or CASE" : (end() ?? out);
 }
 
 const DML = new Set(["INSERT", "UPDATE", "DELETE", "REPLACE", "SELECT", "WITH"]);
 
 const isPunct = (token: SqlToken | undefined, text: string): boolean => token?.kind === "punct" && token.text === text;
 
-// The name a CREATE INDEX statement names (after UNIQUE and IF NOT EXISTS), the position of ON, and whether it says
-// IF NOT EXISTS, or null for a schema-qualified or malformed name.
-function indexOf(s: SqlToken[]): { name: string; on: number; ifNotExists: boolean } | null {
-  let at = isWord(s[1], "UNIQUE") ? 3 : 2;
-  const ifNotExists = isWord(s[at], "IF") && isWord(s[at + 1], "NOT") && isWord(s[at + 2], "EXISTS");
-  if (ifNotExists) {
-    at += 3;
-  }
-  const name = s[at];
-  return name?.kind === "word" && isWord(s[at + 1], "ON") ? { name: name.text, on: at + 1, ifNotExists } : null;
-}
+// The work tables a declared file creates and drops, and the indexes of other tables it drops (each of which it
+// creates again): what the dynamic checks of test/migration-lint.test.ts compare against the schema before and after
+// the file. Only for a file unchangedProblem accepts.
+export type DeclaredObjects = { workTables: string[]; droppedIndexes: string[] };
 
-// A statement's text as SQLite reads it, for comparing two statements: comments dropped, each run of whitespace one
-// space, words in upper case, and the contents of strings, quoted names and numbers kept as written.
-function statementText(sql: string, s: Statement): string {
-  const text = sql.slice(s.tokens[0]?.at ?? s.end, s.end);
-  // Outside quotes: comments as spaces, words in upper case, and spaces kept only between two word characters.
-  const plain = (part: string) =>
-    part
-      .replace(/--[^\n]*|\/\*[\s\S]*?(\*\/|$)/g, " ")
-      .toUpperCase()
-      .replace(/\s+/g, " ")
-      .replace(/ ?([^A-Z0-9_$ ]) ?/g, "$1")
-      .trim();
-  let out = "";
-  let from = 0;
-  let i = 0;
-  while (i < text.length) {
-    const c = text[i] ?? "";
-    if (text.startsWith("--", i)) {
-      const k = text.indexOf("\n", i);
-      i = k === -1 ? text.length : k + 1;
-    } else if (text.startsWith("/*", i)) {
-      const k = text.indexOf("*/", i + 2);
-      i = k === -1 ? text.length : k + 2;
-    } else if (c === "'" || c === '"' || c === "`" || c === "[") {
-      const close = c === "[" ? "]" : c;
-      let j = i + 1;
-      for (;;) {
-        const k = text.indexOf(close, j);
-        j = k === -1 ? text.length : k + 1;
-        if (k === -1 || close === "]" || text[j] !== close) {
-          break;
-        }
-        j++;
-      }
-      out += plain(text.slice(from, i)) + text.slice(i, j);
-      from = i = j;
-    } else {
-      i++;
-    }
-  }
-  return out + plain(text.slice(from));
-}
-
-// The statements of a reviewed file that is not declared (an earlier one), split at each ';' outside BEGIN ... END
-// and CASE ... END, or why it cannot be split.
-function looseStatements(sql: string): Statement[] | string {
-  const tokens = tokenizeSql(sql);
-  if (typeof tokens === "string") {
-    return tokens;
-  }
-  const out: Statement[] = [];
-  let current: SqlToken[] = [];
-  let depth = 0;
-  for (const t of tokens) {
-    if (isPunct(t, ";") && depth === 0) {
-      if (current.length > 0) {
-        out.push({ tokens: current, trigger: startsTrigger(current), end: t.at });
-      }
-      current = [];
-      continue;
-    }
-    current.push(t);
-    if (isWord(t, "BEGIN") || isWord(t, "CASE")) {
-      depth++;
-    } else if (isWord(t, "END")) {
-      depth--;
-      if (depth < 0) {
-        return "END without a BEGIN or CASE";
-      }
-    }
-  }
-  if (depth !== 0) {
-    return "unterminated BEGIN or CASE";
-  }
-  if (current.length > 0) {
-    out.push({ tokens: current, trigger: startsTrigger(current), end: sql.length });
-  }
-  return out;
-}
-
-// The last CREATE INDEX statement of each name among `files`, as statementText gives it, or why a file cannot be read
-// (then nothing that rests on an earlier definition is allowed).
-function indexDefinitions(files: readonly string[]): Map<string, string> | string {
-  const out = new Map<string, string>();
-  for (const [n, sql] of files.entries()) {
-    const split = looseStatements(sql);
-    if (typeof split === "string") {
-      return `earlier file ${n} cannot be read: ${split}`;
-    }
-    for (const s of split) {
-      const index = isWord(s.tokens[0], "CREATE") ? indexOf(s.tokens) : null;
-      if (index !== null) {
-        out.set(index.name, statementText(sql, s));
-      }
-    }
-  }
-  return out;
-}
-
-// A file declared foreignKeys: 'unchanged' may hold only statements that cannot change a reference or a key of the
-// schema it leaves:
+// A file declared foreignKeys: 'unchanged', judged before it runs. It is written in a narrow dialect: every name a
+// plain unquoted ASCII word, never schema-qualified or quoted (a quoted string is a value, not a name), and no IF
+// [NOT] EXISTS or TEMP anywhere. It may hold only statements that cannot change a reference or a key of the schema it
+// leaves:
 //   ALTER TABLE <name> ADD [COLUMN] ... with no REFERENCES and no generated column (GENERATED, or AS followed by '(');
 //   CREATE TRIGGER (its body's writes are checked as they run) and DROP TRIGGER (a trigger holds no key or
 //   reference); CREATE INDEX that is not UNIQUE;
 //   DML (INSERT, UPDATE, DELETE, REPLACE, SELECT, WITH), checked statement by statement (foreign keys are immediate,
 //   and no migration may defer them);
-//   a work table: CREATE TABLE <name> with no REFERENCES, which the file drops (DROP TABLE <name>) before it ends, and
-//   which no file (`earlier`, the migrations before it, or this one) names after REFERENCES, so no row anywhere
-//   refers to it and dropping it cascades nothing; any index on it, UNIQUE included but not under IF NOT EXISTS
-//   (which would let an existing index of that name pass for it), and DROP INDEX of one;
-//   DROP INDEX of an index that is not UNIQUE when the file later creates it again exactly as the last of `earlier`
-//   that created it (the same statement, its strings, quoted names and numbers as written), since an index that is
-//   not UNIQUE is no key a reference can name. Every earlier file must be read whole (CASE and trigger bodies
-//   included), or nothing that rests on an earlier definition is allowed.
+//   a work table: CREATE TABLE <name> with no REFERENCES, which the file drops (DROP TABLE <name>) before it ends; any
+//   index on it, UNIQUE included, and DROP INDEX of one;
+//   DROP INDEX of another table's index when the file creates an index of that name again after it.
+// What only the schema can tell is checked by running the file (test/migration-lint.test.ts): that no reference names
+// a work table before it, that none is left after it, and that every index the Store had before it is there after it
+// with the same definition (so a dropped index was created again as it was, and was not UNIQUE).
 // Anything else (CREATE VIEW, CREATE UNIQUE INDEX on a table the file did not create, DROP of anything else, RENAME,
-// DROP COLUMN, TEMP objects, ...) is refused, and so is a trigger named BEGIN, CASE or END.
-export function unchangedProblem(sql: string, earlier: readonly string[] = []): string | null {
+// DROP COLUMN, ...) is refused, and so is a trigger named BEGIN, CASE or END.
+export function unchangedProblem(sql: string): string | null {
+  const objects = declaredObjects(sql);
+  return typeof objects === "string" ? objects : null;
+}
+
+// The objects of a declared file (DeclaredObjects), or why unchangedProblem refuses it.
+export function declaredObjects(sql: string): DeclaredObjects | string {
   const tokens = tokenizeSql(sql);
   if (typeof tokens === "string") {
     return tokens;
+  }
+  const quoted = tokens.find((t) => t.kind === "other" && (t.text === '"' || t.text === "`" || t.text === "["));
+  if (quoted !== undefined) {
+    return "a quoted name is not allowed";
+  }
+  const ifExists = tokens.find(
+    (t, i) => isWord(t, "IF") && (isWord(tokens[i + 1], "EXISTS") || isWord(tokens[i + 1], "NOT")),
+  );
+  if (ifExists !== undefined || tokens.some((t) => isWord(t, "TEMP") || isWord(t, "TEMPORARY"))) {
+    return "IF [NOT] EXISTS and TEMP are not allowed";
   }
   const split = statements(sql, tokens);
   if (typeof split === "string") {
     return split;
   }
   const work = new Set<string>();
-  const workIndexes = new Set<string>();
   const dropped = new Set<string>();
-  const definitions = indexDefinitions(earlier);
-  if (typeof definitions === "string") {
-    return definitions;
-  }
-  // The tables any file names after REFERENCES (a schema-qualified name by its last part); null when one cannot be
-  // read (a quoted name, or a file that does not tokenize), so that no work table is allowed.
-  let referenced: Set<string> | null = new Set<string>();
-  for (const file of [...earlier, sql]) {
-    const all = tokenizeSql(file);
-    if (typeof all === "string") {
-      referenced = null;
-      break;
-    }
-    for (const [i, t] of all.entries()) {
-      if (!isWord(t, "REFERENCES")) {
-        continue;
-      }
-      const at = isPunct(all[i + 2], ".") ? i + 3 : i + 1;
-      const name = all[at];
-      if (name?.kind !== "word") {
-        referenced = null;
-        break;
-      }
-      referenced.add(name.text);
-    }
-    if (referenced === null) {
-      break;
-    }
-  }
-  for (const { tokens: s, trigger } of split) {
+  const workIndexes = new Set<string>();
+  const droppedIndexes: string[] = [];
+  for (const [at, { tokens: s, trigger }] of split.entries()) {
     const word = (i: number) => (s[i]?.kind === "word" ? s[i].text : null);
+    // A plain name at position i: a word not followed by '.'.
+    const name = (i: number) => (isPunct(s[i + 1], ".") ? null : word(i));
     if (trigger) {
       if (word(1) !== "TRIGGER") {
         return `CREATE ${word(1) ?? ""} TRIGGER is not allowed`;
       }
-      let name = isWord(s[2], "IF") && isWord(s[3], "NOT") && isWord(s[4], "EXISTS") ? 5 : 2;
-      if (isPunct(s[name + 1], ".")) {
-        name += 2;
-      }
-      if (BLOCK_WORDS.has(word(name) ?? "")) {
-        return `a trigger named ${word(name)} is not allowed`;
+      if (name(2) === null || BLOCK_WORDS.has(word(2) ?? "")) {
+        return `a trigger named ${s[2]?.text ?? ""} is not allowed`;
       }
     } else if (word(0) === "ALTER") {
-      const add = word(1) === "TABLE" && s[2] !== undefined && s[2].kind !== "punct" && word(3) === "ADD";
+      const add = word(1) === "TABLE" && name(2) !== null && word(3) === "ADD";
       const generated = s.some((t, i) => isWord(t, "GENERATED") || (isWord(t, "AS") && isPunct(s[i + 1], "(")));
       if (!add || generated || s.some((t) => isWord(t, "REFERENCES"))) {
         return "only ALTER TABLE ... ADD COLUMN without REFERENCES or a generated column is allowed";
       }
     } else if (word(0) === "CREATE" && word(1) === "TABLE") {
-      const name = word(2);
-      if (name === null || isPunct(s[3], ".") || ["IF", "TEMP", "TEMPORARY"].includes(name)) {
+      const table = name(2);
+      if (table === null) {
         return "a work table needs a plain name";
       }
       if (s.some((t) => isWord(t, "REFERENCES"))) {
-        return `the work table ${name} holds a REFERENCES`;
+        return `the work table ${table} holds a REFERENCES`;
       }
-      if (referenced === null || referenced.has(name)) {
-        return `the work table ${name} is named after REFERENCES`;
+      if (work.has(table) || dropped.has(table)) {
+        return `the work table ${table} is created twice`;
       }
-      if (work.has(name) || dropped.has(name)) {
-        return `the work table ${name} is created twice`;
+      work.add(table);
+    } else if (word(0) === "CREATE" && (word(1) === "INDEX" || (word(1) === "UNIQUE" && word(2) === "INDEX"))) {
+      const pos = word(1) === "UNIQUE" ? 3 : 2;
+      const index = name(pos);
+      const table = isWord(s[pos + 1], "ON") ? name(pos + 2) : null;
+      if (index === null || table === null) {
+        return "an index needs a plain name and table";
       }
-      work.add(name);
-    } else if (word(0) === "CREATE") {
-      const index = indexOf(s);
-      const table = index === null ? null : word(index.on + 1);
-      if (word(1) === "INDEX" || word(1) === "UNIQUE") {
-        if (index === null || table === null) {
-          return "an index needs a plain name and table";
-        }
-        if (work.has(table)) {
-          // IF NOT EXISTS would let an existing index of that name pass for the work table's, and DROP INDEX then
-          // drop it; without it, such a name makes the CREATE fail.
-          if (index.ifNotExists) {
-            return `the work index ${index.name} is created under IF NOT EXISTS`;
-          }
-          workIndexes.add(index.name);
-          continue;
-        }
-        if (word(1) === "UNIQUE") {
-          return `CREATE UNIQUE INDEX on ${table}, a table the file did not create, is not allowed`;
-        }
-        continue;
+      if (work.has(table)) {
+        workIndexes.add(index);
+      } else if (word(1) === "UNIQUE") {
+        return `CREATE UNIQUE INDEX on ${table}, a table the file did not create, is not allowed`;
       }
-      return `CREATE ${word(1) ?? ""} is not allowed`;
     } else if (word(0) === "DROP" && word(1) === "TRIGGER") {
       continue;
     } else if (word(0) === "DROP" && word(1) === "TABLE") {
-      const name = word(2);
-      if (name === null || s.length !== 3 || !work.has(name)) {
-        return `DROP TABLE of ${name ?? s[2]?.text ?? ""}, a table the file did not create, is not allowed`;
+      const table = name(2);
+      if (table === null || s.length !== 3 || !work.has(table)) {
+        return `DROP TABLE of ${s[2]?.text ?? ""}, a table the file did not create, is not allowed`;
       }
-      work.delete(name);
-      dropped.add(name);
+      work.delete(table);
+      dropped.add(table);
     } else if (word(0) === "DROP" && word(1) === "INDEX") {
-      const name = word(2);
-      if (name === null || s.length !== 3) {
+      const index = name(2);
+      if (index === null || s.length !== 3) {
         return "DROP INDEX needs a plain name";
       }
-      if (workIndexes.has(name)) {
+      if (workIndexes.has(index)) {
         continue;
       }
-      const definition = definitions.get(name);
-      const again = split.slice(split.findIndex((x) => x.tokens === s) + 1).find((x) => {
-        const index = isWord(x.tokens[0], "CREATE") ? indexOf(x.tokens) : null;
-        return index?.name === name;
+      const again = split.slice(at + 1).some(({ tokens: x }) => {
+        const unique = isWord(x[1], "UNIQUE");
+        return isWord(x[0], "CREATE") && isWord(x[unique ? 2 : 1], "INDEX") && isWord(x[unique ? 3 : 2], index);
       });
-      if (
-        definition === undefined ||
-        definition.startsWith("CREATE UNIQUE") ||
-        again === undefined ||
-        statementText(sql, again) !== definition
-      ) {
-        return `DROP INDEX ${name} is allowed only when the file creates it again as it was, and it is not UNIQUE`;
+      if (!again) {
+        return `DROP INDEX ${index} is allowed only when the file creates it again`;
       }
+      droppedIndexes.push(index);
     } else if (!DML.has(word(0) ?? "")) {
       return `${word(0) ?? s[0]?.text ?? ""} is not allowed`;
     }
   }
   const left = [...work];
-  return left.length === 0 ? null : `the work table ${left.join(", ")} is not dropped`;
+  return left.length === 0
+    ? { workTables: [...dropped], droppedIndexes }
+    : `the work table ${left.join(", ")} is not dropped`;
 }

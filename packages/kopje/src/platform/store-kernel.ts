@@ -18,9 +18,11 @@ export type Migration = {
   // tables: a table it creates with no REFERENCES, that no migration names after REFERENCES (so no row refers to it,
   // and dropping it, which deletes its rows, cascades nothing), and that it drops before it ends, so the schema after
   // the file holds no trace of it; and an index that is not UNIQUE (no reference can name it) dropped and created again
-  // exactly as it was. test/migration-lint.test.ts holds a declared file to these statements (a guard against an
-  // author's mistake, not a proof against a hostile file: migrations are written and reviewed here) and applies it to
-  // a populated Store. Not checksummed. Without it, the upgrade checks every reference in the Store.
+  // exactly as it was. test/migration-lint.test.ts holds a declared file to these statements, in a narrow dialect (a
+  // guard against an author's mistake, not a proof against a hostile file: migrations are written and reviewed here),
+  // and applies it to a populated Store, comparing the schema before and after it: no reference names a work table,
+  // none is left, and every index is as it was. Not checksummed. Without it, the upgrade checks every reference in the
+  // Store.
   readonly foreignKeys?: "unchanged";
 };
 
