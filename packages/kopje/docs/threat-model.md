@@ -669,7 +669,10 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
   `logins` and `registrations` count local accounts per window and name none (`activity_logins` holds account ids and
   is never presented). What weekly logins tell of a small instance is an accepted risk. _Enforced (main):_
   `src/domain/instance-activity.ts`; `test/instance-activity.test.ts` ("counts local public and unlisted statuses
-  and boosts once, at creation, and nothing else"), `test-node/activity-writers.test.ts`.
+  and boosts once, at creation, and nothing else"), `test/setup.test.ts` ("records the account's registration and its
+  first login with the bootstrap", "a failure at the first login's insert, after the registration is counted, rolls it
+  back"); `test-node/activity-writers.test.ts` is the inventory of the writers of local statuses and accounts, so a new
+  one needs a witness of its own.
 - **VIS-13: a block cuts both ways, as Mastodon's does.** A block (local, or a remote `Block` that passes ID-6)
   ends the follows between the two accounts in both directions and in either state; while it lasts neither may
   follow the other (a remote `Follow` is answered with a `Reject`), the blocked account sees nothing of the blocker
@@ -917,8 +920,11 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
   events: `homeStatus` in `src/domain/timelines.ts` (with `statusReads`' `only`), `mentionedStatus` in
   `src/domain/notifications.ts`, `deleteAudience` in `src/domain/audience.ts`, `streamUnit` and `streamDelete` in
   `src/domain/streaming.ts`, migration `0028_streaming_home`; `test/streaming/home.test.ts`,
-  `test/streaming-oracle.test.ts`, `test/stream-delete.test.ts`, `test-node/layering.test.ts`,
-  `test/policy-bounds.test.ts`, `test/migrations.test.ts`, `test/cascade-guard.test.ts`. _Enforced (main):_ lists, direct and merged: `listStatus` in `src/domain/timelines.ts`, `streamedConversation`
+  `test/streaming-oracle.test.ts`, `test/stream-delete.test.ts`, `test/inbound-job-isolation.test.ts` (the capture
+  kept when a first batch fails, none for a redelivered `Delete` whose job exists), `test/policy-bounds.test.ts`,
+  `test/migrations.test.ts`, `test/cascade-guard.test.ts`; `test-node/layering.test.ts` is the inventory of the four
+  capture sites. _Enforced (main):_ lists, direct and merged: `listStatus` in `src/domain/timelines.ts`,
+  `streamedConversation`
   and the change sequence in `src/domain/conversations.ts`, the merge transition in
   `src/domain/notification-requests.ts`, `streamUnit`, `streamDelete` and `streamConversations` in
   `src/domain/streaming.ts`, migration `0032_streaming_lists`; `test/streaming/lists.test.ts`,
@@ -3151,8 +3157,10 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
   interleave", "when the purge completes before any expansion"). _Enforced (main)_ for the staging of a retraction (a
   boost's `Undo`, a local status's `Delete`, a forward: `stageRetraction` in `src/domain/deliveries.ts`, migration
   `0085_retraction_staging`). A retraction still staging is found through `outbound_activities_staging`, a partial index
-  of those alone. Each call admits every read before it runs, under one rule: a seek, a statement's first row (or its
-  finding none) and each further row a page yields count one each, and none runs once `STAGING_READ`
+  of those alone, and is never deleted while it stages, though every row it has written is settled: its one delete
+  (`dropSettledActivity`, the inventory `test-node/staged-intents.test.ts`) requires `staged IS NULL`. Each call
+  admits every read before it runs, under one rule: a seek, a statement's first row (or its finding none) and each
+  further row a page yields count one each, and none runs once `STAGING_READ`
   (500) have, so a read that consuming a row makes is counted before the next row is pulled. It returns at most
   `STAGING_BYTES` (1 MiB) of projected UTF-8 text, or one uri past the bound read to be compared with a name of the
   activity (within its body), and the row that crosses it, three values of `TARGET_CHUNK_BYTES` at most; a value past
@@ -3184,9 +3192,11 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
   once, within each call’s maxRows", "reads, returns and writes within their derived bounds in each call", "reaches a
   row that completes during the rows’ walk", "rolls a failing call back whole in its job batch", "is bounded by the
   per-column maxima its reads and budgets admit", "counts a nested seek before the next row", "steps over at most the
-  allowance of chunks past its first"), `test/forward-delete.test.ts` ("advances a forward whose every share
-  resolves")). _Gap (accepted):_ a source row removed before its cursor reads it is missed unless other evidence names
-  its inbox; a follow made after the staging began is not reached; a delivery row moved in place to a personal inbox
+  allowance of chunks past its first", "keeps its intent while every chunk it has written is delivered"),
+  `test/admin-suspension.test.ts` ("sends the restoration to a non-follower even when the profile is edited before it
+  is staged"), `test/forward-delete.test.ts` ("advances a forward whose every share resolves")). _Gap (accepted):_
+  a source row removed before its cursor reads it is missed unless other evidence names its inbox; a follow made after
+  the staging began is not reached; a delivery row moved in place to a personal inbox
   (`moveToPersonal`) after the rows' walk passed it is missed when its receipt sorts behind the receipts' cursor, or
   when it stays pending or gives up without a receipt; writing out starts only once every source is read, so a large
   audience takes about two batches per `STAGING_READ` of its targets; and each call parses the activity whole in the

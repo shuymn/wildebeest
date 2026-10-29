@@ -231,14 +231,47 @@ export function lineOf(text: string, offset: number): number {
   return text.slice(0, offset).split("\n").length;
 }
 
-// Fixture edits that hold under any formatter style. statement(code) matches `code` as a statement on a line of its
-// own, with any indentation (captured as $1) and an optional semicolon. editOnce replaces the one match of `pattern`
-// (`$1` and the like as in String#replace) and throws unless it matches exactly once, so a fixture cannot silently
-// stop editing the code it names.
-export function statement(code: string): RegExp {
-  return new RegExp(`^([ \\t]*)${code.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")};?$`, "m");
+// The top-level statement of `program` holding `offset`, with the name it declares (a function, a class, or the first
+// declarator of a const, let or var, exported or not); `(top level)` for one that declares no name.
+export function ownerOf(program: Program, offset: number): { name: string; start: number; end: number } | null {
+  for (const statement of program.body) {
+    if (statement.start <= offset && offset < statement.end) {
+      const declaration =
+        statement.type === "ExportNamedDeclaration" || statement.type === "ExportDefaultDeclaration"
+          ? statement.declaration
+          : statement;
+      let name: string | undefined;
+      if (
+        (declaration?.type === "FunctionDeclaration" || declaration?.type === "ClassDeclaration") &&
+        declaration.id !== null
+      ) {
+        name = declaration.id.name;
+      } else if (declaration?.type === "VariableDeclaration") {
+        const id = declaration.declarations[0]?.id;
+        name = id?.type === "Identifier" ? id.name : undefined;
+      }
+      return { name: name ?? "(top level)", start: statement.start, end: statement.end };
+    }
+  }
+  return null;
 }
 
+// An inventory guard's finding: each `file owner` key whose number of sites differs from `expected`'s (0 when it
+// names none), so a new site, a second one in the same owner and a lost one each fail.
+export function inventoryDiff(sites: readonly string[], expected: Readonly<Record<string, number>>): string[] {
+  const counts = new Map<string, number>();
+  for (const site of sites) {
+    counts.set(site, (counts.get(site) ?? 0) + 1);
+  }
+  return [...new Set([...counts.keys(), ...Object.keys(expected)])].toSorted().flatMap((key) => {
+    const found = counts.get(key) ?? 0;
+    const want = expected[key] ?? 0;
+    return found === want ? [] : [`${key} has ${found}, expected ${want}`];
+  });
+}
+
+// A fixture edit: replaces the one match of `pattern` (`$1` and the like as in String#replace) and throws unless it
+// matches exactly once, so a fixture cannot silently stop editing the code it names.
 export function editOnce(text: string, pattern: RegExp, replacement: string): string {
   const count = [...text.matchAll(new RegExp(pattern.source, pattern.flags.replace("g", "") + "g"))].length;
   if (count !== 1) {

@@ -1,125 +1,107 @@
 import type { Node } from "oxc-parser";
 import { describe, expect, it } from "vitest";
 
-import { guardFixtures, lineOf, parse, sources, walk, type Source } from "./source-scan.js";
+import { guardFixtures, inventoryDiff, ownerOf, parse, sources, walk, type Source } from "./source-scan.js";
 
 // GET /api/v1/instance/activity counts what Mastodon's ActivityTracker counts at creation
-// (domain/instance-activity.ts): every function that inserts a local status (a statuses row whose id allocateLocalId
-// gives) calls countStatus, and every function that inserts a local account (local_accounts) calls countRegistration
-// and recordLogin. A remote status takes no local id, and an import or a cutover conversion runs no Store function
-// that inserts one, so neither counts.
+// (domain/instance-activity.ts): each local status (a statuses row whose id allocateLocalId gives) and each local
+// account (local_accounts). A remote status takes no local id, and an import or a cutover conversion runs no Store
+// function that inserts one, so neither counts. The writers below count, as the runtime tests show: a post and a boost
+// (test/instance-activity.test.ts, "instance activity: what counts"), a registration and its first login
+// (test/setup.test.ts, "records the account's registration and its first login with the bootstrap" and the SETUP-3
+// rollbacks; test/account-invitations.test.ts, an invited account's). This inventory fails on any other function that
+// inserts a local account, or a status in the same function that calls allocateLocalId; such a writer then needs a
+// witness of its own. A status insert whose local id comes from another function (a caller, or around a savepoint
+// callback) is not seen.
 
 const SOURCES = sources("src");
 
+const EXPECTED = {
+  "src/domain/statuses.ts writePost": 1,
+  "src/domain/statuses.ts reblog": 1,
+  "src/domain/setup.ts insertLocalAccount": 1,
+};
+
 const FUNCTIONS = new Set(["FunctionDeclaration", "FunctionExpression", "ArrowFunctionExpression"]);
 
-// The innermost function around each match of `pattern` in `code`, with the names of the functions it calls (call
-// expressions only: a name in a string or a comment is not a call).
-type Enclosing = { start: number; calls: Set<string> };
-
-function enclosing(program: Node, code: string, pattern: RegExp): Enclosing[] {
-  const found: Enclosing[] = [];
-  for (const match of code.matchAll(new RegExp(pattern.source, "g"))) {
-    let best: Node | null = null;
-    walk(program, (node) => {
-      if (FUNCTIONS.has(node.type) && node.start <= match.index && match.index < node.end) {
-        best = node;
-      }
+// Whether the innermost function around `offset` calls `name` (a call expression: a name in a string or a comment is
+// not a call).
+function innermostCalls(program: Node, offset: number, name: string): boolean {
+  let fn: Node | null = null;
+  walk(program, (node) => {
+    if (FUNCTIONS.has(node.type) && node.start <= offset && offset < node.end) {
+      fn = node;
+    }
+  });
+  let calls = false;
+  if (fn !== null) {
+    walk(fn, (node) => {
+      calls ||= node.type === "CallExpression" && node.callee.type === "Identifier" && node.callee.name === name;
     });
-    const fn = best as Node | null;
-    if (fn !== null) {
-      const calls = new Set<string>();
-      walk(fn, (node) => {
-        if (node.type === "CallExpression" && node.callee.type === "Identifier") {
-          calls.add(node.callee.name);
-        }
-      });
-      found.push({ start: fn.start, calls });
-    }
   }
-  return found;
+  return calls;
 }
 
-const RULES = [
-  {
-    name: "a local status insert without countStatus",
-    insert: /\bINSERT\s+INTO\s+statuses\b/,
-    local: "allocateLocalId",
-    calls: ["countStatus"],
-  },
-  {
-    name: "a local account insert without countRegistration and recordLogin",
-    insert: /\bINSERT\s+INTO\s+local_accounts\b/,
-    local: null,
-    calls: ["countRegistration", "recordLogin"],
-  },
-] as const;
+const STATUS_INSERT = /\bINSERT\s+INTO\s+statuses\b/g;
+const ACCOUNT_INSERT = /\bINSERT\s+INTO\s+local_accounts\b/g;
 
-const isLocal = (rule: (typeof RULES)[number], fn: Enclosing) => rule.local === null || fn.calls.has(rule.local);
-
-// One scan of `all`: each function a rule covers (one entry per insert it holds, so the guard cannot pass over
-// nothing), and those of them missing a call the rule needs.
-function scan(all: readonly Source[]): { findings: string[]; covered: string[] } {
-  const findings: string[] = [];
-  const covered: string[] = [];
-  for (const source of all) {
+function sites(all: readonly Source[]): string[] {
+  return all.flatMap((source) => {
     const { program, code } = parse(source);
-    for (const rule of RULES) {
-      for (const fn of enclosing(program, code, rule.insert).filter((fn) => isLocal(rule, fn))) {
-        covered.push(`${source.path} ${rule.name.split(" without")[0]}`);
-        if (!rule.calls.every((call) => fn.calls.has(call))) {
-          findings.push(`${source.path}:${lineOf(source.text, fn.start)} ${rule.name}`);
-        }
-      }
-    }
-  }
-  return { findings: [...new Set(findings)], covered };
+    const at = (offset: number) => `${source.path} ${ownerOf(program, offset)?.name ?? "(top level)"}`;
+    return [
+      ...[...code.matchAll(STATUS_INSERT)]
+        .filter((m) => innermostCalls(program, m.index, "allocateLocalId"))
+        .map((m) => at(m.index)),
+      ...[...code.matchAll(ACCOUNT_INSERT)].map((m) => at(m.index)),
+    ];
+  });
 }
 
-const violations = (all: readonly Source[]) => scan(all).findings;
+const violations = (all: readonly Source[]) => inventoryDiff(sites(all), EXPECTED);
 
 describe("instance activity writers", () => {
-  it("counts every local status and account the Store inserts", () => {
-    const { findings, covered } = scan(SOURCES);
-    expect(findings).toEqual([]);
-    expect(covered.toSorted()).toEqual(
-      [
-        "src/domain/setup.ts a local account insert",
-        "src/domain/statuses.ts a local status insert",
-        "src/domain/statuses.ts a local status insert",
-      ].toSorted(),
-    );
+  it("are the counted writers of local statuses and accounts", () => {
+    expect(violations(SOURCES)).toEqual([]);
   });
 
-  guardFixtures(violations, {
-    flagged: {
-      "a post without the counter": [
-        "function p(db) {\n\tconst id = allocateLocalId(db, now)\n\tdb.run('INSERT INTO statuses (id) VALUES (?)', id)\n}",
-        "src/domain/probe.ts:1 a local status insert without countStatus",
-      ],
-      "an account without its registration": [
-        "const s = (db) => {\n\tdb.run(`INSERT INTO local_accounts (account_id) VALUES (?)`, id)\n\trecordLogin(db, id, now)\n}",
-        "src/domain/probe.ts:1 a local account insert without countRegistration and recordLogin",
-      ],
-      "a counter named in a string, not called": [
-        "function p(db) {\n\tconst id = allocateLocalId(db, now)\n\tdb.run('INSERT INTO statuses (id) VALUES (?)', id, 'countStatus(')\n}",
-        "src/domain/probe.ts:1 a local status insert without countStatus",
-      ],
-      "an account without its login": [
-        "const s = (db) => {\n\tdb.run(`INSERT INTO local_accounts (account_id) VALUES (?)`, id)\n\tcountRegistration(db, now)\n}",
-        "src/domain/probe.ts:1 a local account insert without countRegistration and recordLogin",
-      ],
+  guardFixtures(
+    violations,
+    {
+      flagged: {
+        "a local status insert in another function": [
+          "function p(db) {\n\tconst id = allocateLocalId(db, now)\n\tdb.run('INSERT INTO statuses (id) VALUES (?)', id)\n}",
+          "src/domain/probe.ts p has 1, expected 0",
+        ],
+        "a local account insert in another function": [
+          "const s = (db) => {\n\tdb.run(`INSERT INTO local_accounts (account_id) VALUES (?)`, id)\n}",
+          "src/domain/probe.ts s has 1, expected 0",
+        ],
+      },
+      passed: {
+        "a remote status": "function r(db) {\n\tdb.run('INSERT INTO statuses (id) VALUES (?)', storedId)\n}",
+        "an insert named in a comment": "// INSERT INTO local_accounts\nf()",
+      },
     },
-    passed: {
-      "a remote status": "function r(db) {\n\tdb.run('INSERT INTO statuses (id) VALUES (?)', storedId)\n}",
-      "a counted post": [
-        "function p(db) {",
-        "\tconst id = allocateLocalId(db, now)",
-        "\tdb.run('INSERT INTO statuses (id) VALUES (?)', id)",
-        "\tcountStatus(db, visibility, now)",
-        "}",
-      ].join("\n"),
-      "an insert named in a comment": "// INSERT INTO local_accounts\nf()",
+    { over: SOURCES },
+  );
+
+  guardFixtures(
+    violations,
+    {
+      flagged: {
+        "a second insert in the same function": [
+          [
+            "export function insertLocalAccount(db, input) {",
+            "\tdb.run('INSERT INTO local_accounts (account_id) VALUES (?)', input.id)",
+            "\tdb.run('INSERT INTO local_accounts (account_id) VALUES (?)', input.other)",
+            "}",
+          ].join("\n"),
+          "src/domain/setup.ts insertLocalAccount has 2, expected 1",
+        ],
+      },
+      passed: {},
     },
-  });
+    { path: "src/domain/setup.ts", over: SOURCES },
+  );
 });
