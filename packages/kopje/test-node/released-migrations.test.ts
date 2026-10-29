@@ -188,6 +188,16 @@ describe("released-migrations", { timeout: 30_000 }, () => {
     expect(releasedMigrations(repo)).toEqual({ problems: [], tags: 1, files: 2 });
   });
 
+  it("lists the tags one per line under column.tag=always", () => {
+    const { repo, git, write, commit, release } = repository();
+    release("0.1.0");
+    write("0002_c.sql", "CREATE TABLE c (id INTEGER);\n");
+    commit("c");
+    release("0.2.0");
+    git("config", "column.tag", "always");
+    expect(releasedMigrations(repo)).toEqual({ problems: [], tags: 2, files: 3 });
+  });
+
   it("throws when there is no kopje-v* tag", () => {
     const { repo, git } = repository();
     git("tag", "v0.1.0");

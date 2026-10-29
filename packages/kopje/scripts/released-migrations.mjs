@@ -83,7 +83,7 @@ function notRegular(root, path) {
  * @returns {Result}
  */
 export function releasedMigrations(root = ROOT) {
-  const tags = git(root, ["tag", "-l", TAGS])
+  const tags = git(root, ["tag", "-l", "--no-column", TAGS])
     .split("\n")
     .filter((tag) => tag !== "");
   if (tags.length === 0) {
