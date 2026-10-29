@@ -46,13 +46,16 @@
 -- among them once through status_tags_name, and each of its statuses by key. A name of n bytes copies O(n^2 / 1024)
 -- bytes while it is cut (about 88 MB at the bound). A seek compares with every key on its way and reads one that
 -- overflows a page whole, so no seek here goes through an index that holds such names where it can be avoided:
--- tag_renames is looked up by the first 64 characters of a name (tag_renames_k), the moved status_tags rows by their
--- key and the rename's id, and the name indexes are rebuilt rather than updated a row at a time (renaming 50,000 rows
--- next to a name of 300,000 bytes took about 7 s through status_tags_name, against 1.7 s for both rebuilds).
+-- tag_renames is looked up by the exact name of at most 1,024 bytes (tag_renames_short, tag_renames_new_name), the
+-- moved status_tags rows by their full key (status and rename id), and the name indexes are rebuilt rather than
+-- updated a row at a time (renaming 50,000 rows next to a name of 300,000 bytes took about 7 s through
+-- status_tags_name, against 1.7 s for both rebuilds). Every lookup is exact, so a row costs the same however many
+-- names share a prefix or a status; trend_tags and tag_trend_reviews are merged without an insert, whose cap trigger
+-- counts the whole table.
 -- Measured on the benchmark store of test/bench/migration-cost.ts (1,000,000 accounts, 2,000,000 statuses, and its
 -- 20,000 hashtag names on 200,000 status_tags rows, one at the input bound and one past it, 100,000 rows of one
 -- renamed key featured by every local account and 50,000 remote ones, trend_tags and tag_trend_reviews at their
--- caps) in workerd's local Durable Object SQLite, the whole Store's foreign keys verified: 11,171 and 11,192 ms in
+-- caps) in workerd's local Durable Object SQLite, the whole Store's foreign keys verified: 11,062 and 11,160 ms in
 -- two runs for the upgrade of this file through the kernel (its statements about 4.3 s of it, the foreign key check
 -- about 6 s), within the budget of 20 s, at a load average of about 2.
 
@@ -590,7 +593,7 @@ SELECT 0x1100 + l.v, 0x1161 + m.v, 0xAC00 + (l.v * 21 + m.v) * 28 FROM l, m
 UNION ALL
 SELECT 0xAC00 + (l.v * 21 + m.v) * 28, 0x11A7 + t.v, 0xAC00 + (l.v * 21 + m.v) * 28 + t.v FROM l, m, t;
 
-CREATE TABLE tag_renames (id INTEGER PRIMARY KEY, name TEXT NOT NULL UNIQUE, new_name TEXT, k TEXT);
+CREATE TABLE tag_renames (id INTEGER PRIMARY KEY, name TEXT NOT NULL UNIQUE, new_name TEXT);
 
 INSERT OR IGNORE INTO tag_renames (name)
 SELECT DISTINCT name FROM status_tags INDEXED BY status_tags_name
@@ -718,13 +721,13 @@ DROP TABLE tag_nfc_out;
 
 DELETE FROM tag_renames WHERE new_name IS NULL OR new_name = name;
 
-CREATE INDEX tag_renames_new_name ON tag_renames (new_name);
+-- Lookups of a rename by its name or new name are exact. A seek compares with every key on its way and reads one that
+-- overflows a page whole, so the names of at most 1,024 bytes (what follows, features, trends, reviews and received
+-- hashtags hold) are looked up through indexes that hold only such names; a longer name, only a status's or an
+-- import's, through the unique index of every name.
+CREATE UNIQUE INDEX tag_renames_short ON tag_renames (name) WHERE length(CAST(name AS BLOB)) <= 1024;
 
--- A name's first 64 characters: lookups by name seek this key, then compare the whole name, so that a seek never
--- compares with a long name that overflows a page (which reads it whole).
-UPDATE tag_renames SET k = substr(name, 1, 64);
-
-CREATE INDEX tag_renames_k ON tag_renames (k);
+CREATE INDEX tag_renames_new_name ON tag_renames (new_name) WHERE length(CAST(new_name AS BLOB)) <= 1024;
 
 -- status_tags: one row per status and name, its public the status's. The rows under an old name are read through
 -- status_tags_name; then its two name indexes go while each row is renamed where it stands by its key (unless its
@@ -743,14 +746,27 @@ DROP INDEX status_tags_public;
 DROP INDEX status_tags_name;
 
 UPDATE OR IGNORE status_tags
-SET name = (SELECT r.new_name FROM tag_status_moves m CROSS JOIN tag_renames r ON r.id = m.id
-  WHERE m.status_id = status_tags.status_id AND r.name = status_tags.name)
-WHERE status_id IN (SELECT status_id FROM tag_status_moves) AND EXISTS (SELECT 1 FROM tag_status_moves m
-  CROSS JOIN tag_renames r ON r.id = m.id WHERE m.status_id = status_tags.status_id AND r.name = status_tags.name);
+SET name = (SELECT r.new_name FROM tag_renames r WHERE r.id = CASE WHEN length(CAST(status_tags.name AS BLOB)) <= 1024
+    THEN (SELECT q.id FROM tag_renames q INDEXED BY tag_renames_short
+      WHERE q.name = status_tags.name AND length(CAST(q.name AS BLOB)) <= 1024)
+    ELSE (SELECT q.id FROM tag_renames q INDEXED BY sqlite_autoindex_tag_renames_1
+      WHERE q.name = status_tags.name) END)
+WHERE status_id IN (SELECT status_id FROM tag_status_moves)
+  AND EXISTS (SELECT 1 FROM tag_status_moves m WHERE m.status_id = status_tags.status_id
+    AND m.id = CASE WHEN length(CAST(status_tags.name AS BLOB)) <= 1024
+      THEN (SELECT q.id FROM tag_renames q INDEXED BY tag_renames_short
+        WHERE q.name = status_tags.name AND length(CAST(q.name AS BLOB)) <= 1024)
+      ELSE (SELECT q.id FROM tag_renames q INDEXED BY sqlite_autoindex_tag_renames_1
+        WHERE q.name = status_tags.name) END);
 
-DELETE FROM status_tags WHERE status_id IN (SELECT status_id FROM tag_status_moves) AND EXISTS (SELECT 1
-  FROM tag_status_moves m CROSS JOIN tag_renames r ON r.id = m.id
-  WHERE m.status_id = status_tags.status_id AND r.name = status_tags.name);
+DELETE FROM status_tags
+WHERE status_id IN (SELECT status_id FROM tag_status_moves)
+  AND EXISTS (SELECT 1 FROM tag_status_moves m WHERE m.status_id = status_tags.status_id
+    AND m.id = CASE WHEN length(CAST(status_tags.name AS BLOB)) <= 1024
+      THEN (SELECT q.id FROM tag_renames q INDEXED BY tag_renames_short
+        WHERE q.name = status_tags.name AND length(CAST(q.name AS BLOB)) <= 1024)
+      ELSE (SELECT q.id FROM tag_renames q INDEXED BY sqlite_autoindex_tag_renames_1
+        WHERE q.name = status_tags.name) END);
 
 DROP TABLE tag_status_moves;
 
@@ -769,8 +785,12 @@ CREATE TABLE tag_keeps (account_id TEXT NOT NULL, name TEXT NOT NULL, id NOT NUL
 WITHOUT ROWID;
 
 INSERT INTO tag_moves (id, account_id, name)
-SELECT f.id, f.account_id, r.new_name FROM tag_follows f CROSS JOIN tag_renames r INDEXED BY tag_renames_k
-  ON r.k = substr(f.name, 1, 64) AND r.name = f.name
+SELECT f.id, f.account_id, r.new_name FROM tag_follows f CROSS JOIN tag_renames r
+  ON r.id = CASE WHEN length(CAST(f.name AS BLOB)) <= 1024
+    THEN (SELECT q.id FROM tag_renames q INDEXED BY tag_renames_short
+      WHERE q.name = f.name AND length(CAST(q.name AS BLOB)) <= 1024)
+    ELSE (SELECT q.id FROM tag_renames q INDEXED BY sqlite_autoindex_tag_renames_1
+      WHERE q.name = f.name) END
 WHERE f.name GLOB '*[^0-9_a-z]*';
 
 INSERT INTO tag_keeps (account_id, name, id)
@@ -796,8 +816,12 @@ DELETE FROM tag_moves;
 DELETE FROM tag_keeps;
 
 INSERT INTO tag_moves (id, account_id, name)
-SELECT f.id, f.account_id, r.new_name FROM featured_tags f CROSS JOIN tag_renames r INDEXED BY tag_renames_k
-  ON r.k = substr(f.name, 1, 64) AND r.name = f.name
+SELECT f.id, f.account_id, r.new_name FROM featured_tags f CROSS JOIN tag_renames r
+  ON r.id = CASE WHEN length(CAST(f.name AS BLOB)) <= 1024
+    THEN (SELECT q.id FROM tag_renames q INDEXED BY tag_renames_short
+      WHERE q.name = f.name AND length(CAST(q.name AS BLOB)) <= 1024)
+    ELSE (SELECT q.id FROM tag_renames q INDEXED BY sqlite_autoindex_tag_renames_1
+      WHERE q.name = f.name) END
 WHERE f.name GLOB '*[^0-9_a-z]*';
 
 INSERT INTO tag_keeps (account_id, name, id)
@@ -824,8 +848,9 @@ DROP TABLE tag_moves;
 
 
 -- trend_tags and tag_trend_reviews: one row for each new name that passes the table's name CHECK, made of its rows
--- under the old names and its own; they all go before the new rows go in, so neither cap's trigger fires. A name that
--- would fail it keeps its rows as they are.
+-- under the old names and its own. Of each, one row is kept and updated in place: the new name's own row, else the
+-- lowest of its old names, renamed; the others go. No row is inserted, so neither cap's trigger runs (its count reads
+-- the whole table, once a row). A name that would fail the CHECK keeps its rows as they are.
 CREATE TABLE tag_trend_moves (name TEXT NOT NULL PRIMARY KEY, score REAL NOT NULL, max_score REAL NOT NULL,
   max_score_at TEXT NOT NULL) WITHOUT ROWID;
 
@@ -834,22 +859,46 @@ SELECT name, top, max_score, max_score_at FROM (
   SELECT name, max(score) OVER (PARTITION BY name) AS top, max_score, max_score_at,
     row_number() OVER (PARTITION BY name ORDER BY max_score DESC, max_score_at DESC) AS place
   FROM (SELECT r.new_name AS name, t.score, t.max_score, t.max_score_at
-      FROM trend_tags t CROSS JOIN tag_renames r INDEXED BY tag_renames_k
-        ON r.k = substr(t.name, 1, 64) AND r.name = t.name
+      FROM trend_tags t CROSS JOIN tag_renames r
+        ON r.id = CASE WHEN length(CAST(t.name AS BLOB)) <= 1024
+          THEN (SELECT q.id FROM tag_renames q INDEXED BY tag_renames_short
+            WHERE q.name = t.name AND length(CAST(q.name AS BLOB)) <= 1024)
+          ELSE (SELECT q.id FROM tag_renames q INDEXED BY sqlite_autoindex_tag_renames_1
+            WHERE q.name = t.name) END
     UNION ALL
     SELECT t.name, t.score, t.max_score, t.max_score_at
-      FROM trend_tags o CROSS JOIN tag_renames r INDEXED BY tag_renames_k
-        ON r.k = substr(o.name, 1, 64) AND r.name = o.name CROSS JOIN trend_tags t ON t.name = r.new_name))
+      FROM trend_tags o CROSS JOIN tag_renames r
+        ON r.id = CASE WHEN length(CAST(o.name AS BLOB)) <= 1024
+          THEN (SELECT q.id FROM tag_renames q INDEXED BY tag_renames_short
+            WHERE q.name = o.name AND length(CAST(q.name AS BLOB)) <= 1024)
+          ELSE (SELECT q.id FROM tag_renames q INDEXED BY sqlite_autoindex_tag_renames_1
+            WHERE q.name = o.name) END CROSS JOIN trend_tags t ON t.name = r.new_name))
 WHERE place = 1 AND typeof(name) = 'text' AND length(CAST(name AS BLOB)) BETWEEN 1 AND 1024
     AND instr(CAST(name AS BLOB), x'00') = 0 AND length(name) <= 256
     AND name NOT GLOB ('*[' || char(1) || '-/:-^`{-' || char(127) || ']*');
 
-DELETE FROM trend_tags WHERE name IN (SELECT name FROM tag_trend_moves)
-  OR name IN (SELECT r.name FROM tag_trend_moves m CROSS JOIN tag_renames r INDEXED BY tag_renames_new_name
-    ON r.new_name = m.name);
+CREATE TABLE tag_trend_keeps (name TEXT NOT NULL PRIMARY KEY, new_name TEXT NOT NULL) WITHOUT ROWID;
 
-INSERT INTO trend_tags (name, score, max_score, max_score_at)
-SELECT name, score, max_score, max_score_at FROM tag_trend_moves;
+INSERT INTO tag_trend_keeps (name, new_name)
+SELECT min(t.name), m.name FROM tag_trend_moves m CROSS JOIN tag_renames r INDEXED BY tag_renames_new_name
+    ON r.new_name = m.name AND length(CAST(r.new_name AS BLOB)) <= 1024
+  CROSS JOIN trend_tags t ON t.name = r.name
+WHERE NOT EXISTS (SELECT 1 FROM trend_tags e WHERE e.name = m.name)
+GROUP BY m.name;
+
+DELETE FROM trend_tags
+WHERE name IN (SELECT r.name FROM tag_trend_moves m CROSS JOIN tag_renames r INDEXED BY tag_renames_new_name
+    ON r.new_name = m.name AND length(CAST(r.new_name AS BLOB)) <= 1024)
+  AND name NOT IN (SELECT name FROM tag_trend_keeps);
+
+UPDATE trend_tags SET name = (SELECT k.new_name FROM tag_trend_keeps k WHERE k.name = trend_tags.name)
+WHERE name IN (SELECT name FROM tag_trend_keeps);
+
+UPDATE trend_tags SET (score, max_score, max_score_at) =
+  (SELECT score, max_score, max_score_at FROM tag_trend_moves m WHERE m.name = trend_tags.name)
+WHERE name IN (SELECT name FROM tag_trend_moves);
+
+DROP TABLE tag_trend_keeps;
 
 DROP TABLE tag_trend_moves;
 
@@ -861,23 +910,47 @@ SELECT name, trendable, reviewed_at FROM (
   SELECT name, trendable, reviewed_at,
     row_number() OVER (PARTITION BY name ORDER BY reviewed_at DESC, trendable) AS place
   FROM (SELECT r.new_name AS name, t.trendable, t.reviewed_at
-      FROM tag_trend_reviews t CROSS JOIN tag_renames r INDEXED BY tag_renames_k
-        ON r.k = substr(t.name, 1, 64) AND r.name = t.name
+      FROM tag_trend_reviews t CROSS JOIN tag_renames r
+        ON r.id = CASE WHEN length(CAST(t.name AS BLOB)) <= 1024
+          THEN (SELECT q.id FROM tag_renames q INDEXED BY tag_renames_short
+            WHERE q.name = t.name AND length(CAST(q.name AS BLOB)) <= 1024)
+          ELSE (SELECT q.id FROM tag_renames q INDEXED BY sqlite_autoindex_tag_renames_1
+            WHERE q.name = t.name) END
     UNION ALL
     SELECT t.name, t.trendable, t.reviewed_at
-      FROM tag_trend_reviews o CROSS JOIN tag_renames r INDEXED BY tag_renames_k
-        ON r.k = substr(o.name, 1, 64) AND r.name = o.name
+      FROM tag_trend_reviews o CROSS JOIN tag_renames r
+        ON r.id = CASE WHEN length(CAST(o.name AS BLOB)) <= 1024
+          THEN (SELECT q.id FROM tag_renames q INDEXED BY tag_renames_short
+            WHERE q.name = o.name AND length(CAST(q.name AS BLOB)) <= 1024)
+          ELSE (SELECT q.id FROM tag_renames q INDEXED BY sqlite_autoindex_tag_renames_1
+            WHERE q.name = o.name) END
       CROSS JOIN tag_trend_reviews t ON t.name = r.new_name))
 WHERE place = 1 AND typeof(name) = 'text' AND length(CAST(name AS BLOB)) BETWEEN 1 AND 1024
     AND instr(CAST(name AS BLOB), x'00') = 0 AND length(name) <= 256
     AND name NOT GLOB ('*[' || char(1) || '-/:-^`{-' || char(127) || ']*');
 
-DELETE FROM tag_trend_reviews WHERE name IN (SELECT name FROM tag_review_moves)
-  OR name IN (SELECT r.name FROM tag_review_moves m CROSS JOIN tag_renames r INDEXED BY tag_renames_new_name
-    ON r.new_name = m.name);
+CREATE TABLE tag_review_keeps (name TEXT NOT NULL PRIMARY KEY, new_name TEXT NOT NULL) WITHOUT ROWID;
 
-INSERT INTO tag_trend_reviews (name, trendable, reviewed_at)
-SELECT name, trendable, reviewed_at FROM tag_review_moves;
+INSERT INTO tag_review_keeps (name, new_name)
+SELECT min(t.name), m.name FROM tag_review_moves m CROSS JOIN tag_renames r INDEXED BY tag_renames_new_name
+    ON r.new_name = m.name AND length(CAST(r.new_name AS BLOB)) <= 1024
+  CROSS JOIN tag_trend_reviews t ON t.name = r.name
+WHERE NOT EXISTS (SELECT 1 FROM tag_trend_reviews e WHERE e.name = m.name)
+GROUP BY m.name;
+
+DELETE FROM tag_trend_reviews
+WHERE name IN (SELECT r.name FROM tag_review_moves m CROSS JOIN tag_renames r INDEXED BY tag_renames_new_name
+    ON r.new_name = m.name AND length(CAST(r.new_name AS BLOB)) <= 1024)
+  AND name NOT IN (SELECT name FROM tag_review_keeps);
+
+UPDATE tag_trend_reviews SET name = (SELECT k.new_name FROM tag_review_keeps k WHERE k.name = tag_trend_reviews.name)
+WHERE name IN (SELECT name FROM tag_review_keeps);
+
+UPDATE tag_trend_reviews SET (trendable, reviewed_at) =
+  (SELECT trendable, reviewed_at FROM tag_review_moves m WHERE m.name = tag_trend_reviews.name)
+WHERE name IN (SELECT name FROM tag_review_moves);
+
+DROP TABLE tag_review_keeps;
 
 DROP TABLE tag_review_moves;
 

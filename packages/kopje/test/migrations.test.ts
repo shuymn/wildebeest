@@ -11167,8 +11167,8 @@ describe("0087_tag_key_fixed_points under stale statistics", () => {
       expect(planOf(plans, statement)).toEqual(
         expect.arrayContaining([
           "SEARCH status_tags USING PRIMARY KEY (status_id=?)",
-          "SEARCH m USING PRIMARY KEY (status_id=?)",
-          "SEARCH r USING INTEGER PRIMARY KEY (rowid=?)",
+          "SEARCH m USING PRIMARY KEY (status_id=? AND id=?)",
+          "SEARCH q USING COVERING INDEX tag_renames_short (name=?)",
         ]),
       );
     }
@@ -11216,4 +11216,71 @@ describe("0087_tag_key_fixed_points under stale statistics", () => {
     // recount that read the key's range for each account featuring it would add 2,000 for each.
     expect(locals).toBeLessThanOrEqual(100 * 20);
   }, 600_000);
+
+  // The rows the file reads on a Store at 0086 with one remote account and one status, where `fill` adds the rows a
+  // witness grows.
+  async function fileReads(fill: (sql: SqlStorage) => void): Promise<number> {
+    const store = freshStore();
+    return runInDurableObject(store, async (_instance, state) => {
+      const sql = state.storage.sql;
+      await kernel(state, MIGRATIONS.slice(0, at)).upgrade();
+      sql.exec(
+        `INSERT INTO accounts (id, uri, username, domain)
+				VALUES ('100000000000000001', 'https://remote.test/u/1', 'u1', 'remote.test')`,
+      );
+      sql.exec(
+        `INSERT INTO statuses (id, uri, account_id, visibility, published_at) VALUES ('200000000000000001',
+					'https://remote.test/o/1', '100000000000000001', 'public', '2026-10-01T00:00:00.000Z')`,
+      );
+      fill(sql);
+      let read = 0;
+      for (const statement of STATEMENTS) {
+        const cursor = sql.exec(statement);
+        cursor.toArray();
+        read += cursor.rowsRead;
+      }
+      return read;
+    });
+  }
+
+  it("reads a group of names that share a long prefix once for each of its rows", async () => {
+    // `count` reviews, each a name of 64 a and a number before the jamo of 가, so each is renamed; a lookup by a
+    // prefix of the name would compare each row with every name of the group.
+    const reviews = (count: number) =>
+      fileReads((sql) =>
+        sql.exec(
+          `WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < ?1)
+					INSERT INTO tag_trend_reviews (name, trendable, reviewed_at)
+					SELECT ?2 || printf('%05d', i) || char(0x1100, 0x1161), 1, '2026-10-01T00:00:00.000Z' FROM n`,
+          count,
+          "a".repeat(64),
+        ),
+      );
+    const small = await reviews(1000);
+    const large = await reviews(10_000);
+    console.info({ event: "migration-0087.prefix-group", small, large });
+    // Each review: the seed's pass, its walk of 72 characters, its pieces, and its merge, in place (an insert would
+    // run the cap's trigger, whose count reads the table once a row); the 9,000 after the first cost what they did.
+    expect((large - small) / 9000).toBeLessThanOrEqual(small / 1000);
+  }, 300_000);
+
+  it("reads a status's renamed hashtags once each, however many it holds", async () => {
+    // One status with `count` hashtags under old names (the jamo of 가 and a number of five digits): a lookup of the
+    // moved rows by the status alone would compare each with all of them.
+    const tagged = (count: number) =>
+      fileReads((sql) =>
+        sql.exec(
+          `WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < ?1)
+					INSERT INTO status_tags (status_id, name, public)
+					SELECT '200000000000000001', char(0x1100, 0x1161) || printf('%05d', i), 1 FROM n`,
+          count,
+        ),
+      );
+    const [base, small, large] = [await tagged(10), await tagged(1000), await tagged(2000)];
+    console.info({ event: "migration-0087.tag-density", base, small, large });
+    // Each hashtag: the seed's pass, its walk, its pieces, its move, rename and delete by key, and the rebuilds; the
+    // thousand after the first cost what the first did (a lookup by the status alone would cost twice as much).
+    expect((small - base) / 990).toBeLessThanOrEqual(200);
+    expect((large - small) / 1000).toBeLessThanOrEqual((1.1 * (small - base)) / 990);
+  }, 300_000);
 });
