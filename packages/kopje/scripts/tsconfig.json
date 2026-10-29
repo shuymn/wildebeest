@@ -8,7 +8,8 @@
     "types": ["node"],
     "allowJs": true,
     "checkJs": true,
-    "noEmit": true
+    "noEmit": true,
+    "allowImportingTsExtensions": true
   },
   "include": ["*.mjs"]
 }

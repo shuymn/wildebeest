@@ -1,7 +1,8 @@
 // The Unicode tables a hashtag key's fixed point rests on (src/domain/tag-name.ts normalizeTag), derived from the
 // runtime's own normalization: test-node/tag-key-fixed-points.test.ts proves from them that two passes are a fixed
 // point, and it and test/tag-key-tables.test.ts compare them with the literals of 0087_tag_key_fixed_points on Node and
-// in workerd, so the proof holds for the Store's runtime and for the migration's SQL.
+// in workerd, so the proof holds for the Store's runtime and for the migration's SQL. It imports nothing, so that
+// scripts/tag-key-literals.mjs runs it on Node from the sources; normalizeOnce (src/domain/tag-name.ts) is passed in.
 //
 // A character is eligible when normalizeOnce keeps it as it is: NFKC leaves it, it is lowercase, and it is no letter of
 // the folding table and no character a hashtag cannot hold. Combining classes are not exposed by JavaScript, so they
@@ -10,8 +11,6 @@
 // leaves it, its NFD has two or more code points) composes from NFC of its NFD without the last code point, followed by
 // that last one: in canonical order the pair NFC meets is that one, and no other (a pair whose mark has a lower class
 // than its first character's last piece is never reached, as NFC sorts the marks of a run first).
-
-import { normalizeOnce } from "../src/domain/tag-name.js";
 
 const HANGUL_FIRST = 0xac00;
 const HANGUL_LAST = 0xd7a3;
@@ -39,7 +38,7 @@ export function codePoints(text: string): number[] {
   return [...text].map((c) => c.codePointAt(0)!);
 }
 
-export function deriveTagKeyTables(): TagKeyTables {
+export function deriveTagKeyTables(normalizeOnce: (name: string) => string): TagKeyTables {
   const eligible = new Uint8Array(0x110000);
   const nonstarters: number[] = [];
   for (let cp = 0; cp < 0x110000; cp++) {
@@ -226,25 +225,28 @@ export function tagKeyRows(tables: TagKeyTables): TagKeyRows {
   };
 }
 
-// The same rows as the migration's INSERT ... VALUES literals hold them.
-export function migrationRows(sql: string): TagKeyRows {
-  const values = (table: string, width: number) => {
-    const match = new RegExp(`INSERT INTO ${table} \\([^)]*\\) VALUES([^;]*);`).exec(sql);
-    if (match === null) {
-      throw new Error(`no INSERT INTO ${table}`);
-    }
-    const numbers = [...match[1]!.matchAll(/0x[0-9A-F]+|\d+/g)].map((m) => Number(m[0]));
-    const rows: number[][] = [];
-    for (let i = 0; i < numbers.length; i += width) {
-      rows.push(numbers.slice(i, i + width));
-    }
-    return rows;
+// The literal sections of 0087_tag_key_fixed_points: an INSERT ... VALUES of each lookup table, its rows in decimal,
+// packed into lines of at most 120 columns, the statements a blank line apart (scripts/tag-key-literals.mjs prints it).
+export function tagKeyLiterals(rows: TagKeyRows): string {
+  const values = (table: string, columns: string, list: number[][]) => {
+    const lines: string[] = [];
+    let line = "";
+    list.forEach((row, i) => {
+      const item = `(${row.join(",")})${i === list.length - 1 ? ";" : ","}`;
+      if (line.length + item.length > 120) {
+        lines.push(line);
+        line = "";
+      }
+      line += (line === "" ? "  " : "") + item;
+    });
+    lines.push(line);
+    return `INSERT INTO ${table} (${columns}) VALUES\n${lines.join("\n")}\n`;
   };
-  return {
-    chars: values("tag_key_chars", 2) as [number, number][],
-    triggers: values("tag_key_triggers", 2) as [number, number][],
-    pieces: values("tag_nfc_pieces", 3) as [number, number, number][],
-    ccc: values("tag_nfc_ccc", 2) as [number, number][],
-    pairs: values("tag_nfc_pairs", 3) as [number, number, number][],
-  };
+  return [
+    values("tag_key_chars", "first, last", rows.chars),
+    values("tag_key_triggers", "first, last", rows.triggers),
+    values("tag_nfc_pieces", "ch, j, piece", rows.pieces),
+    values("tag_nfc_ccc", "ch, rank", rows.ccc),
+    values("tag_nfc_pairs", "first, second, composite", rows.pairs),
+  ].join("\n");
 }

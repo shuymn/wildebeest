@@ -10876,7 +10876,7 @@ describe("0087_tag_key_fixed_points", () => {
   }, 120_000);
 
   it("names every generated key as normalizeTag names what it was made from, in each table", async () => {
-    const tables = deriveTagKeyTables();
+    const tables = deriveTagKeyTables(normalizeOnce);
     const second = seconds(tables);
     const pool: number[] = [0x2d, 0x20, 0x41, 0xc0, 0x130, 0x200d, 0xf39];
     for (let cp = 0; cp < 0x110000; cp++) {

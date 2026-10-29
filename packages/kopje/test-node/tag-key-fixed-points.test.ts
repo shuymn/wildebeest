@@ -1,4 +1,6 @@
+import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 
 import fc from "fast-check";
 import { describe, expect, it } from "vitest";
@@ -9,9 +11,9 @@ import {
   composite,
   deriveTagKeyTables,
   hex,
-  migrationRows,
   seconds,
   tableNfc,
+  tagKeyLiterals,
   tagKeyRows,
   type TagKeyTables,
 } from "../test/tag-key-tables.js";
@@ -157,7 +159,7 @@ function search(tables: TagKeyTables): Search {
   return { states: seen.size, violations };
 }
 
-const TABLES = deriveTagKeyTables();
+const TABLES = deriveTagKeyTables(normalizeOnce);
 const ELIGIBLE = TABLES.eligible;
 
 function isEligibleText(text: string): boolean {
@@ -173,10 +175,17 @@ describe("hashtag keys are fixed points (#1257)", () => {
     expect(TABLES.pairs.size).toBe(961);
   });
 
-  it("holds the tables 0087_tag_key_fixed_points holds", () => {
+  it("holds the tables 0087_tag_key_fixed_points holds, as scripts/tag-key-literals.mjs prints them", () => {
     const sql = readFileSync(new URL("../migrations/0087_tag_key_fixed_points.sql", import.meta.url), "utf8");
-    expect(migrationRows(sql)).toEqual(tagKeyRows(TABLES));
-  });
+    const printed = execFileSync(
+      process.execPath,
+      [fileURLToPath(new URL("../scripts/tag-key-literals.mjs", import.meta.url))],
+      { encoding: "utf8", maxBuffer: 1 << 24 },
+    );
+    expect(printed).toBe(tagKeyLiterals(tagKeyRows(TABLES)));
+    // A released migration never changes: the generator's output today is the file's.
+    expect(sql).toContain(`\n\n${printed}\n`);
+  }, 60_000);
 
   it("leaves only eligible characters, whose NFKD is their NFD", () => {
     const left: string[] = [];

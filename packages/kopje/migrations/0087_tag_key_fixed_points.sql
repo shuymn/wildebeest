@@ -8,8 +8,9 @@
 -- the second pass is NFC (test-node/tag-key-fixed-points.test.ts), so each stored key is renamed to its NFC here, and
 -- the rows that meet under one name are merged.
 --
--- The lookup tables are the runtime's Unicode 17 (Node's and workerd's ICU; test-node/tag-key-fixed-points.test.ts
--- and test/tag-key-tables.test.ts compare them with these literals): tag_key_chars, the eligible code points;
+-- The lookup tables are the runtime's Unicode 17, their literals as `node scripts/tag-key-literals.mjs` prints them
+-- from Node's ICU (test-node/tag-key-fixed-points.test.ts runs it and compares, test/tag-key-tables.test.ts compares
+-- workerd's): tag_key_chars, the eligible code points;
 -- tag_key_triggers, the eligible ones NFC can change a name at (a nonstarter, or one whose first piece is the second
 -- of a composite; a name without one is NFC already); tag_nfc_pieces, the canonical decomposition of each eligible
 -- character that has one, Hangul syllables left out; tag_nfc_ccc, the rank of each nonstarter's combining class;
