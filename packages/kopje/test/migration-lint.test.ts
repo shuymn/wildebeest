@@ -7,6 +7,12 @@ import { BREAK_WITNESSES } from "./migration-fixtures";
 import { forbiddenProblem, unchangedProblem } from "./migration-sql";
 
 const DECLARED = MIGRATIONS.filter((m) => m.foreignKeys === "unchanged");
+// The files before a migration, which a declared file's work tables and recreated indexes are judged against.
+const before = (name: string) =>
+  MIGRATIONS.slice(
+    0,
+    MIGRATIONS.findIndex((m) => m.name === name),
+  ).map((m) => m.sql);
 
 const HIDDEN = "DROP INDEX p_key; DROP TABLE p; CREATE TABLE p (id TEXT); CREATE UNIQUE INDEX p_key ON p (id);";
 const LONG = "x".repeat(256);
@@ -39,7 +45,7 @@ describe("migration lint", () => {
       "0086_authorized_apps",
     ]);
     for (const m of DECLARED) {
-      expect(unchangedProblem(m.sql), m.name).toBeNull();
+      expect(unchangedProblem(m.sql, before(m.name)), m.name).toBeNull();
     }
   });
 
@@ -109,6 +115,49 @@ describe("migration lint", () => {
     'WITH n AS (SELECT 1) INSERT INTO u SELECT * FROM n; DELETE FROM u; REPLACE INTO u VALUES (1); SELECT 1 AS "end";',
   ])("accepts a declaration over %j", (sql) => {
     expect(unchangedProblem(sql)).toBeNull();
+  });
+
+  // Work tables and recreated indexes, judged against the files before (`earlier`).
+  const EARLIER = ["CREATE TABLE t (a, b); CREATE INDEX i ON t (a); CREATE UNIQUE INDEX u ON t (b);"];
+  it.each([
+    ["a work table with a REFERENCES", "CREATE TABLE w (a REFERENCES t (a)); DROP TABLE w;"],
+    [
+      "a work table with a schema-qualified REFERENCES",
+      "CREATE TABLE w (a, FOREIGN KEY (a) REFERENCES main.t); DROP TABLE w;",
+    ],
+    ["a work table left undropped", "CREATE TABLE w (a); INSERT INTO w VALUES (1);"],
+    ["a work table dropped before it is created", "DROP TABLE w; CREATE TABLE w (a);"],
+    ["a work table created twice", "CREATE TABLE w (a); DROP TABLE w; CREATE TABLE w (a); DROP TABLE w;"],
+    ["a TEMP work table", "CREATE TEMP TABLE w (a); DROP TABLE w;"],
+    ["a schema-qualified work table", "CREATE TABLE main.w (a); DROP TABLE main.w;"],
+    ["dropping a real table", "DROP TABLE t;"],
+    ["dropping a real table under IF EXISTS", "DROP TABLE IF EXISTS t;"],
+    ["an index dropped and not recreated", "DROP INDEX i;"],
+    ["an index recreated with another definition", "DROP INDEX i; CREATE INDEX i ON t (b);"],
+    ["an index recreated before it is dropped", "CREATE INDEX IF NOT EXISTS i ON t (a); DROP INDEX i;"],
+    ["a UNIQUE index dropped and recreated", "DROP INDEX u; CREATE UNIQUE INDEX u ON t (b);"],
+    ["a UNIQUE index on a real table", "CREATE UNIQUE INDEX v ON t (a);"],
+  ])("refuses %s", (_label, sql) => {
+    expect(unchangedProblem(sql, EARLIER)).not.toBeNull();
+  });
+
+  it("refuses a work table that an earlier file names after REFERENCES, or after a quoted name", () => {
+    const sql = "CREATE TABLE w (a); DROP TABLE w;";
+    expect(unchangedProblem(sql, ["CREATE TABLE c (x REFERENCES w (a));"])).toMatch(/named after REFERENCES/);
+    expect(unchangedProblem(sql, ['CREATE TABLE c (x REFERENCES "t" (a));'])).toMatch(/named after REFERENCES/);
+    expect(unchangedProblem(sql, EARLIER)).toBeNull();
+  });
+
+  it.each([
+    [
+      "a work table with keys, indexes and writes, dropped",
+      `CREATE TABLE w (a TEXT PRIMARY KEY, b UNIQUE) WITHOUT ROWID; CREATE UNIQUE INDEX w_b ON w (b);
+			CREATE INDEX w_a ON w (a) WHERE a IS NOT NULL; INSERT INTO w SELECT a, b FROM t; UPDATE t SET a = 1;
+			DROP INDEX w_b; DROP TABLE w;`,
+    ],
+    ["an index dropped and recreated as it was", "DROP INDEX i; UPDATE t SET a = 1; CREATE INDEX i ON t (a);"],
+  ])("accepts %s", (_label, sql) => {
+    expect(unchangedProblem(sql, EARLIER)).toBeNull();
   });
 });
 
