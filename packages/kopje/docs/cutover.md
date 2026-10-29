@@ -150,16 +150,16 @@ document to ActivityPub clients while its status is public or unlisted; anything
 
 **Content.** Status content, earlier versions and bios go through Kopje's HTML sanitizer, so the Store holds only HTML
 it would have stored itself (HTML-1). Source text, spoilers, sensitivity, hashtags, mentions and edit history carry
-over; hashtags are named as Kopje names them (Mastodon's normalization applied twice: NFKC, lowercase, Latin letters
-with diacritics folded to ASCII, and the characters a hashtag cannot hold, such as `#`, dropped, then the same again so
-that what is left composes), from a `Hashtag` tag's name and a `note_hashtags` value alike; and a status's language is read as Kopje reads a remote object's (the primary subtag of the
-first language in `contentMap`, else `nameMap`, `summaryMap`, when it is two or three letters); remote statuses and
-actors keep the legacy JSON as `raw`, byte for byte. A lone surrogate in carried text (half of a character outside the
-Basic Multilingual Plane, as a cut string leaves it in legacy JSON) cannot be stored as UTF-8, so it becomes U+FFFD,
-counted as `text:lone-surrogate-replaced`; `raw` keeps the escaped original. Every other value is stored as the
-Worker stores it (`src/platform/stored-bounds.ts`, RES-2): U+0000 is removed from text, display names and media
-descriptions are cut at 2,048 and 10,000 code points, and a profile, status or media URL past its bound is dropped;
-each change is counted as `stored:<table>.<column>`.
+over; hashtags are named as Kopje names them (`normalizeTag`, the Hashtags rules of
+[mastodon-deviations.md](mastodon-deviations.md)), from a `Hashtag` tag's name and a `note_hashtags` value alike; and a
+status's language is read as Kopje reads a remote object's (the primary subtag of the first language in `contentMap`,
+else `nameMap`, `summaryMap`, when it is two or three letters); remote statuses and actors keep the legacy JSON as
+`raw`, byte for byte. A lone surrogate in carried text (half of a character outside the Basic Multilingual Plane, as a
+cut string leaves it in legacy JSON) cannot be stored as UTF-8, so it becomes U+FFFD, counted as
+`text:lone-surrogate-replaced`; `raw` keeps the escaped original. Every other value is stored as the Worker stores it
+(`src/platform/stored-bounds.ts`, RES-2): U+0000 is removed from text, display names and media descriptions are cut at
+2,048 and 10,000 code points, and a profile, status or media URL past its bound is dropped; each change is counted as
+`stored:<table>.<column>`.
 
 **The audience never widens (DATA-15).** Who may read a status is what legacy allowed (its `isVisible`): it reads the
 object's own `to` and `cc` and the followers collection of its stored author (`objects.original_actor_id`). All three

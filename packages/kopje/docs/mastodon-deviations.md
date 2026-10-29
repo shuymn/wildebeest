@@ -411,13 +411,18 @@ Search (`/api/v2/search`, `/api/v1/accounts/search`):
 
 Hashtags (the `Tag` entity):
 
-- A hashtag's name is Mastodon's `HashtagNormalizer#normalize` applied twice (`normalizeTag`), a fixed point: where
-  Mastodon's single pass drops a character or sorts marks and leaves two characters that compose (U+1100 U+0301 U+1161
-  leaves U+1100 U+1161), Kopje's name is the composed one (U+AC00), where Mastodon names one tag by the single pass and
-  another by its second. Every spelling, the single pass's included, reaches the composed name, so a status, follow,
-  featured hashtag, timeline, page or search names it as clients see it; a received post is filed under it whatever
-  its `Hashtag`'s `href` names. Names stored before (0087_tag_key_fixed_points) were renamed and merged without an
-  activity, so a Mastodon follower of an account whose two featured hashtags merged may keep both.
+- A hashtag's name is Mastodon's `HashtagNormalizer#normalize` applied twice (`normalizeTag`), so that normalizing a
+  name gives it back. One pass (`normalizeOnce`) is NFKC; each code point lowercased on its own (Ruby's
+  `String#downcase`, with no final-sigma rule); each letter in Mastodon's `ASCIIFolding` table replaced by its ASCII
+  letter (a fixed table, not every diacritic: Japanese dakuten stay); and every character
+  `Tag::HASHTAG_INVALID_CHARS_RE` matches dropped, keeping only Alphabetic characters, decimal digits, Thai U+0E47 to
+  U+0E4E and the separators `_`, U+00B7, U+30FB and U+200C, so `#` and its fullwidth and small forms go. A name with
+  nothing left is no hashtag. The single pass is not a fixed point where a character it drops, or marks it reorders,
+  leave two characters that compose: U+1100 U+0301 U+1161 gives U+1100 U+1161, a tag apart from U+AC00 in Mastodon, and
+  Kopje names both U+AC00. Every spelling of a tag, the single pass's included, reaches that one name in a status, a
+  follow, a featured hashtag, a timeline, a page and a search, and a received post is filed under it whatever its
+  `Hashtag`'s `href` names. Migration 0087 renamed and merged the names stored before it without sending an activity, so
+  a Mastodon follower of an account whose two featured hashtags it merged may keep both.
 - `history` is counted again on every read from the stored statuses: public originals, by the UTC day of their
   publication (Mastodon counts a status on the day it receives it), with `accounts` exact (Mastodon's is a HyperLogLog
   estimate). A deleted status and the statuses of an unavailable author leave the counts (Mastodon never decrements
