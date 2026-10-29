@@ -50,6 +50,12 @@ async function digest(text) {
  */
 
 /**
+ * A legacy users row as `SELECT actor_id, privkey, privkey_salt, pubkey FROM users` reads it.
+ * @typedef {{ actor_id: string | null, privkey: Uint8Array<ArrayBuffer>, privkey_salt: Uint8Array<ArrayBuffer>,
+ *   pubkey: string | null }} LegacyUser
+ */
+
+/**
  * @param {{ uri: string, privkey: Uint8Array<ArrayBuffer>, salt: Uint8Array<ArrayBuffer>, pubkey: string }[]} users
  * @param {Record<string, string | undefined>} env
  * @returns {Promise<KekReport>}

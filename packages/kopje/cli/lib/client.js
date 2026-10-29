@@ -27,14 +27,50 @@ export class AdminError extends Error {
 
 /**
  * A parsed JSON response of the admin API.
- * @typedef {Record<string, any>} Json
+ * @typedef {Record<string, unknown>} Json
+ * The dump's position, which the Store hands out and takes back; the CLI reads only these fields.
+ * @typedef {{ dump: string, phase: "rows" | "links" | "done", table: number }} DumpCursor
+ * @typedef {{ ok: boolean, tables: unknown[], foreignKeyViolations: number, problems: string[] }} VerifyReport
+ * The import's progress: `report` is null until verification decides it.
+ * @typedef {{ id: string, state: string, lastSeq: number, digest: string, headerSha256: string,
+ *   trailerSha256: string | null, report: VerifyReport | null }} ImportProgress
+ * The responses whose fields the CLI reads, by path, as src/app/admin.ts can return them (platform/store-admin.ts
+ * declares most); any other is printed as it is.
+ * @typedef {{
+ *   "/admin/health": { ok: boolean },
+ *   "/admin/capacity": { databaseSize: number, tables: { name: string, rows: number }[] },
+ *   "/admin/deliveries/retry": { retried: number, refused: number, skipped: number, more: boolean,
+ *     next: string | null },
+ *   "/admin/jobs/retry": { reset: number, more: boolean },
+ *   "/admin/media/rebuild": { counts: Record<string, number>, problems: unknown[], stopped: string | null,
+ *     done: boolean, next: string | null },
+ *   "/admin/keys/rewrap": { counts: { rewrapped: number, current: number, failed: number }, failures: unknown[],
+ *     done: boolean, next: string | null },
+ *   "/admin/dump/start": { cursor: DumpCursor, headerLine: string, header: { tables: unknown[] } },
+ *   "/admin/dump/finish": { aborted: false, trailer: Json, trailerText: string }
+ *     | { aborted: true, trailer: null, trailerText: null },
+ *   "/admin/import/begin": { progress: ImportProgress, session?: string, resumed: boolean },
+ *   "/admin/import/progress": { progress: ImportProgress | null },
+ *   "/admin/import/chunk": { duplicate: boolean, progress: ImportProgress },
+ *   "/admin/import/verify": { done: false, progress: ImportProgress | null, report: null }
+ *     | { done: true, progress: ImportProgress | null, report: VerifyReport | null },
+ *   "/admin/import/reset": { done: boolean, progress: ImportProgress | null },
+ *   "/admin/cutover/drain": { sent: number, unverified: number, noRecipient: number,
+ *     journal: { pending: number, sending: number }, stopped: string | null, waiting: string | null },
+ *   "/admin/cutover/reset": { done: boolean, id: string | null, progress: ImportProgress | null },
+ * }} Responses
+ * @typedef {(input: string, init?: RequestInit) => Promise<Response>} Fetch
  * @typedef {{
  *   accessClientId?: string | undefined,
  *   accessClientSecret?: string | undefined,
  *   importToken?: string | undefined,
  *   importSession?: string,
  * }} Credentials
- * @typedef {(input: string, init?: RequestInit) => Promise<Response>} Fetch
+ */
+
+/**
+ * @template {string} P
+ * @typedef {P extends keyof Responses ? Responses[P] : Json} ResponseOf
  */
 
 /**
@@ -117,16 +153,15 @@ export function createClient({ url, credentials, fetch: fetchImpl = (input, init
   }
 
   /**
+   * @template {string} P
    * @param {string} method
-   * @param {string} path
+   * @param {P} path
    * @param {{ json?: unknown, body?: Uint8Array, query?: Record<string, string> | undefined }} [options]
-   * @returns {Promise<Json>}
+   * @returns {Promise<ResponseOf<P>>}
    */
   async function json(method, path, options) {
     const response = await send(method, path, options);
-    /** @type {Json} */
-    const body = await response.json();
-    return body;
+    return /** @type {ResponseOf<P>} */ (await response.json());
   }
 
   return {
@@ -140,17 +175,17 @@ export function createClient({ url, credentials, fetch: fetchImpl = (input, init
         fetch: fetchImpl,
         credentials: { ...credentials, importToken: undefined, importSession: secret },
       }),
-    /** @param {string} path @param {Record<string, string>} [query] */
+    /** @template {string} P @param {P} path @param {Record<string, string>} [query] */
     get: (path, query) => json("GET", path, { query }),
-    /** @param {string} path @param {unknown} [body] */
+    /** @template {string} P @param {P} path @param {unknown} [body] */
     post: (path, body = {}) => json("POST", path, { json: body }),
-    /** @param {string} path @param {Uint8Array} bytes @param {Record<string, string>} query */
+    /** @template {string} P @param {P} path @param {Uint8Array} bytes @param {Record<string, string>} query */
     postBytes: (path, bytes, query) => json("POST", path, { body: bytes, query }),
     /**
      * The dump step: a JSON line with the cursor, then the chunk bytes.
-     * @param {unknown} cursor
+     * @param {DumpCursor} cursor
      * @param {number | undefined} maxBytes
-     * @returns {Promise<{ meta: Json, chunk: Uint8Array }>}
+     * @returns {Promise<{ meta: { cursor: DumpCursor }, chunk: Uint8Array }>}
      */
     async dumpNext(cursor, maxBytes) {
       const response = await send("POST", "/admin/dump/next", { json: { cursor, maxBytes } });
@@ -159,7 +194,9 @@ export function createClient({ url, credentials, fetch: fetchImpl = (input, init
       if (newline === -1) {
         throw new AdminError("/admin/dump/next: malformed response", response.status, null, {});
       }
-      const meta = /** @type {Json} */ (JSON.parse(new TextDecoder().decode(bytes.subarray(0, newline))));
+      const meta = /** @type {{ cursor: DumpCursor }} */ (
+        JSON.parse(new TextDecoder().decode(bytes.subarray(0, newline)))
+      );
       return { meta, chunk: bytes.subarray(newline + 1) };
     },
   };

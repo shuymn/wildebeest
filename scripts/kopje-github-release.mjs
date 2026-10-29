@@ -16,17 +16,20 @@ const { values } = parseArgs({
     prerelease: { type: "boolean", default: false },
   },
 });
-for (const name of ["repo", "tag", "version", "notes", "tarball"]) {
-  if (values[name] === undefined) {
+/** @param {"repo" | "tag" | "version" | "notes" | "tarball"} name */
+const required = (name) => {
+  const value = values[name];
+  if (value === undefined) {
     console.error(`missing --${name}`);
     process.exit(2);
   }
-}
+  return value;
+};
 createRelease({
-  repo: values.repo,
-  tag: values.tag,
-  version: values.version,
+  repo: required("repo"),
+  tag: required("tag"),
+  version: required("version"),
   prerelease: values.prerelease,
-  notesFile: values.notes,
-  tarball: values.tarball,
+  notesFile: required("notes"),
+  tarball: required("tarball"),
 });

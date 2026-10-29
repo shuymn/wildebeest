@@ -514,10 +514,10 @@ describe("application", () => {
       expect(await shown(name, site), JSON.stringify(name)).toBeNull();
     }
     // Malformed bytes decode to U+FFFD: 60 of them are shown, 61 are past the code points.
-    expect(await shown(bytes(...Array(APP_NAME_LIMIT).fill(0xff)), site, true)).toMatchObject({
+    expect(await shown(bytes(...Array.from({ length: APP_NAME_LIMIT }, () => 0xff)), site, true)).toMatchObject({
       name: "\ufffd".repeat(APP_NAME_LIMIT),
     });
-    expect(await shown(bytes(...Array(APP_NAME_LIMIT + 1).fill(0xff)), site, true)).toBeNull();
+    expect(await shown(bytes(...Array.from({ length: APP_NAME_LIMIT + 1 }, () => 0xff)), site, true)).toBeNull();
     // A BLOB, which no JSON function reads, is no name; and a BLOB website is no website.
     expect(await shown(bytes(0x61), site)).toBeNull();
     expect(await shown("App", bytes(0x61))).toEqual({ name: "App", website: null });
@@ -539,7 +539,7 @@ describe("application", () => {
     // parser's serialization drops the malformed segment with the `/../` after it.
     const malformed = bytes(
       ...new TextEncoder().encode(site),
-      ...Array(1000).fill(0xff),
+      ...Array.from({ length: 1000 }, () => 0xff),
       ...new TextEncoder().encode("/../xy"),
     );
     expect(malformed.byteLength).toBe(1026);

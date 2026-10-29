@@ -20,15 +20,15 @@ catalog:
   valibot: 1.5.0
 
   # Fedify, one version for all of its packages.
-  "@fedify/fedify": 2.4.4
+  "@fedify/fedify": 2.4.5
   "@fedify/testing": 2.4.5
-  "@fedify/vocab": 2.4.4
+  "@fedify/vocab": 2.4.5
 
   # Cloudflare Workers: the bundler and dev server, the runtime types and the workerd test pool. deploy/package.json
   # pins the same wrangler.
   "@cloudflare/vitest-plugin": 1.4.7
   "@cloudflare/workers-types": 5.20261025.1
-  wrangler: 4.150.0
+  wrangler: 4.152.0
 
   # Tests: the runner, its coverage provider and its vite, property tests, the browser job, image fixtures, the HTML
   # and source scans.
@@ -37,9 +37,9 @@ catalog:
   "@playwright/test": 1.64.1
   "@vitest/coverage-v8": 5.0.5
   fast-check: 4.10.2
-  oxc-parser: 0.154.0
+  oxc-parser: 0.155.0
   parse5: 8.0.1
-  vite: 6.4.5
+  vite: 7.3.7
   vitest: 5.0.5
 
   # Lint, format, unused files, dependencies and exports (knip.json), and the Git hooks.

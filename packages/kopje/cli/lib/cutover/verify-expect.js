@@ -49,13 +49,13 @@ const SETTING_NAMES = new Map([
 ]);
 
 /** @typedef {import('./verify-actual.js').Records} Records */
-/** @typedef {Record<string, any>} Json */
+/** @typedef {Record<string, unknown>} Json */
 
 /** @param {unknown} text @returns {Json} */
 function parse(text) {
   try {
     const value = /** @type {unknown} */ (JSON.parse(String(text)));
-    return typeof value === "object" && value !== null ? value : {};
+    return typeof value === "object" && value !== null ? /** @type {Json} */ (value) : {};
   } catch {
     return {};
   }
@@ -270,7 +270,10 @@ function metaSizes(meta) {
   if (typeof meta !== "object" || meta === null) {
     return null;
   }
-  const m = /** @type {Json} */ (meta);
+  const m =
+    /** @type {{ original?: { width?: unknown, height?: unknown } | null, small?: { width?: unknown, height?: unknown } | null }} */ (
+      meta
+    );
   /** @type {unknown[]} */
   const sizes = [
     m.original?.width ?? null,
@@ -360,7 +363,7 @@ export function expectedFromLegacy(db, { originalActorIds, source, notificationS
     records[key] = JSON.stringify(value);
   };
   /** @param {string} sql */
-  const all = (sql) => /** @type {Json[]} */ (db.prepare(sql).all());
+  const all = (sql) => db.prepare(sql).all();
   // RES-2: a bio and status content within their JSON-byte bounds, as the converter and the Worker store them
   // (src/security/html.ts), from the text as stored (src/platform/stored-bounds.ts storedText); a cut is a truncation
   // too.
@@ -528,8 +531,8 @@ export function expectedFromLegacy(db, { originalActorIds, source, notificationS
     const preference = preferences.get(String(user.actor_id));
     put("keys", String(user.actor_id), [
       String(user.email),
-      hex(user.privkey),
-      hex(user.privkey_salt),
+      hex(/** @type {Uint8Array} */ (user.privkey)),
+      hex(/** @type {Uint8Array} */ (user.privkey_salt)),
       String(user.pubkey),
       many(actors.get(String(user.actor_id))?.alsoKnownAs).filter((x) => typeof x === "string"),
       text(preference?.posting_default_visibility) || "public",
@@ -611,8 +614,11 @@ export function expectedFromLegacy(db, { originalActorIds, source, notificationS
       SPOILER_BYTES,
     );
     const sourceText =
-      isLocal && typeof p.source === "object" && p.source !== null && typeof p.source.content === "string"
-        ? bounded(text(p.source.content), STATUS_CONTENT_BYTES)
+      isLocal &&
+      typeof p.source === "object" &&
+      p.source !== null &&
+      typeof (/** @type {Json} */ (p.source).content) === "string"
+        ? bounded(text(/** @type {Json} */ (p.source).content), STATUS_CONTENT_BYTES)
         : null;
     // Hashtags: the object's Hashtag tags and the ones legacy recorded for it. An edit time equal to the publication
     // time is stored as none, as Kopje stores an incoming status (src/domain/remote-statuses.ts).
@@ -1004,7 +1010,9 @@ export function expectedFromLegacy(db, { originalActorIds, source, notificationS
   );
   notifications.setReadBigInts(true);
   let highest = notificationSequence === null ? 0n : BigInt(notificationSequence);
-  for (const n of /** @type {Json[]} */ (notifications.all())) {
+  // setReadBigInts: the integer columns read as bigint.
+  for (const n of /** @type {{ id: bigint, type: string | null, actor_id: string | null, from_actor_id: string | null,
+    object_id: string | bigint | null }[]} */ (notifications.all())) {
     if (n.id > highest) {
       highest = n.id;
     }
@@ -1087,11 +1095,11 @@ export function expectedFromLegacy(db, { originalActorIds, source, notificationS
     /** @type {string | null} */
     let written = null;
     if (!isBlank(text)) {
-      written = storedInstanceSetting(/** @type {any} */ (name), text);
+      written = storedInstanceSetting(/** @type {Parameters<typeof storedInstanceSetting>[0]} */ (name), text);
       if (written !== text) {
         overLimit++;
       } else if (
-        INSTANCE_DOCUMENTS.includes(/** @type {any} */ (name)) &&
+        INSTANCE_DOCUMENTS.includes(/** @type {(typeof INSTANCE_DOCUMENTS)[number]} */ (name)) &&
         isBlank(remoteHtmlText(sanitizeRemoteHtml(text)))
       ) {
         written = null;
