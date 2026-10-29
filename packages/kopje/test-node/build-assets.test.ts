@@ -1,11 +1,10 @@
-import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { describe, expect, it } from "vitest";
 
 import { build, drift, fingerprint, gitEnv, releaseForCheck, releasedAssets } from "../scripts/build-assets.mjs";
+import { gitFixture } from "./git-fixture.js";
 
 // The stylesheet that releases before versioned assets linked.
 const LEGACY_STYLESHEET = "/assets/kopje.css";
@@ -14,60 +13,14 @@ const LEGACY_STYLESHEET = "/assets/kopje.css";
 // keeps, of the stylesheet and of the L1 script, the current file and the one the latest completed release linked, and
 // nothing else. Each case drives a real repository with kopje-v* tags, laid out as packages/kopje is.
 
-// A hermetic git for every call of a case, the fixture's and build-assets.mjs's (which inherits process.env): no
-// inherited GIT_* override (GIT_DIR, GIT_INDEX_FILE, GIT_WORK_TREE, object, template and config variables, as a
-// calling hook may set them) and no user or system configuration (no signing, no hooks). The global configuration is
-// an empty file inside the case's temporary directory.
-let home = "";
-let saved: NodeJS.ProcessEnv = {};
-
-beforeAll(() => {
-  home = mkdtempSync(join(tmpdir(), "kopje-assets-home-"));
-  writeFileSync(join(home, "gitconfig"), "");
-});
-
-afterAll(() => {
-  rmSync(home, { recursive: true, force: true });
-});
-
-beforeEach(() => {
-  saved = { ...process.env };
-  for (const name of Object.keys(process.env).filter((n) => n.startsWith("GIT_"))) {
-    Reflect.deleteProperty(process.env, name);
-  }
-  process.env.GIT_CONFIG_NOSYSTEM = "1";
-  process.env.GIT_CONFIG_GLOBAL = join(home, "gitconfig");
-});
-
-const repos: string[] = [];
-
-afterEach(() => {
-  for (const repo of repos.splice(0)) {
-    rmSync(repo, { recursive: true, force: true });
-  }
-  for (const name of Object.keys(process.env).filter((n) => n.startsWith("GIT_"))) {
-    Reflect.deleteProperty(process.env, name);
-  }
-  Object.assign(process.env, saved);
-});
+const gitRepository = gitFixture("assets");
 
 function repository() {
-  const repo = mkdtempSync(join(tmpdir(), "kopje-assets-"));
-  repos.push(repo);
+  const { repo, git, commit, release } = gitRepository();
   const root = join(repo, "packages", "kopje");
   mkdirSync(join(root, "src", "web"), { recursive: true });
   mkdirSync(join(root, "src", "client"), { recursive: true });
   mkdirSync(join(root, "public", "assets"), { recursive: true });
-  const git = (...args: string[]) =>
-    execFileSync("git", ["-C", repo, "-c", "user.name=t", "-c", "user.email=t@example.com", ...args], {
-      env: process.env,
-      stdio: ["ignore", "pipe", "pipe"],
-    });
-  git("init", "-q", "-b", "main");
-  const commit = (message: string) => {
-    git("add", "-A");
-    git("commit", "-q", "--allow-empty", "-m", message);
-  };
   // A release before versioned assets: the unversioned stylesheet, no script and no versions module.
   writeFileSync(join(root, "public", "assets", "kopje.css"), "legacy {}\n");
   writeFileSync(join(root, "src", "web", "kopje.css"), "legacy {}\n");
@@ -93,7 +46,6 @@ function repository() {
     readdirSync(join(root, "public", "assets"))
       .filter((name) => name.startsWith("kopje") && name.endsWith(`.${extension}`))
       .toSorted();
-  const release = (version: string) => git("tag", `kopje-v${version}`);
   return { root, css, script, files, release, git };
 }
 

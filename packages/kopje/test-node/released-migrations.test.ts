@@ -1,12 +1,12 @@
-import { execFileSync, spawnSync } from "node:child_process";
-import { cpSync, mkdirSync, mkdtempSync, renameSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { spawnSync } from "node:child_process";
+import { mkdirSync, renameSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { describe, expect, it } from "vitest";
 
 import { releasedMigrations } from "../scripts/released-migrations.mjs";
+import { gitFixture } from "./git-fixture.js";
 
 // A released migration is never changed (scripts/released-migrations.mjs): every .sql file under
 // packages/kopje/migrations/ in any kopje-v* tag stays in the working tree with the same bytes. Each case drives a real
@@ -14,59 +14,14 @@ import { releasedMigrations } from "../scripts/released-migrations.mjs";
 
 const CLI = fileURLToPath(new URL("../scripts/released-migrations.mjs", import.meta.url));
 
-// A hermetic git, as in test-node/build-assets.test.ts: no inherited GIT_* variable and no user or system
-// configuration.
-let home = "";
-let saved: NodeJS.ProcessEnv = {};
-
-beforeAll(() => {
-  home = mkdtempSync(join(tmpdir(), "kopje-migrations-home-"));
-  writeFileSync(join(home, "gitconfig"), "");
-});
-
-afterAll(() => {
-  rmSync(home, { recursive: true, force: true });
-});
-
-beforeEach(() => {
-  saved = { ...process.env };
-  for (const name of Object.keys(process.env).filter((n) => n.startsWith("GIT_"))) {
-    Reflect.deleteProperty(process.env, name);
-  }
-  process.env.GIT_CONFIG_NOSYSTEM = "1";
-  process.env.GIT_CONFIG_GLOBAL = join(home, "gitconfig");
-});
-
-const repos: string[] = [];
-
-afterEach(() => {
-  for (const repo of repos.splice(0)) {
-    rmSync(repo, { recursive: true, force: true });
-  }
-  for (const name of Object.keys(process.env).filter((n) => n.startsWith("GIT_"))) {
-    Reflect.deleteProperty(process.env, name);
-  }
-  Object.assign(process.env, saved);
-});
+const gitRepository = gitFixture("migrations");
 
 // A repository whose first commit holds two migrations, 0000 and 0001.
 function repository() {
-  const repo = mkdtempSync(join(tmpdir(), "kopje-migrations-"));
-  repos.push(repo);
+  const { repo, git, commit, release } = gitRepository();
   const migrations = join(repo, "packages", "kopje", "migrations");
   mkdirSync(migrations, { recursive: true });
-  const git = (...args: string[]) =>
-    execFileSync("git", ["-C", repo, "-c", "user.name=t", "-c", "user.email=t@example.com", ...args], {
-      env: process.env,
-      stdio: ["ignore", "pipe", "pipe"],
-    });
-  git("init", "-q", "-b", "main");
   const write = (name: string, text: string) => writeFileSync(join(migrations, name), text);
-  const commit = (message: string) => {
-    git("add", "-A");
-    git("commit", "-q", "--allow-empty", "-m", message);
-  };
-  const release = (version: string) => git("tag", `kopje-v${version}`);
   write("0000_initial.sql", "CREATE TABLE a (id INTEGER);\n");
   write("0001_b.sql", "CREATE TABLE b (id INTEGER);\n");
   commit("initial");
@@ -133,8 +88,7 @@ describe("released-migrations", { timeout: 30_000 }, () => {
   it("flags released files in a migrations directory that is a symlink to identical files", () => {
     const { repo, migrations, release } = repository();
     release("0.1.0");
-    cpSync(migrations, join(repo, "copy"), { recursive: true });
-    rmSync(migrations, { recursive: true });
+    renameSync(migrations, join(repo, "copy"));
     symlinkSync(join(repo, "copy"), migrations);
     expect(releasedMigrations(repo).problems).toEqual([
       `${path("0000_initial.sql")} is not a regular file`,
