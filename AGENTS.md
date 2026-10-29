@@ -13,9 +13,10 @@ The code is in `packages/kopje`, and `deploy/` is the instance template operator
   the admin, setup and OAuth pages. `src/domain/` holds the domain logic and its SQL, `src/jobs/` the queue and cron
   work, and `src/platform/` and `src/security/` the shared infrastructure.
 - `migrations/` holds the Store's migrations, registered in `src/db/migrations.ts`. A released migration is never
-  changed; add a new one, numbered next after the last on `main` with no gap, since the Store compares applied
-  migrations by position (`test-node/migration-sequence.test.ts`). A migration never recreates a parent table, because
-  that cascades deletes into its child tables.
+  changed (`pnpm --filter kopje check:migrations` compares the files of every `kopje-v*` tag); add a new one,
+  numbered next after the last on `main` with no gap, since the Store compares applied migrations by position
+  (`test-node/migration-sequence.test.ts`). A migration never recreates a parent table, because that cascades deletes
+  into its child tables.
 - `cli/` is the `kopje-admin` operations CLI.
 - `test/` runs in workerd (`vitest.config.ts`, plus `vitest.streaming.config.ts` for `test/streaming/`), and `test-node/`
   runs in Node (`vitest.node.config.ts`), including the checks that read the source tree and the docs.

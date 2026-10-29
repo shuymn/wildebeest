@@ -72,6 +72,7 @@
     "types": "wrangler types --include-runtime=false",
     "assets": "node scripts/build-assets.mjs",
     "build": "node scripts/build-assets.mjs && node scripts/build-package.mjs",
+    "check:migrations": "node scripts/released-migrations.mjs",
     "prepack": "node scripts/build-assets.mjs --check && node scripts/build-package.mjs"
   },
   "devDependencies": {
