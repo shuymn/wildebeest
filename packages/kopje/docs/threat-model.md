@@ -1359,19 +1359,19 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
 
 - **WEB-1: the consent decision cannot be forged cross-site.** Both methods of `/oauth/authorize` answer only on the
   instance domain, read from the Store with the Access settings and compared with the request URL's host (no header is
-  read; setup and `/admin/config` store the domain as the canonical host, lowercase with IDNA to ASCII): on any other
-  host the Worker answers on (its workers.dev address, another route, a port) they show a 403 page, with no redirect
-  to the client, before the Access assertion is verified, so the consent page names the instance domain and the
-  instance origin is the request's. `GET /oauth/authorize` issues nothing. The `POST` requires a valid Access
-  identity, an `Origin` equal to the instance origin (missing, `null` or foreign answers 403), and
-  `decision=approve`; the Store revalidates client, redirect URI, scopes and account when it writes the code.
-  _Enforced (main):_ `src/app/authorize.tsx`, `authorizeContext` and `issueCode` in `src/domain/oauth.ts`,
-  `normalizeDomain` in `setConfig` (`src/platform/store-admin.ts`); `test/oauth.test.ts` ("shows the consent page on
-  the instance domain only, before verifying Access", "refuses a decision posted on another host, issuing nothing",
-  "judges the host by the request URL, never by a Host header", "shows the consent page when the domain was
-  configured by hand in another spelling", "refuses a decision posted from another origin, a null origin or none",
-  "refuses an account suspended between the consent page and approval"), `test/ops-authority.test.ts` ("stores the
-  domain as setup does, lowercase and IDNA to ASCII, and refuses a value that is not a domain").
+  read; setup and `/admin/config` store the domain as one canonical host, [dump-format.md](dump-format.md)): on any
+  other host the Worker answers on (its workers.dev address, another route, a port) they show a 403 page, with no
+  redirect to the client, before the Access assertion is verified, so the consent page names the instance domain and the
+  instance origin is the request's. `GET /oauth/authorize` issues nothing. The `POST` requires a valid Access identity,
+  an `Origin` equal to the instance origin (missing, `null` or foreign answers 403), and `decision=approve`; the Store
+  revalidates client, redirect URI, scopes and account when it writes the code. _Enforced (main):_
+  `src/app/authorize.tsx`, `authorizeContext` and `issueCode` in `src/domain/oauth.ts`, `normalizeDomain` in `setConfig`
+  (`src/platform/store-admin.ts`); `test/oauth.test.ts` ("shows the consent page on the instance domain only, before
+  verifying Access (WEB-1)", "refuses a decision posted on another host, issuing nothing (WEB-1)", "judges the host by
+  the request URL, never by a Host header (WEB-1)", "shows the consent page when the domain was configured by hand in
+  another spelling (WEB-1)", "refuses a decision posted from another origin, a null origin or none (WEB-1)", "refuses an
+  account suspended between the consent page and approval"), `test/ops-authority.test.ts` ("stores the domain as setup
+  does, lowercase and IDNA to ASCII, and refuses a value that is not a domain").
 - **WEB-2: Kopje's HTML pages cannot be framed, scripted or cached.** The consent and code pages and the messages of
   `/oauth/authorize` send the private pages' headers (`PRIVATE_HEADERS`, the web UI pages' policy below), and render
   every value escaped. The consent page alone has no `form-action` (`CONSENT_HEADERS`), as Mastodon's authorization

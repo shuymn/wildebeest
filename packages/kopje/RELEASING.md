@@ -21,7 +21,8 @@ A tag `kopje-v<version>` on a commit of `main` releases the `kopje` npm package.
    shows them in the pull request that updates an instance.
 
 The check of `main`'s run and the publish and release steps live in `scripts/kopje-release-lib.mjs`;
-`pnpm run test:scripts` checks them offline, with npm and gh stubbed, in every pull request.
+`pnpm run test:scripts` checks them offline, with npm and gh stubbed, in every pull request that
+changes the package.
 
 No npm token is stored anywhere: npm trusts this repository's workflow through OIDC.
 
