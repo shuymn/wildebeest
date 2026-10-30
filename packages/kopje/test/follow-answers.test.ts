@@ -14,7 +14,7 @@ import {
   LEASE_MS,
   MAX_ATTEMPTS,
 } from "../src/domain/deliveries";
-import { MAX_RETRACTIONS_PER_ACTOR } from "../src/domain/inbox";
+import { MAX_RETRACTIONS_PER_ACTOR, UNDONE_ANSWER_SIGNERS_SQL } from "../src/domain/inbox";
 import { readOperation } from "../src/domain/operation";
 import { deliveryRound } from "../src/jobs/deliver";
 import type { StoreStub } from "../src/platform/store-client";
@@ -399,6 +399,30 @@ describe("a Follow keeps the Reject of a generation Kopje no longer holds", () =
     await accepted(t);
     await api(t, `/api/v1/accounts/${t.r}/remove_from_followers`);
     expect(await undoFrom(t, `${REMOTE}/follows/r/alice`)).toMatchObject({ applied: true });
+    const k = await followFrom(t);
+    expect(answers(await drain(t))).toEqual([["Accept", k.id]]);
+  });
+
+  // Mastodon's Undo#handle_reference undoes a Follow named by its id alone, or embedded without a type (each as the
+  // inbound parser hands it to the Store, inbound.ts refOf). g is still recorded as retracted, or its record expired.
+  const untyped: [string, (t: T, g: string) => Record<string, unknown>][] = [
+    ["embedded without a type", (t, g) => ({ id: g, type: null, actor: t.rUri, object: t.aliceUri, instrument: null })],
+    ["named by its id alone", (_, g) => ({ id: g, type: null, actor: null, object: null, instrument: null })],
+  ];
+  it.each(
+    untyped.flatMap(([shape, undo]) => [
+      [shape, "recorded", undo, { applied: false, reason: "retracted" }] as const,
+      [shape, "expired", undo, { applied: true, reason: "retraction-recorded" }] as const,
+    ]),
+  )("an Undo of g %s (its retraction %s), before a newer Follow k, cancels the Reject of g", async (...args) => {
+    const [, retraction, undo, result] = args;
+    const t = await setup();
+    const g = await accepted(t);
+    await api(t, `/api/v1/accounts/${t.r}/remove_from_followers`);
+    if (retraction === "expired") {
+      await sql(t.store, "DELETE FROM inbound_retractions WHERE target_uri = ?", g);
+    }
+    expect(await receive(t.store, t.rUri, { type: "Undo", object: undo(t, g) })).toMatchObject(result);
     const k = await followFrom(t);
     expect(answers(await drain(t))).toEqual([["Accept", k.id]]);
   });
@@ -955,6 +979,14 @@ describe("bounds and refusals (RES-6)", () => {
       "SCAN json_each VIRTUAL TABLE INDEX 1:",
       "SCALAR SUBQUERY 1",
       "SEARCH f USING INTEGER PRIMARY KEY (rowid=?)",
+    ]);
+    // The signers an Undo naming its Follow by id alone looks through: the local accounts, each a bounded seek.
+    expect(await plan(UNDONE_ANSWER_SIGNERS_SQL, "2", "x", 33)).toEqual([
+      "SCAN l USING COVERING INDEX sqlite_autoindex_local_accounts_1",
+      "CORRELATED SCALAR SUBQUERY 2",
+      "CO-ROUTINE a",
+      "SEARCH o USING INDEX outbound_activities_follow_pair (account_id=? AND follow_pair=?)",
+      "SCAN a",
     ]);
     for (const query of [FOLLOW_ANSWER_ROWS_SQL, FOLLOW_ANSWER_CHUNKS_SQL]) {
       const detail = await plan(query, "[1]", 65);

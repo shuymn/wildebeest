@@ -39,7 +39,9 @@ import {
   beginRetraction,
   cancelFollowAnswers,
   type DeliveryEnvelope,
+  FOLLOW_ANSWER_INTENTS,
   type FollowAnswer,
+  type FollowAnswers,
   followAnswersOf,
   FORWARD_SUBJECT,
   stageRetraction,
@@ -713,20 +715,48 @@ function replacedAnswer(answer: FollowAnswer): boolean {
 // makes stale (deliveries.ts cancelFollowAnswers): those of the generation it undoes, naming `undone` (compared in
 // SQL), and for a Misskey pair id, which names every generation, all of the pair's. The follower withdrew that
 // generation itself, so its Accept or Reject sent later would reach the follower's next request through the pair.
-// Returns false over the bound (RES-6), with nothing written.
-function cancelUndoneAnswers(db: Db, followerId: string, targetId: string, undone: string, now: number): boolean {
+// Without a target (an Undo naming the Follow by its id alone, as Mastodon's Undo#handle_reference accepts it), the
+// pairs are those of the local accounts with an answer naming `undone` among the follower's first
+// FOLLOW_ANSWER_INTENTS + 1 (UNDONE_ANSWER_SIGNERS_SQL). Returns false over the bound of any pair (RES-6), with
+// nothing written.
+function cancelUndoneAnswers(
+  db: Db,
+  followerId: string,
+  targetId: string | undefined,
+  undone: string,
+  now: number,
+): boolean {
   const pair = isMisskeyPairId(undone);
-  const answers = followAnswersOf(db, targetId, followerId, {
-    id: undone,
-    edgeId: null,
-    replaces: (answer) => pair || answer.named === 1,
-  });
-  if (answers === null) {
-    return false;
+  const targets =
+    targetId !== undefined
+      ? [targetId]
+      : db
+          .all<{ id: string }>(UNDONE_ANSWER_SIGNERS_SQL, followerId, undone, FOLLOW_ANSWER_INTENTS + 1)
+          .map((r) => r.id);
+  const found: FollowAnswers[] = [];
+  for (const target of targets) {
+    const answers = followAnswersOf(db, target, followerId, {
+      id: undone,
+      edgeId: null,
+      replaces: (answer) => pair || answer.named === 1,
+    });
+    if (answers === null) {
+      return false;
+    }
+    found.push(answers);
   }
-  cancelFollowAnswers(db, answers, now);
+  for (const answers of found) {
+    cancelFollowAnswers(db, answers, now);
+  }
   return true;
 }
+
+// The local accounts (operator-sized, read whole) with an answer to the follower ?1 naming the Follow ?2, byte for
+// byte, among the pair's first ?3 answers in id order (a seek of outbound_activities_follow_pair each).
+export const UNDONE_ANSWER_SIGNERS_SQL = `SELECT l.account_id AS id FROM local_accounts l
+	WHERE EXISTS (SELECT 1 FROM (SELECT o.object_uri FROM outbound_activities o INDEXED BY outbound_activities_follow_pair
+			WHERE o.account_id = l.account_id AND o.follow_pair = ?1 ORDER BY o.id LIMIT ?3) a
+		WHERE a.object_uri = ?2)`;
 
 // Our follow of `actor` that an Accept or Reject answers (ID-6: only the followed side answers):
 //   - the Follow's id equals the edge's uri, with the actor as its target; or
@@ -853,9 +883,12 @@ const undo: Handler<"Undo"> = (db, actor, activity, { now }) => {
   // retraction first), so no interaction is stranded behind its own tombstone.
   const held = ref.type !== "Follow" && ref.type !== "Block" && interactionOf(db, actor, ref.id);
   if (!held && isRetracted(db, actor.uri, ref.id, now)) {
-    // A Follow Kopje ended or refused is recorded as retracted too, and its Undo still cancels its answers.
-    const target = ref.type === "Follow" ? localAccount(db, ref.object) : undefined;
-    if (target !== undefined && !cancelUndoneAnswers(db, actor.id, target.id, ref.id, now)) {
+    // A Follow Kopje ended or refused is recorded as retracted too, and its Undo, typed or not, still cancels its
+    // answers.
+    if (
+      (ref.type === "Follow" || ref.type === null) &&
+      !cancelUndoneAnswers(db, actor.id, localAccount(db, ref.object)?.id, ref.id, now)
+    ) {
       return retryLater("follow-answer-backlog");
     }
     return ignored("retracted");
@@ -902,8 +935,10 @@ const undo: Handler<"Undo"> = (db, actor, activity, { now }) => {
       : ignored("retraction-cap");
   }
   // The undone generation's answers go (cancelUndoneAnswers), whether or not its edge is still stored.
-  const answerTarget = undoesFollow ? (edge?.target ?? localAccount(db, ref.object)?.id) : undefined;
-  if (answerTarget !== undefined && !cancelUndoneAnswers(db, actor.id, answerTarget, ref.id, now)) {
+  if (
+    undoesFollow &&
+    !cancelUndoneAnswers(db, actor.id, edge?.target ?? localAccount(db, ref.object)?.id, ref.id, now)
+  ) {
     return retryLater("follow-answer-backlog");
   }
   let undone = false;
