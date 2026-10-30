@@ -58,6 +58,10 @@ export type Inbound =
   | { type: "Accept"; id: string; object: InboundRef }
   | { type: "Reject"; id: string; object: InboundRef };
 
+// A Misskey pair id (docs/threat-model.md: "a pair-shaped id (`/follows/<a>/<b>`)") names every generation of a
+// follow, so a Follow cannot tell an answer naming it from one of the generation it takes over.
+const pairShaped = (id: string): boolean => /^\/follows\/[^/]+\/[^/]+$/.test(URL.parse(id)?.pathname ?? "");
+
 export class Policy {
   rl: Edge = null;
   lr: Edge = null;
@@ -163,10 +167,10 @@ export class Policy {
     });
   }
 
-  // NET-2: "A remote Follow cancels, in its receive transaction, every Accept and Reject of its pair that is not
+  // NET-2: "A remote Follow cancels, in its receive transaction, the answers of its pair it replaces that are not
   // leased ... A leased answer is kept and holds its lane ... its intent is superseded". Returns the answers it caught.
-  private cancelAnswers(now: number): Intent[] {
-    const caught = this.lane.filter((i) => i.answer);
+  private cancelAnswers(now: number, replaces: (answer: Intent) => boolean): Intent[] {
+    const caught = this.lane.filter((i) => i.answer && replaces(i));
     for (const intent of caught) {
       if (intent.head?.kind === "leased") {
         intent.superseded = true;
@@ -223,7 +227,7 @@ export class Policy {
       case "Block":
         return this.block(activity.id, now);
       case "Undo":
-        return this.undo(activity.object);
+        return this.undo(activity.object, now);
       case "Accept":
         return this.accept(activity.object);
       case "Reject":
@@ -250,7 +254,19 @@ export class Policy {
     if (this.rl?.uri === id) {
       return { applied: false, reason: "duplicate" };
     }
-    const caught = this.cancelAnswers(now);
+    // NET-2: "It replaces every Accept, and a Reject of that generation: one naming its own id or the edge's current
+    // one, naming no id or a Misskey pair id ..., or already superseded. Any other Reject ... is kept and delivered".
+    const current = this.rl?.uri ?? null;
+    const caught = this.cancelAnswers(
+      now,
+      (answer) =>
+        answer.type !== "Reject" ||
+        answer.superseded ||
+        answer.ref === null ||
+        answer.ref === id ||
+        answer.ref === current ||
+        pairShaped(answer.ref),
+    );
     if (this.rl !== null) {
       // ID-7: a new generation; the superseded id is recorded as retracted. A pending request keeps waiting; an
       // accepted follow is accepted again under the new id.
@@ -303,7 +319,7 @@ export class Policy {
 
   // ID-7: "an Undo decides the undone type first (embedded, or a stored block with that id)"; its object is recorded
   // as retracted whether or not it matched, so an Undo that overtook its activity keeps it from applying later.
-  private undo(ref: InboundRef): Answer {
+  private undo(ref: InboundRef, now: number): Answer & { caught?: Intent[] } {
     if (ref.actor !== null && ref.actor !== this.rUri) {
       return { applied: false, reason: "not-own" };
     }
@@ -311,11 +327,17 @@ export class Policy {
     if (id === null) {
       return { applied: false, reason: "unknown-object" };
     }
+    // NET-2: "An Undo of a Follow cancels and supersedes the same way the answers of the generation it undoes, typed,
+    // embedded without a type or naming the Follow by its id alone ..., its edge stored or already ended (its id
+    // retracted), and a Misskey pair Undo every answer of the pair".
+    const undoneAnswers = (): Intent[] => this.cancelAnswers(now, (answer) => pairShaped(id) || answer.ref === id);
     if (this.retracted.has(id)) {
-      return { applied: false, reason: "retracted" };
+      const caught = ref.type === null || ref.type === "Follow" ? undoneAnswers() : [];
+      return { applied: false, reason: "retracted", caught };
     }
     const followMatch = (ref.type === null || ref.type === "Follow") && this.rl?.uri === id;
     const undoesBlock = ref.type === "Block" || (ref.type === null && !followMatch && this.blockRL === id);
+    const caught = !undoesBlock && (ref.type === null || ref.type === "Follow") ? undoneAnswers() : [];
     let undone = false;
     if (followMatch) {
       this.rl = null;
@@ -326,7 +348,7 @@ export class Policy {
       undone = true;
     }
     this.retract(id);
-    return { applied: true, reason: undone ? "undone" : "retraction-recorded" };
+    return { applied: true, reason: undone ? "undone" : "retraction-recorded", caught };
   }
 
   // ID-6: only the followed side answers our Follow, by its id (every follow of L names one).
