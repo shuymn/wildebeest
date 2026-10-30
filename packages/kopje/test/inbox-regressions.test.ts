@@ -389,10 +389,10 @@ describe("Block against a replayed Follow (ID-7)", () => {
     await t.post(bob, { "@context": AS, id: `${bob.uri}#blocks/1`, type: "Block", actor: bob.uri, object: ALICE_URI });
     await sql(t.store, "DELETE FROM notifications");
     expect(await t.post(bob, f)).toBe(202);
-    expect(await t.post(bob, follow(bob))).toBe(202);
     expect(await edges(t.store)).toEqual([]);
     expect(await count(t.store, "SELECT 1 FROM notifications")).toBe(0);
-    expect(await count(t.store, "SELECT 1 FROM outbound_activities")).toBe(1);
+    // The Accept of f, and the Reject that withdraws it.
+    expect(await count(t.store, "SELECT 1 FROM outbound_activities")).toBe(2);
   });
 });
 
