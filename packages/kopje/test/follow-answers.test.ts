@@ -928,6 +928,70 @@ describe("bounds and refusals (RES-6)", () => {
     expect(await sql(t.store, "SELECT * FROM outbound_activities WHERE id = 77")).toEqual([]);
   });
 
+  // `count` Rejects of alice's to r that a Follow keeps (unsuperseded, each naming an earlier Follow of its own), each
+  // with a queued row; `superseded` marks them superseded instead.
+  async function rejects(t: T, count: number, superseded = 0) {
+    await sql(
+      t.store,
+      `WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < ?3)
+			INSERT INTO outbound_activities (id, account_id, body, object_uri, superseded, created_at, follow_pair)
+			SELECT 1000 + i, ?1, '{"activity":{"type":"Reject"},"audience":{"followers":false,"accounts":[]}}',
+				'https://remote.example/follows/earlier-' || i, ?4, 0, ?2
+			FROM n`,
+      t.w.alice.id,
+      t.r,
+      count,
+      superseded,
+    );
+    await sql(
+      t.store,
+      `INSERT INTO deliveries (activity_id, account_id, inbox_url, lane, state, next_attempt_at, updated_at)
+			SELECT id, account_id, 'https://remote.example/inbox', 'https://remote.example', 'queued', 0, ?
+			FROM outbound_activities WHERE follow_pair IS NOT NULL`,
+      NOW,
+    );
+  }
+
+  // Kept Rejects count toward the bound as any other answer: the bound is applied before the selection.
+  it("answers 503 with nothing written over the intent bound of kept Rejects", async () => {
+    const t = await setup();
+    await rejects(t, FOLLOW_ANSWER_INTENTS + 1);
+    const before = await snapshot(t.store);
+    expect((await followFrom(t)).result).toMatchObject({ reason: "follow-answer-backlog", retry: true });
+    expect(await snapshot(t.store)).toEqual(before);
+  });
+
+  it("cancels an unleased superseded Reject of an unrelated Follow", async () => {
+    const t = await setup();
+    await rejects(t, 1, 1);
+    expect((await followFrom(t)).result).toMatchObject({ applied: true, reason: "followed" });
+    expect(await sql(t.store, "SELECT 1 FROM outbound_activities WHERE id = 1001")).toEqual([]);
+    expect(await sql(t.store, "SELECT 1 FROM deliveries WHERE activity_id = 1001")).toEqual([]);
+  });
+
+  // Over the bound, an Undo of a Follow answers 503 and writes nothing, on either path: its id already recorded as
+  // retracted, or not.
+  it.each([
+    ["recorded as retracted", true],
+    ["not recorded", false],
+  ])("answers 503 with nothing written for an Undo over the bound, its Follow %s", async (_, recorded) => {
+    const t = await setup();
+    await rejects(t, FOLLOW_ANSWER_INTENTS + 1);
+    const g = `${REMOTE}/follows/earlier-1`;
+    if (recorded) {
+      await sql(
+        t.store,
+        "INSERT INTO inbound_retractions (actor_uri, target_uri, expires_at) VALUES (?, ?, ?)",
+        t.rUri,
+        g,
+        LATER,
+      );
+    }
+    const before = await snapshot(t.store);
+    expect(await undoFrom(t, g)).toMatchObject({ reason: "follow-answer-backlog", retry: true });
+    expect(await snapshot(t.store)).toEqual(before);
+  });
+
   it("cancels nothing for a duplicate Follow or a renewal at the retraction cap", async () => {
     const t = await setup();
     await outage(t);
