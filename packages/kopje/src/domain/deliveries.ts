@@ -1,6 +1,7 @@
 import { ACCOUNTS_ID_INDEX, STATUSES_ID_INDEX, STATUSES_URI_INDEX } from "../db/indexes";
 import type { Db } from "../db/sql";
 import { hostDomain } from "../platform/domain-name";
+import { ACTIVITY_ID_LIMIT } from "../platform/identity-bounds";
 import {
   type Audience,
   availableLocalSql,
@@ -2194,18 +2195,40 @@ export const FOLLOW_ANSWER_ROWS_SQL = `SELECT CAST(id AS TEXT) AS id, CAST(activ
 export const FOLLOW_ANSWER_CHUNKS_SQL = `SELECT CAST(id AS TEXT) AS id FROM outbound_targets
 	WHERE activity_id IN (SELECT CAST(value AS INTEGER) FROM json_each(?)) LIMIT ?`;
 
-// An unsettled answer as followAnswersOf's `replaces` judges it: its type (ANSWER_TYPE), the Follow it answers
-// (object_uri) and whether it is superseded already.
-export type FollowAnswer = { type: string; object: string | null; superseded: number };
+// An unsettled answer as followAnswersOf's `replaces` judges it, classified in SQL: its type (ANSWER_TYPE), whether it
+// is superseded already, whether it names no Follow (object_uri NULL), whether its Follow is one of the selection's
+// (`named`: object_uri equal, byte for byte, to the selection's id or to the uri of its edge; DATA-6), and `shape`, the
+// Follow id it names when that is within ACTIVITY_ID_LIMIT bytes (else null), for a shape test only, never as an
+// identity: an imported id may be malformed UTF-8, which decodes lossily.
+export type FollowAnswer = { type: string; superseded: number; unnamed: number; named: number; shape: string | null };
 
-// Reads only: the unsettled answers of signerId to followerId that `replaces` selects (all by default), or null over a
+// What followAnswersOf selects: the answers `replaces` accepts, judged against `id` and the uri of the follows row
+// `edgeId` (each may be null).
+export type FollowAnswerSelection = {
+  id: string | null;
+  edgeId: string | null;
+  replaces: (answer: FollowAnswer) => boolean;
+};
+
+// The answer's type as classified and logged: Accept or Reject, else 'other' (an imported body with no such type), never null.
+const ANSWER_TYPE = `CASE json_extract(o.body, '$.activity.type') WHEN 'Accept' THEN 'Accept' WHEN 'Reject' THEN 'Reject'
+	ELSE 'other' END`;
+
+export const FOLLOW_ANSWER_CLASSES_SQL = `SELECT CAST(o.id AS TEXT) AS id, ${ANSWER_TYPE} AS type, o.superseded,
+	o.object_uri IS NULL AS unnamed,
+	coalesce(o.object_uri = ?2 OR o.object_uri = (SELECT f.uri FROM follows f WHERE f.id = CAST(?3 AS INTEGER)), 0) AS named,
+	CASE WHEN length(CAST(o.object_uri AS BLOB)) <= ?4 THEN o.object_uri END AS shape
+	FROM outbound_activities o WHERE o.id IN (SELECT CAST(value AS INTEGER) FROM json_each(?1)) ORDER BY o.id`;
+
+// Reads only: the unsettled answers of signerId to followerId that `select` selects (all without one), or null over a
 // bound. Every unsettled answer counts toward the intent bound, selected or not; the rows and chunks are those of the
-// selected ones. The answers' type, subject and flag are read by primary key, at most FOLLOW_ANSWER_INTENTS of them.
+// selected ones. The answers' classes (FollowAnswer) are read by primary key, at most FOLLOW_ANSWER_INTENTS of them,
+// each of bounded size.
 export function followAnswersOf(
   db: Db,
   signerId: string,
   followerId: string,
-  replaces: (answer: FollowAnswer) => boolean = () => true,
+  select?: FollowAnswerSelection,
 ): FollowAnswers | null {
   const found = db
     .all<{ id: string }>(FOLLOW_ANSWER_INTENTS_SQL, signerId, followerId, FOLLOW_ANSWER_INTENTS + 1)
@@ -2214,15 +2237,17 @@ export function followAnswersOf(
     return null;
   }
   const intents =
-    found.length === 0
+    found.length === 0 || select === undefined
       ? found
       : db
           .all<FollowAnswer & { id: string }>(
-            `SELECT CAST(o.id AS TEXT) AS id, ${ANSWER_TYPE} AS type, o.object_uri AS object, o.superseded
-						FROM outbound_activities o WHERE o.id IN (SELECT CAST(value AS INTEGER) FROM json_each(?)) ORDER BY o.id`,
+            FOLLOW_ANSWER_CLASSES_SQL,
             JSON.stringify(found),
+            select.id,
+            select.edgeId,
+            ACTIVITY_ID_LIMIT,
           )
-          .filter(replaces)
+          .filter(select.replaces)
           .map((r) => r.id);
   if (intents.length === 0) {
     return { intents, rows: [], chunks: [] };
@@ -2368,10 +2393,6 @@ const REFUSED_SENDER = `EXISTS (SELECT 1 FROM local_accounts l
 // superseded is never cleared, and the row is read under its lease token, so the check needs no caller time. Its
 // activity is `o`.
 const STALE_ANSWER = `(o.follow_pair IS NOT NULL AND o.superseded = 1)`;
-
-// The answer's type as logged: Accept or Reject, else 'other' (an imported body with no such type), never null.
-const ANSWER_TYPE = `CASE json_extract(o.body, '$.activity.type') WHEN 'Accept' THEN 'Accept' WHEN 'Reject' THEN 'Reject'
-	ELSE 'other' END`;
 
 // DATA-5: the answer's type (ANSWER_TYPE) and where it was caught, nothing else. `cancel`: a Follow or an Undo deleted
 // a row a claim had taken; `claim`, `confirm`, `failure`: a leased one was dropped instead of being leased again, sent,

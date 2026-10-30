@@ -640,9 +640,11 @@ const follow: Handler<"Follow"> = (db, actor, activity, { now }) => {
   // leased one is superseded (cancelFollowAnswers in deliveries.ts) once nothing below can bail out, in this
   // transaction: every Accept, and a Reject of the generation it takes over (replacedAnswer). Over the bound (RES-6):
   // 503, nothing written.
-  const answers = followAnswersOf(db, target.id, actor.id, (answer) =>
-    replacedAnswer(answer, existing?.uri == null ? [activity.id] : [activity.id, existing.uri]),
-  );
+  const answers = followAnswersOf(db, target.id, actor.id, {
+    id: activity.id,
+    edgeId: existing?.id ?? null,
+    replaces: replacedAnswer,
+  });
   if (answers === null) {
     return retryLater("follow-answer-backlog");
   }
@@ -690,42 +692,35 @@ const follow: Handler<"Follow"> = (db, actor, activity, { now }) => {
 };
 
 // Whether a Follow replaces an unsettled answer of its pair (deliveries.ts followAnswersOf): an Accept (or an imported
-// answer of no type), and a Reject of the generation the Follow takes over, one naming a Follow id in `taken` (the new
-// Follow's own and the edge's current one). A Reject naming no Follow id or a Misskey pair id cannot be told from one
-// of that generation, and a superseded one is never sent again, so those go too. Any other Reject ends or refuses an
+// answer of no type), and a Reject of the generation the Follow takes over, one naming the new Follow's id or the
+// edge's current one (`named`, compared in SQL). A Reject naming no Follow id, a Misskey pair id or one too long to
+// judge cannot be told from one of that generation, and a superseded one is never sent again, so those go too. Any other Reject ends or refuses an
 // earlier generation Kopje no longer holds and is kept: the follower's server may still hold it, as a Follow sent
 // before it and delivered late cannot be told from a newer one (Mastodon's FollowService sends no new Follow while the
 // follower still follows or has requested).
-function replacedAnswer(answer: FollowAnswer, taken: readonly string[]): boolean {
+function replacedAnswer(answer: FollowAnswer): boolean {
   return (
     answer.type !== "Reject" ||
     answer.superseded === 1 ||
-    answer.object === null ||
-    isMisskeyPairId(answer.object) ||
-    taken.includes(answer.object)
+    answer.unnamed === 1 ||
+    answer.named === 1 ||
+    answer.shape === null ||
+    isMisskeyPairId(answer.shape)
   );
 }
 
 // Cancels the answers of `followerId`'s pair with the local `targetId` that an Undo of the follower's Follow `undone`
-// makes stale (deliveries.ts cancelFollowAnswers): those of the generation it undoes, `undone` or the edge's current
-// `edgeUri`, and for a Misskey pair id, which names every generation, all of the pair's. The follower withdrew that
+// makes stale (deliveries.ts cancelFollowAnswers): those of the generation it undoes, naming `undone` (compared in
+// SQL), and for a Misskey pair id, which names every generation, all of the pair's. The follower withdrew that
 // generation itself, so its Accept or Reject sent later would reach the follower's next request through the pair.
 // Returns false over the bound (RES-6), with nothing written.
-function cancelUndoneAnswers(
-  db: Db,
-  followerId: string,
-  targetId: string,
-  undone: string,
-  edgeUri: string | null,
-  now: number,
-): boolean {
+function cancelUndoneAnswers(db: Db, followerId: string, targetId: string, undone: string, now: number): boolean {
   const pair = isMisskeyPairId(undone);
-  const answers = followAnswersOf(
-    db,
-    targetId,
-    followerId,
-    (answer) => pair || (answer.object !== null && (answer.object === undone || answer.object === edgeUri)),
-  );
+  const answers = followAnswersOf(db, targetId, followerId, {
+    id: undone,
+    edgeId: null,
+    replaces: (answer) => pair || answer.named === 1,
+  });
   if (answers === null) {
     return false;
   }
@@ -860,7 +855,7 @@ const undo: Handler<"Undo"> = (db, actor, activity, { now }) => {
   if (!held && isRetracted(db, actor.uri, ref.id, now)) {
     // A Follow Kopje ended or refused is recorded as retracted too, and its Undo still cancels its answers.
     const target = ref.type === "Follow" ? localAccount(db, ref.object) : undefined;
-    if (target !== undefined && !cancelUndoneAnswers(db, actor.id, target.id, ref.id, null, now)) {
+    if (target !== undefined && !cancelUndoneAnswers(db, actor.id, target.id, ref.id, now)) {
       return retryLater("follow-answer-backlog");
     }
     return ignored("retracted");
@@ -908,7 +903,7 @@ const undo: Handler<"Undo"> = (db, actor, activity, { now }) => {
   }
   // The undone generation's answers go (cancelUndoneAnswers), whether or not its edge is still stored.
   const answerTarget = undoesFollow ? (edge?.target ?? localAccount(db, ref.object)?.id) : undefined;
-  if (answerTarget !== undefined && !cancelUndoneAnswers(db, actor.id, answerTarget, ref.id, edge?.uri ?? null, now)) {
+  if (answerTarget !== undefined && !cancelUndoneAnswers(db, actor.id, answerTarget, ref.id, now)) {
     return retryLater("follow-answer-backlog");
   }
   let undone = false;

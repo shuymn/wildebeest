@@ -5,6 +5,7 @@ import {
   type DeliveryOutcome,
   FOLLOW_ANSWER_CHUNKS,
   FOLLOW_ANSWER_CHUNKS_SQL,
+  FOLLOW_ANSWER_CLASSES_SQL,
   FOLLOW_ANSWER_INTENTS,
   FOLLOW_ANSWER_INTENTS_SQL,
   FOLLOW_ANSWER_ROWS,
@@ -429,6 +430,33 @@ describe("a Follow keeps the Reject of a generation Kopje no longer holds", () =
     expect(await sql(t.store, "SELECT state, uri FROM follows WHERE account_id = ?", t.r)).toEqual([
       { state: "accepted", uri: k.id },
     ]);
+  });
+
+  // DATA-6: the Reject's Follow is compared by its stored bytes. An imported one ending in the byte FF decodes to the
+  // same string as a Follow id ending in U+FFFD, but names another Follow, so the Follow keeps it.
+  it("compares the Reject's Follow id byte for byte", async () => {
+    const t = await setup();
+    await outage(t);
+    const prefix = `${REMOTE}/follows/`;
+    await sql(
+      t.store,
+      `INSERT INTO outbound_activities (id, account_id, body, object_uri, created_at, follow_pair)
+			VALUES (77, ?1, '{"activity":{"type":"Reject"},"audience":{"followers":false,"accounts":[]}}',
+				CAST(CAST(?2 AS BLOB) || X'FF' AS TEXT), 0, ?3)`,
+      t.w.alice.id,
+      prefix,
+      t.r,
+    );
+    expect(
+      await sql(
+        t.store,
+        "SELECT object_uri FROM outbound_activities WHERE id = 77 AND object_uri = ?",
+        `${prefix}\uFFFD`,
+      ),
+    ).toEqual([]);
+    const k = await followFrom(t, `${prefix}\uFFFD`);
+    expect(k.result).toMatchObject({ applied: true, reason: "followed" });
+    expect(await sql(t.store, "SELECT superseded FROM outbound_activities WHERE id = 77")).toEqual([{ superseded: 0 }]);
   });
 
   // A Reject that names no Follow id (an edge stored without one) or a Misskey pair id cannot be told from one of the
@@ -919,6 +947,14 @@ describe("bounds and refusals (RES-6)", () => {
       (await sql<{ detail: string }>(t.store, `EXPLAIN QUERY PLAN ${query}`, ...params)).map((row) => row.detail);
     expect(await plan(FOLLOW_ANSWER_INTENTS_SQL, "1", "2", 33)).toEqual([
       "SEARCH o USING COVERING INDEX outbound_activities_follow_pair (account_id=? AND follow_pair=?)",
+    ]);
+    // The classes of at most 32 answers, by primary key, and the edge's uri by its id.
+    expect(await plan(FOLLOW_ANSWER_CLASSES_SQL, "[1]", "x", "1", 4096)).toEqual([
+      "SEARCH o USING INTEGER PRIMARY KEY (rowid=?)",
+      "LIST SUBQUERY 2",
+      "SCAN json_each VIRTUAL TABLE INDEX 1:",
+      "SCALAR SUBQUERY 1",
+      "SEARCH f USING INTEGER PRIMARY KEY (rowid=?)",
     ]);
     for (const query of [FOLLOW_ANSWER_ROWS_SQL, FOLLOW_ANSWER_CHUNKS_SQL]) {
       const detail = await plan(query, "[1]", 65);
