@@ -263,18 +263,10 @@ describe("blocks", () => {
     const carolUri = "https://remote.example/users/carol";
     await follow(h, alice, carol);
     await remoteFollows(h.store, carol, alice.id);
-    const receive = (activity: Parameters<typeof h.store.receiveActivity>[1]["activity"]) =>
-      h.store.receiveActivity(BUILD, {
-        now: NOW,
-        origin: "https://kopje.test",
-        actorUri: carolUri,
-        actor: null,
-        actorRevision: null,
-        activity,
-      });
+    const from = (activity: Record<string, unknown> & { type: string }) => receive(h.store, carolUri, activity);
     const blockId = `${carolUri}#blocks/1`;
 
-    expect(await receive({ type: "Block", id: blockId, object: ALICE_URI })).toMatchObject({ applied: true });
+    expect(await from({ type: "Block", id: blockId, object: ALICE_URI })).toMatchObject({ applied: true });
     expect(await relationship(h, alice, carol)).toMatchObject({
       blocked_by: true,
       blocking: false,
@@ -287,7 +279,7 @@ describe("blocks", () => {
     expect((await act(h, alice, `/api/v1/accounts/${carol}/follow`)).status).toBe(403);
 
     const undo = { id: `${blockId}/undo`, object: { id: blockId, type: "Block", actor: carolUri, object: ALICE_URI } };
-    expect(await receive({ type: "Undo", ...undo })).toMatchObject({ applied: true });
+    expect(await from({ type: "Undo", ...undo })).toMatchObject({ applied: true });
     expect(await relationship(h, alice, carol)).toMatchObject({ blocked_by: false });
   });
 });

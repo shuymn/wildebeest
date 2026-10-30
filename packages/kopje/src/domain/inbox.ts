@@ -913,11 +913,11 @@ const block: Handler<"Block"> = (db, actor, activity, { now }) => {
     actor.id,
     target.id,
   );
-  // The ended follow's generation must be recorded, or the Block changes nothing (ID-7).
-  if (accepted?.uri != null && !retractFollow(db, actor.uri, accepted.uri, now)) {
-    return ignored("retraction-cap");
-  }
   if (accepted !== undefined) {
+    // The ended follow's generation must be recorded, or the Block changes nothing (ID-7).
+    if (accepted.uri !== null && !retractFollow(db, actor.uri, accepted.uri, now)) {
+      return ignored("retraction-cap");
+    }
     removeFollow(db, actor.id, target.id);
     recordOutbound(
       db,
