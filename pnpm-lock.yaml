@@ -13,8 +13,8 @@ catalogs:
       specifier: 1.4.8
       version: 1.4.8
     '@cloudflare/workers-types':
-      specifier: 5.20261026.1
-      version: 5.20261026.1
+      specifier: 5.20261027.1
+      version: 5.20261027.1
     '@fedify/fedify':
       specifier: 2.4.5
       version: 2.4.5
@@ -142,7 +142,7 @@ importers:
         version: 5.0.5(@opentelemetry/api@1.9.1)(@types/node@24.19.2)(@vitest/coverage-v8@5.0.5)(vite@7.3.7(@types/node@24.19.2)(jiti@2.7.0)(yaml@2.9.1))
       wrangler:
         specifier: 'catalog:'
-        version: 4.153.0(@cloudflare/workers-types@5.20261026.1)(@types/node@24.19.2)
+        version: 4.153.0(@cloudflare/workers-types@5.20261027.1)(@types/node@24.19.2)
 
   packages/kopje:
     devDependencies:
@@ -151,10 +151,10 @@ importers:
         version: 4.14.0(playwright-core@1.64.1)
       '@cloudflare/vitest-plugin':
         specifier: 'catalog:'
-        version: 1.4.8(@cloudflare/workers-types@5.20261026.1)(@types/node@24.19.2)(vitest@5.0.5)
+        version: 1.4.8(@cloudflare/workers-types@5.20261027.1)(@types/node@24.19.2)(vitest@5.0.5)
       '@cloudflare/workers-types':
         specifier: 'catalog:'
-        version: 5.20261026.1
+        version: 5.20261027.1
       '@fedify/fedify':
         specifier: 'catalog:'
         version: 2.4.5
@@ -235,7 +235,7 @@ importers:
         version: 5.0.5(@opentelemetry/api@1.9.1)(@types/node@24.19.2)(@vitest/coverage-v8@5.0.5)(vite@7.3.7(@types/node@24.19.2)(jiti@2.7.0)(yaml@2.9.1))
       wrangler:
         specifier: 'catalog:'
-        version: 4.153.0(@cloudflare/workers-types@5.20261026.1)(@types/node@24.19.2)
+        version: 4.153.0(@cloudflare/workers-types@5.20261027.1)(@types/node@24.19.2)
 
 packages:
 
@@ -317,8 +317,8 @@ packages:
     cpu: [x64]
     os: [win32]
 
-  '@cloudflare/workers-types@5.20261026.1':
-    resolution: {integrity: sha512-E+KMLXOMip7uzfkFYoSjAF0n0+VFkK2KFU0Md/PM3JkPpC9Km0/YAoDttkmxAoZLGbK1wQRAFg2IJtyZkTBCHg==}
+  '@cloudflare/workers-types@5.20261027.1':
+    resolution: {integrity: sha512-ZYhpdIJbEzQL68kwHRTq/B0hyBsxB7wXR17LmUln7ReWE2kxQ1LD//aTM1K8Jk/MuNBeQY66QLc9izUIOLWWyg==}
 
   '@cspotcode/source-map-support@0.8.1':
     resolution: {integrity: sha512-IchNf6dN4tHoMFIn/7OE8LWZ19Y6q/67Bmf6vnGREv8RSbBVb9LPJxEcnwrcwX6ixSvaiGoomAUvu4YSxXrVgw==}
@@ -2285,13 +2285,13 @@ snapshots:
     optionalDependencies:
       workerd: 1.20261023.1
 
-  '@cloudflare/vitest-plugin@1.4.8(@cloudflare/workers-types@5.20261026.1)(@types/node@24.19.2)(vitest@5.0.5)':
+  '@cloudflare/vitest-plugin@1.4.8(@cloudflare/workers-types@5.20261027.1)(@types/node@24.19.2)(vitest@5.0.5)':
     dependencies:
       cjs-module-lexer: 1.2.3
       esbuild: 0.28.2
       miniflare: 5.20261023.0-beta(@types/node@24.19.2)
       vitest: 5.0.5(@opentelemetry/api@1.9.1)(@types/node@24.19.2)(@vitest/coverage-v8@5.0.5)(vite@7.3.7(@types/node@24.19.2)(jiti@2.7.0)(yaml@2.9.1))
-      wrangler: 4.153.0(@cloudflare/workers-types@5.20261026.1)(@types/node@24.19.2)
+      wrangler: 4.153.0(@cloudflare/workers-types@5.20261027.1)(@types/node@24.19.2)
       zod: 4.6.6
     transitivePeerDependencies:
       - '@cloudflare/workers-types'
@@ -2314,7 +2314,7 @@ snapshots:
   '@cloudflare/workerd-windows-64@1.20261023.1':
     optional: true
 
-  '@cloudflare/workers-types@5.20261026.1': {}
+  '@cloudflare/workers-types@5.20261027.1': {}
 
   '@cspotcode/source-map-support@0.8.1':
     dependencies:
@@ -3792,7 +3792,7 @@ snapshots:
       '@cloudflare/workerd-linux-arm64': 1.20261023.1
       '@cloudflare/workerd-windows-64': 1.20261023.1
 
-  wrangler@4.153.0(@cloudflare/workers-types@5.20261026.1)(@types/node@24.19.2):
+  wrangler@4.153.0(@cloudflare/workers-types@5.20261027.1)(@types/node@24.19.2):
     dependencies:
       '@cloudflare/kv-asset-handler': 0.5.0
       '@cloudflare/unenv-preset': 2.16.2(unenv@2.0.0-rc.24)(workerd@1.20261023.1)
@@ -3803,7 +3803,7 @@ snapshots:
       unenv: 2.0.0-rc.24
       workerd: 1.20261023.1
     optionalDependencies:
-      '@cloudflare/workers-types': 5.20261026.1
+      '@cloudflare/workers-types': 5.20261027.1
       fsevents: 2.3.3
     transitivePeerDependencies:
       - '@types/node'
