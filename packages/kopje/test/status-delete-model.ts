@@ -62,14 +62,19 @@ const iso = (ms: number) => new Date(ms).toISOString();
 // Policy
 // ---------------------------------------------------------------------------------------------------------------
 
+// A status_edits row: the status as it was, and the time it names (the original's publication, else the edit's).
+export type Version = { snapshot: Snapshot; at: string };
+
 export type Stored = {
   author: string;
   snapshot: Snapshot;
+  // statuses.published_at, as stored (never in the future).
+  published: string;
   // statuses.remote_version (ID-7: "the last accepted version ... kept as the remote wrote it"), as an ISO time.
   version: string;
   editedAt: string | null;
-  // status_edits rows: a significant change records the original first, then each version.
-  edits: number;
+  // status_edits rows, in order: a significant change records the original first, then each version.
+  history: Version[];
   // The hide of a removal that runs (RES-6, VIS-1): statuses.withdrawn.
   withdrawn: boolean;
   inReplyTo: string | null;
@@ -99,7 +104,17 @@ export type Notification = { sym: string; type: "mention" | "update"; status: st
 
 export type Boost = { sym: string; withdrawn: boolean };
 
-export type Job = { kind: "status" | "boost"; ref: string; doneAt: number | null };
+// key: inbound_jobs.key, the Store's id of the status or the boost, bound by the harness once the Store shows it.
+export type Job = {
+  kind: "status" | "boost";
+  ref: string;
+  createdAt: number;
+  key: string | null;
+  doneAt: number | null;
+};
+
+// RES-6: a round of the Store's jobs runs at most this many batches (JOB_BATCHES_PER_RUN), each of the next job.
+export const JOB_BATCHES_PER_ROUND = 4;
 
 export type ClaimResult = { leased: { lane: Lane; intent: Intent }[]; dropped: Intent[] };
 
@@ -209,9 +224,10 @@ export class Policy {
     this.statuses.set(o.uri, {
       author: actor,
       snapshot: o.snapshot,
+      published: iso(published),
       version: iso(version),
       editedAt: updated !== null && updated !== published ? iso(updated) : null,
-      edits: 0,
+      history: [],
       withdrawn: false,
       inReplyTo: o.inReplyTo,
       linked: parent !== undefined && !parent.withdrawn,
@@ -261,11 +277,14 @@ export class Policy {
     // A content or media change is significant (an edit row, the original first, and an `update` notification to each
     // local booster); a sensitive flip alone is not. Either way the watermark moves (ID-7).
     const significant = stored.snapshot.content !== o.snapshot.content || stored.snapshot.media !== o.snapshot.media;
+    if (significant && stored.history.length === 0) {
+      stored.history.push({ snapshot: stored.snapshot, at: stored.published });
+    }
     stored.snapshot = o.snapshot;
     stored.version = iso(o.updated);
     if (significant) {
       stored.editedAt = iso(Math.min(o.updated, now));
-      stored.edits += stored.edits === 0 ? 2 : 1;
+      stored.history.push({ snapshot: o.snapshot, at: stored.editedAt });
       // A local booster of a kept boost is notified, the previous notification replaced by a new one; nobody is
       // notified of a status they may not see (VIS-1: a hidden one).
       if (o.uri === this.ids.s1 && !stored.withdrawn && this.boosts.some((b) => !b.withdrawn)) {
@@ -302,7 +321,7 @@ export class Policy {
     const first = !stored.withdrawn;
     let job = this.jobs.find((j) => j.kind === "status" && j.ref === uri && j.doneAt === null);
     if (first) {
-      job = { kind: "status", ref: uri, doneAt: null };
+      job = { kind: "status", ref: uri, createdAt: now, key: null, doneAt: null };
       this.jobs.push(job);
       stored.withdrawn = true;
       stored.snapshot = { ...stored.snapshot, content: "" };
@@ -360,12 +379,19 @@ export class Policy {
     }
   }
 
-  // One round of the Store's jobs: each removal and each unboost's job runs to its end (the world is small).
-  runJobs(now: number): void {
-    for (const job of this.jobs) {
-      if (job.doneAt !== null) {
-        continue;
-      }
+  // One round of the Store's jobs: the next JOB_BATCHES_PER_ROUND jobs, oldest first, then by key (nextJob's order:
+  // created_at, kind, key), each a batch that runs it to its end (the world is small). Returns whether a job is left.
+  runJobs(now: number): boolean {
+    const pending = this.jobs
+      .filter((j) => j.doneAt === null)
+      .map((job) => {
+        if (job.key === null) {
+          throw new Error(`the job of ${job.ref} has no key bound`);
+        }
+        return { job, key: job.key };
+      })
+      .toSorted((a, b) => a.job.createdAt - b.job.createdAt || (a.key < b.key ? -1 : a.key > b.key ? 1 : 0));
+    for (const { job } of pending.slice(0, JOB_BATCHES_PER_ROUND)) {
       if (job.kind === "status") {
         this.removal(job, now);
       } else {
@@ -375,6 +401,7 @@ export class Policy {
         job.doneAt = now;
       }
     }
+    return pending.length > JOB_BATCHES_PER_ROUND;
   }
 
   // ---- L's API actions on s1 (ID-7's local reactions) ----
@@ -430,7 +457,7 @@ export class Policy {
 
   // ID-7: an unboost withdraws the kept boost once, records its Undo with no targets for its job to stage, and answers
   // 404 while the original's removal runs.
-  unreblogS1(): number {
+  unreblogS1(now: number): number {
     if (!this.s1Visible()) {
       return 404;
     }
@@ -439,7 +466,7 @@ export class Policy {
       kept.withdrawn = true;
       this.supersede("Announce", kept.sym);
       this.record("UndoAnnounce", kept.sym, "waiting");
-      this.jobs.push({ kind: "boost", ref: kept.sym, doneAt: null });
+      this.jobs.push({ kind: "boost", ref: kept.sym, createdAt: now, key: null, doneAt: null });
     }
     return 200;
   }

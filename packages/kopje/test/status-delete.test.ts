@@ -8,11 +8,13 @@ import type { RemoteStatusInput } from "../src/domain/remote-status-reads";
 import { bearer, sql } from "./api-helpers";
 import { NOW } from "./app-helpers";
 import { BUILD, runStoreJobs } from "./helpers";
+import { LOCAL } from "./inbox-helpers";
 import { storeReceive } from "./inbox-store-helpers";
 import { runs } from "./policy-world";
 import {
   ANY,
   type Answer,
+  type Intent,
   type Lane,
   LANES,
   type Msg,
@@ -21,7 +23,6 @@ import {
   Policy,
   RETRACTION_TTL_MS,
   RETRY_WINDOW_MS,
-  sameSnapshot,
   type Snapshot,
 } from "./status-delete-model";
 import { community, remoteAccount, seedReceipts } from "./status-helpers";
@@ -59,7 +60,7 @@ const DAY = 24 * HOUR;
 type Phase = "claimed" | "confirmed" | "done";
 type Attempt = { token: string; delivery: string; lane: Lane; phase: Phase };
 // A body Kopje confirmed, as the identity of its intent, in a lane, at a step.
-type SentBody = { lane: Lane; identity: string; id: string; body: string; step: number };
+type SentBody = { lane: Lane; identity: string; seq: number; id: string; body: string; step: number };
 
 export type Stats = Record<string, number>;
 
@@ -68,7 +69,21 @@ const tally = (stats: Stats, key: string, n = 1) => {
 };
 
 const iso = (ms: number) => new Date(ms).toISOString();
-const laneOf = (inbox: string): Lane => (new URL(inbox).origin === R_ORIGIN ? "remote" : "fans");
+
+// Each lane's recipient inbox: R's server's shared inbox (R, and the receipts of L's boost), and FAN's server's.
+const INBOX: Record<Lane, string> = { remote: `${R_ORIGIN}/inbox`, fans: "https://fans.example/inbox" };
+// The lane of a delivery Kopje claimed, by its exact inbox, or of a deliveries row, by its lane (the inbox's origin);
+// any other recipient fails the run.
+const laneOf = (inbox: string): Lane => {
+  const lane = LANES.find((l) => INBOX[l] === inbox || new URL(INBOX[l]).origin === inbox);
+  if (lane === undefined) {
+    throw new Error(`a delivery to an unexpected recipient: ${inbox}`);
+  }
+  return lane;
+};
+// A Store snapshot as the projection shows it: the media as the exact list of remote urls.
+const shown = (snapshot: Snapshot) => ({ ...snapshot, media: snapshot.media ? [MEDIA] : [] });
+type Shown = ReturnType<typeof shown>;
 
 let leaseSequence = 0;
 
@@ -108,6 +123,9 @@ async function setup() {
     everStored: new Set<string>(),
     answers: new Map<string, string[]>(),
     proven: new Map<string, Record<string, unknown>>(),
+    // The id each intent (by the policy's sequence) went out with, and back (activityIdentity).
+    activityIds: new Map<number, string>(),
+    intentOfId: new Map<string, number>(),
     trace: [] as string[],
     stats: {} as Stats,
   };
@@ -138,16 +156,18 @@ async function project(w: World) {
         version: string | null;
         edited_at: string | null;
         linked: number;
-        edits: number;
-        media: number;
+        history: string;
+        media: string;
         favourites_count: number;
         reblogs_count: number;
         replies_count: number;
       }>(
         `SELECT s.id, s.uri, a.uri AS author, s.withdrawn, s.content, s.sensitive, s.remote_version AS version,
 					s.edited_at, s.in_reply_to_id IS NOT NULL AS linked,
-					(SELECT count(*) FROM status_edits e WHERE e.status_id = s.id) AS edits,
-					(SELECT count(*) FROM media_attachments m WHERE m.status_id = s.id) AS media,
+					(SELECT json_group_array(json_object('content', e.content, 'sensitive', e.sensitive, 'media', e.media_json,
+						'at', e.created_at)) FROM (SELECT * FROM status_edits WHERE status_id = s.id ORDER BY id) e) AS history,
+					(SELECT json_group_array(url) FROM (SELECT url FROM media_attachments
+						WHERE status_id = s.id ORDER BY position, id)) AS media,
 					s.favourites_count, s.reblogs_count, s.replies_count
 				FROM statuses s JOIN accounts a ON a.id = s.account_id
 				WHERE a.domain IS NOT NULL AND s.reblog_of_id IS NULL ORDER BY s.uri`,
@@ -198,6 +218,13 @@ async function project(w: World) {
   for (const b of raw.boosts) {
     w.ids.set(b.id, w.symbolOf.get(b.uri) ?? `unbound boost ${b.uri}`);
   }
+  // Each policy job is bound to its row (by the id of what it removes) the first time the Store shows it.
+  for (const job of w.policy.jobs) {
+    const row = raw.jobs.find((j) => w.ids.get(j.key) === job.ref && !w.policy.jobs.some((o) => o.key === j.key));
+    if (job.key === null && row !== undefined) {
+      job.key = row.key;
+    }
+  }
   const intentIdentity = new Map(raw.intents.map((i) => [i.id, identity(w, i.type, i.object)]));
   const s1 = raw.statuses.find((s) => s.uri === S1);
   return {
@@ -205,10 +232,19 @@ async function project(w: World) {
       uri: s.uri,
       author: s.author,
       withdrawn: s.withdrawn === 1,
-      snapshot: { content: letter(s.content), sensitive: s.sensitive === 1, media: s.media > 0 },
+      snapshot: { content: letter(s.content), sensitive: s.sensitive === 1, media: JSON.parse(s.media) as string[] },
       version: s.version,
       editedAt: s.edited_at,
-      edits: s.edits,
+      history: (JSON.parse(s.history) as { content: string; sensitive: number; media: string; at: string }[]).map(
+        (e) => ({
+          snapshot: {
+            content: letter(e.content),
+            sensitive: e.sensitive === 1,
+            media: (JSON.parse(e.media) as { remote_url: string | null }[]).map((m) => m.remote_url),
+          },
+          at: e.at,
+        }),
+      ),
       linked: s.linked === 1,
     })),
     counts:
@@ -288,10 +324,10 @@ function expected(w: World) {
         uri,
         author: s.author,
         withdrawn: s.withdrawn,
-        snapshot: s.snapshot,
+        snapshot: shown(s.snapshot),
         version: s.version,
         editedAt: s.editedAt,
-        edits: s.edits,
+        history: s.history.map((v) => ({ snapshot: shown(v.snapshot), at: v.at })),
         linked: s.linked,
       })),
     counts:
@@ -490,7 +526,7 @@ async function local(w: World, kind: LocalKind): Promise<void> {
       break;
     }
     case "unreblog":
-      predicted = p.unreblogS1();
+      predicted = p.unreblogS1(w.clock);
       if (withdrawn && p.boosts.some((b) => !b.withdrawn)) {
         tally(w.stats, "unboost 404 while the removal runs");
       }
@@ -507,7 +543,9 @@ async function local(w: World, kind: LocalKind): Promise<void> {
 async function runJobs(w: World): Promise<void> {
   log(w, "jobs round");
   await runStoreJobs(w.store, BUILD, { now: w.clock });
-  w.policy.runJobs(w.clock);
+  if (w.policy.runJobs(w.clock)) {
+    tally(w.stats, "jobs round left a job for the next");
+  }
   await check(w);
 }
 
@@ -534,15 +572,21 @@ async function claim(w: World): Promise<Attempt[]> {
   const claimed = await Promise.all(
     result.deliveries.map(async (d) => ({
       lane: laneOf(d.inbox),
+      inbox: d.inbox,
       identity: await rowIdentity(w, d.id),
       actor: result.signers[d.signer]?.actorUri,
     })),
   );
   w.trace.push(`  -> ${JSON.stringify(claimed)}`);
-  // NET-2: L's activities are signed by L.
+  // NET-2: L's activities go to each lane's recipient inbox, signed by L.
   await check(w, {
     actual: claimed.toSorted((a, b) => a.lane.localeCompare(b.lane)),
-    predicted: predicted.leased.map((l) => ({ lane: l.lane, identity: `${l.intent.type} ${l.intent.ref}`, actor: L })),
+    predicted: predicted.leased.map((l) => ({
+      lane: l.lane,
+      inbox: INBOX[l.lane],
+      identity: `${l.intent.type} ${l.intent.ref}`,
+      actor: L,
+    })),
   });
   const attempts = result.deliveries.map((d) => ({
     token,
@@ -554,15 +598,18 @@ async function claim(w: World): Promise<Attempt[]> {
   return attempts;
 }
 
-// The parts of a body the receiver acts on: its kind, its actor and what it names, by the policy's symbols; a forward
-// as received, byte for byte (VIS-3, docs/mastodon-deviations.md).
-function bodyShape(w: World, body: string) {
-  const json = JSON.parse(body) as {
-    id: string;
-    type: string;
-    actor: string;
-    object: string | { id: string; type: string };
-  };
+type Body = {
+  id: string;
+  type: string;
+  actor: string;
+  object: string | { id: string; type: string; actor?: string; object?: string };
+};
+
+// The parts of a body the receiver acts on: its kind and what it names by the policy's symbols, its own id through
+// activityIdentity, its actor, and the actor and status an Undo's embedded activity names; a forward as received, byte
+// for byte (VIS-3, docs/mastodon-deviations.md).
+function bodyShape(w: World, body: string, intent: Intent | null) {
+  const json = JSON.parse(body) as Body;
   if (json.type === "Delete") {
     const object = json.object as { id: string };
     return {
@@ -571,13 +618,58 @@ function bodyShape(w: World, body: string) {
       exact: body === JSON.stringify(w.proven.get(json.id)),
     };
   }
-  if (json.type === "Undo") {
-    const object = json.object as { id: string; type: string };
+  const id = activityIdentity(w, json.id, intent);
+  if (json.type === "Undo" && typeof json.object !== "string") {
+    const object = json.object;
     const sym = w.symbolOf.get(object.id) ?? `unbound ${object.id}`;
-    return { identity: `Undo${object.type} ${sym}`, actor: json.actor, exact: true };
+    return {
+      identity: `Undo${object.type} ${sym}`,
+      id,
+      actor: json.actor,
+      object: { actor: object.actor, object: object.object },
+    };
   }
   const sym = w.symbolOf.get(json.id) ?? `unbound ${json.id}`;
-  return { identity: `${json.type} ${sym}`, actor: json.actor, exact: json.object === S1 };
+  return { identity: `${json.type} ${sym}`, id, actor: json.actor, object: json.object };
+}
+
+// ID-7: an activity Kopje sends keeps its id across its attempts (each lane, a POST again after its lease), no two
+// activities share one, and each is on L's origin (as test/follow-lifecycle.test.ts). The identity is the policy's
+// intent while the id holds to that.
+function activityIdentity(w: World, id: string, intent: Intent | null): string {
+  if (intent === null) {
+    return id;
+  }
+  const known = w.activityIds.get(intent.seq);
+  const other = w.intentOfId.get(id);
+  if (new URL(id).origin !== new URL(L).origin) {
+    return `not on L's origin: ${id}`;
+  }
+  if (known !== undefined && known !== id) {
+    return `changed from ${known} to ${id}`;
+  }
+  if (other !== undefined && other !== intent.seq) {
+    return `${id}, already the id of intent ${other}`;
+  }
+  w.activityIds.set(intent.seq, id);
+  w.intentOfId.set(id, intent.seq);
+  return `intent ${intent.seq}`;
+}
+
+// The body the policy's intent stands for, in bodyShape's terms: each of L's reactions names s1.
+function predictedShape(intent: Intent) {
+  const identity = `${intent.type} ${intent.ref}`;
+  switch (intent.type) {
+    case "Forward":
+      // A forward goes as received: the author's own Delete.
+      return { identity, actor: R, exact: true };
+    case "UndoLike":
+    case "UndoAnnounce":
+      return { identity, id: `intent ${intent.seq}`, actor: L, object: { actor: L, object: S1 } };
+    case "Like":
+    case "Announce":
+      return { identity, id: `intent ${intent.seq}`, actor: L, object: S1 };
+  }
 }
 
 async function confirm(w: World, attempt: Attempt): Promise<void> {
@@ -591,26 +683,19 @@ async function confirm(w: World, attempt: Attempt): Promise<void> {
   w.trace.push(`  -> ${result.status}`);
   if (result.status === "send") {
     attempt.phase = "confirmed";
-    const shape = bodyShape(w, result.body);
+    const intent = predicted.status === "send" ? predicted.intent : null;
+    const shape = bodyShape(w, result.body, intent);
     w.sent.push({
       lane: attempt.lane,
       identity: shape.identity,
+      seq: intent?.seq ?? 0,
       id: (JSON.parse(result.body) as { id: string }).id,
       body: result.body,
       step: w.step,
     });
     await check(w, {
       actual: { status: "send", ...shape },
-      predicted:
-        predicted.status === "send"
-          ? {
-              status: "send",
-              identity: `${predicted.intent.type} ${predicted.intent.ref}`,
-              // A forward goes as received: the author's own Delete.
-              actor: predicted.intent.type === "Forward" ? R : L,
-              exact: true,
-            }
-          : { status: predicted.status },
+      predicted: intent === null ? { status: predicted.status } : { status: "send", ...predictedShape(intent) },
     });
     return;
   }
@@ -719,11 +804,14 @@ async function act(w: World, a: Action): Promise<void> {
         await deliverSent(w, peer.take(index).msg, "deliver");
       }
       return;
-    case "redeliver":
-      if (peer.delivered.length > 0) {
-        await deliverSent(w, peer.delivered[a.i % peer.delivered.length]!.msg, "redeliver");
+    case "redeliver": {
+      // Mastodon retries a message within its retry window only.
+      const retried = peer.delivered.filter((s) => w.clock - s.at <= RETRY_WINDOW_MS);
+      if (retried.length > 0) {
+        await deliverSent(w, retried[a.i % retried.length]!.msg, "redeliver");
       }
       return;
+    }
     case "favourite":
     case "unfavourite":
     case "reblog":
@@ -823,13 +911,13 @@ async function settleKopje(w: World): Promise<void> {
 // (Mastodon parity: update.rb:34 drops it through object_too_old?): Kopje dropped it as `unknown-object` and stored the
 // earlier version the Create carried. Allowed only for that status, while every newer version of it was answered
 // `unknown-object` each time it arrived, and the version Kopje holds is one the author sent.
-function updateBeforeCreate(w: World, uri: string, held: { snapshot: Snapshot; version: string | null }): boolean {
+function updateBeforeCreate(w: World, uri: string, held: { snapshot: Shown; version: string | null }): boolean {
   const versions = w.peer.sent.filter((s) => s.msg.type !== "Delete" && s.msg.object.uri === uri);
   const mine = versions.find(
     (s) =>
       s.msg.type !== "Delete" &&
       iso(s.msg.object.updated ?? s.msg.object.published!) === held.version &&
-      sameSnapshot(s.msg.object.snapshot, held.snapshot),
+      JSON.stringify(shown(s.msg.object.snapshot)) === JSON.stringify(held.snapshot),
   );
   if (mine === undefined) {
     return false;
@@ -866,8 +954,15 @@ async function quiescence(w: World): Promise<void> {
       held === undefined
         ? null
         : { author: held.author, withdrawn: held.withdrawn, snapshot: held.snapshot, version: held.version };
-    const theirs = final === null ? null : { author: R, withdrawn: false, ...final };
+    const theirs =
+      final === null ? null : { author: R, withdrawn: false, snapshot: shown(final.snapshot), version: final.version };
     if (mine !== null && JSON.stringify(mine) !== JSON.stringify(theirs) && updateBeforeCreate(w, uri, mine)) {
+      // Only the version differs: the status is still R's, and shown.
+      expect({ uri, author: mine.author, withdrawn: mine.withdrawn }, context).toEqual({
+        uri,
+        author: R,
+        withdrawn: false,
+      });
       tally(w.stats, "exception update-before-create");
       continue;
     }
@@ -1140,7 +1235,7 @@ describe("status deletes: the author's orders", () => {
     ]);
     expect(answersOf(w, "Update", S3)).toEqual(["unknown-object"]);
     expect(w.stats["exception update-before-create"]).toBe(1);
-    expect((await project(w)).statuses.find((s) => s.uri === S3)?.snapshot).toEqual(A);
+    expect((await project(w)).statuses.find((s) => s.uri === S3)?.snapshot).toEqual(shown(A));
     // A later edit retires it.
     const later = await run([
       { k: "post", s: 2, snapshot: A },
@@ -1166,7 +1261,7 @@ describe("status deletes: the author's orders", () => {
       deliver(0),
     ]);
     expect(answersOf(w, "Update", S1)).toEqual(["updated", "stale"].toReversed());
-    expect((await project(w)).statuses.find((s) => s.uri === S1)?.snapshot).toEqual(A);
+    expect((await project(w)).statuses.find((s) => s.uri === S1)?.snapshot).toEqual(shown(A));
   });
 
   it("a metadata Update, then an older content Update", async () => {
@@ -1282,6 +1377,56 @@ describe("status deletes: the author's orders", () => {
         "UndoAnnounce",
       ]);
     }
+  });
+
+  // RES-6: a job round runs at most JOB_BATCHES_PER_ROUND batches. Five unboosts' jobs take two rounds; after the first
+  // the policy and the Store agree on the job left (the step's check), and settlement finishes it.
+  it("five unboosts' jobs take two rounds", async () => {
+    const cycles = Array.from({ length: 5 }, () => [{ k: "reblog" }, { k: "unreblog" }] as const).flat();
+    const w = await run([{ k: "post", s: 0, snapshot: A }, deliver(), ...cycles, { k: "jobs" }]);
+    expect(w.stats["jobs round left a job for the next"]).toBe(1);
+    expect(w.policy.jobs.map((j) => j.doneAt !== null)).toEqual(Array.from({ length: 5 }, () => true));
+  });
+});
+
+// The checker's own sensitivity: bodies Kopje did not send, which the confirmation's check must reject.
+describe("status deletes: the body check", () => {
+  it("rejects an Undo(Like) that names another status, or reuses an earlier generation's id", async () => {
+    const w = await run([
+      { k: "post", s: 0, snapshot: A },
+      deliver(),
+      { k: "favourite" },
+      { k: "send" },
+      { k: "unfavourite" },
+      { k: "send" },
+      { k: "favourite" },
+      { k: "send" },
+      { k: "unfavourite" },
+      { k: "send" },
+    ]);
+    const undos = w.sent.filter((s) => s.identity.startsWith("UndoLike "));
+    expect(undos).toHaveLength(2);
+    const [first, second] = undos as [SentBody, SentBody];
+    const intent: Intent = {
+      seq: second.seq,
+      type: "UndoLike",
+      ref: second.identity.slice("UndoLike ".length),
+      superseded: false,
+      stage: "expanded",
+    };
+    // The body Kopje sent passes.
+    expect(bodyShape(w, second.body, intent)).toEqual(predictedShape(intent));
+    // Its embedded Like names s2 instead of s1.
+    const json = JSON.parse(second.body) as { id: string; object: { object: string } };
+    const elsewhere = bodyShape(w, JSON.stringify({ ...json, object: { ...json.object, object: S2 } }), intent);
+    expect(elsewhere).not.toEqual(predictedShape(intent));
+    expect(elsewhere).toMatchObject({ object: { actor: L, object: S2 } });
+    // The second generation's Undo with the first's id, as its first confirmation would see it.
+    w.activityIds.delete(second.seq);
+    w.intentOfId.delete(second.id);
+    const reused = bodyShape(w, JSON.stringify({ ...json, id: first.id }), intent);
+    expect(reused).not.toEqual(predictedShape(intent));
+    expect(reused).toMatchObject({ id: `${first.id}, already the id of intent ${first.seq}` });
   });
 });
 
@@ -1404,22 +1549,23 @@ describe("status deletes: the cap and the TTL", () => {
     expect(w.stats["Update stale"]).toBe(2);
   });
 
-  // RES-6 (D2): the retraction lapses while the removal still runs; a late Update rewrites the hidden row and a late
-  // Create finds it stored (`duplicate`), L still cannot see it (VIS-1), and the cleanup then leaves no row.
+  // RES-6 (D2): the retraction lapses while the removal still runs. A late Update rewrites the hidden row (checked
+  // against the policy). The removal's first round takes L's mention while the row stays (the receipts of L's boost
+  // hold it past the round), so a late Create to L's personal inbox gives the mention back as a silent one
+  // (`audience-extended`); the row stays withdrawn, L still cannot see it (VIS-1), and the cleanup then leaves no row.
   it("a retraction that lapses while the removal runs", async () => {
     const w = await setup();
-    for (const a of [
-      { k: "post", s: 0, snapshot: A },
-      deliver(),
-      { k: "reblog" },
-      { k: "delete", s: 0, proven: true },
-      deliver(),
-      { k: "tick", ms: RETRACTION_TTL_MS },
-    ] as const) {
+    for (const a of [{ k: "post", s: 0, snapshot: A }, deliver(), { k: "reblog" }] as const) {
+      await act(w, a);
+    }
+    const id = await s1Id(w);
+    // Receipts are not in the projection: the policy still holds.
+    const boost = (await sql<{ id: string }>(w.store, "SELECT id FROM statuses WHERE reblog_of_id = ?", id))[0]!;
+    await seedReceipts(w.store, boost.id, w.l.id, 4 * STAGING_READ, NOW);
+    for (const a of [{ k: "delete", s: 0, proven: true }, deliver(), { k: "tick", ms: RETRACTION_TTL_MS }] as const) {
       await act(w, a);
     }
     expect(w.policy.jobs.filter((j) => j.doneAt === null)).toHaveLength(1);
-    const id = await s1Id(w);
     await receive(
       w,
       R,
@@ -1431,33 +1577,86 @@ describe("status deletes: the cap and the TTL", () => {
       "late",
     );
     expect(lastAnswer(w)).toBe('{"applied":true,"reason":"edited"}');
-    await receive(w, R, w.peer.sent[0]!.msg, "late");
-    expect(lastAnswer(w)).toBe('{"applied":false,"reason":"duplicate"}');
+    const mention = () =>
+      sql(w.store, "SELECT silent FROM status_mentions WHERE status_id = ? AND account_id = ?", id, w.l.id);
+    const withdrawn = () => sql(w.store, "SELECT withdrawn FROM statuses WHERE id = ?", id);
+    expect(await mention()).toEqual([{ silent: 0 }]);
+    // From here the Store runs alone: the policy finishes a removal in one batch.
+    expect((await runStoreJobs(w.store, BUILD, { now: w.clock })).pending).toBe(true);
+    expect(await mention()).toEqual([]);
+    expect(await withdrawn()).toEqual([{ withdrawn: 1 }]);
+    const result = await w.store.receiveActivity(BUILD, {
+      now: w.clock,
+      origin: LOCAL,
+      actorUri: R,
+      actor: null,
+      actorRevision: null,
+      activity: activityOf(R, w.peer.sent[0]!.msg),
+      recipient: "alice",
+    });
+    expect({ applied: result.applied, reason: result.reason }).toEqual({ applied: true, reason: "audience-extended" });
+    expect(await mention()).toEqual([{ silent: 1 }]);
+    expect(await withdrawn()).toEqual([{ withdrawn: 1 }]);
     expect((await w.h.request(`/api/v1/statuses/${id}`, bearer(w.l.token))).status).toBe(404);
-    await settleKopje(w);
-    expect((await project(w)).statuses).toEqual([]);
-  });
+    for (let round = 0; round < 100; round++) {
+      if (!(await runStoreJobs(w.store, BUILD, { now: w.clock })).pending) {
+        break;
+      }
+    }
+    expect(await sql(w.store, "SELECT 1 FROM statuses WHERE uri = ?", S1)).toEqual([]);
+  }, 120_000);
 });
+
+// Every delivery Kopje has, claimed, confirmed and completed until none is left: the ids of the bodies it sent.
+async function deliverAll(w: World, prefix: string): Promise<string[]> {
+  const sent: string[] = [];
+  for (let round = 0; round < 200; round++) {
+    const token = `${prefix}-${round}`;
+    const claimed = await w.store.claimDeliveries(BUILD, { now: w.clock, leaseToken: token });
+    for (const d of claimed.deliveries) {
+      const confirmation = await w.store.confirmDelivery(BUILD, { id: d.id, leaseToken: token, now: w.clock });
+      if (confirmation.status === "send") {
+        sent.push((JSON.parse(confirmation.body) as { id: string }).id);
+        await w.store.completeDelivery(BUILD, {
+          id: d.id,
+          leaseToken: token,
+          now: w.clock,
+          outcome: { kind: "delivered", status: 202 },
+        });
+      }
+    }
+    if ((await sql(w.store, "SELECT 1 FROM deliveries UNION ALL SELECT 1 FROM outbound_targets")).length === 0) {
+      return sent;
+    }
+  }
+  throw new Error("deliveries left after 200 rounds");
+}
+
+// R's s1 stored, L's boost of it with receipts beyond the staging budget (STAGING_READ): the boost's row.
+async function boostedWithReceipts(w: World): Promise<{ original: string; boost: { id: string; uri: string } }> {
+  const create: Msg = {
+    type: "Create",
+    id: `${S1}/activity`,
+    object: { uri: S1, attributedTo: R, snapshot: A, published: NOW, updated: null, inReplyTo: null },
+  };
+  await storeReceive(w.store, R, activityOf(R, create), NOW);
+  const original = await s1Id(w);
+  expect((await w.h.request(`/api/v1/statuses/${original}/reblog`, bearer(w.l.token, { method: "POST" }))).status).toBe(
+    200,
+  );
+  const boost = (
+    await sql<{ id: string; uri: string }>(w.store, "SELECT id, uri FROM statuses WHERE reblog_of_id = ?", original)
+  )[0]!;
+  await seedReceipts(w.store, boost.id, w.l.id, 4 * STAGING_READ, NOW);
+  return { original, boost };
+}
 
 // RES-6, ID-7, NET-2, VIS-3: the removal crosses the staging budget (receipts beyond STAGING_READ) while the boost's
 // Undo is staged and delivered, then the author's Delete arrives again: no second Undo(Announce) is recorded or sent.
 describe("status deletes: the production cleanup", () => {
   it("records and sends one Undo(Announce) across staging, delivery, a redelivered Delete and the rest", async () => {
     const w = await setup();
-    const create: Msg = {
-      type: "Create",
-      id: `${S1}/activity`,
-      object: { uri: S1, attributedTo: R, snapshot: A, published: NOW, updated: null, inReplyTo: null },
-    };
-    await storeReceive(w.store, R, activityOf(R, create), NOW);
-    const id = await s1Id(w);
-    expect((await w.h.request(`/api/v1/statuses/${id}/reblog`, bearer(w.l.token, { method: "POST" }))).status).toBe(
-      200,
-    );
-    const boost = (
-      await sql<{ id: string; uri: string }>(w.store, "SELECT id, uri FROM statuses WHERE reblog_of_id = ?", id)
-    )[0]!;
-    await seedReceipts(w.store, boost.id, w.l.id, 4 * STAGING_READ, NOW);
+    const { boost } = await boostedWithReceipts(w);
     const remove: Msg = { type: "Delete", id: `${S1}#delete`, object: S1, proven: false };
     expect((await storeReceive(w.store, R, activityOf(R, remove), NOW)).reason).toBe("status-deleted");
     const undos = () =>
@@ -1473,27 +1672,7 @@ describe("status deletes: the production cleanup", () => {
     expect((await undos()).map((u) => u.staged)).toEqual([null]);
     expect(await sql(w.store, "SELECT withdrawn FROM statuses WHERE id = ?", boost.id)).toEqual([{ withdrawn: 1 }]);
     // Kopje delivers the Undo everywhere.
-    const sent: string[] = [];
-    for (let round = 0; round < 200; round++) {
-      const token = `cleanup-${round}`;
-      const claimed = await w.store.claimDeliveries(BUILD, { now: NOW, leaseToken: token });
-      for (const d of claimed.deliveries) {
-        const confirmation = await w.store.confirmDelivery(BUILD, { id: d.id, leaseToken: token, now: NOW });
-        if (confirmation.status === "send") {
-          sent.push((JSON.parse(confirmation.body) as { id: string }).id);
-          await w.store.completeDelivery(BUILD, {
-            id: d.id,
-            leaseToken: token,
-            now: NOW,
-            outcome: { kind: "delivered", status: 202 },
-          });
-        }
-      }
-      if ((await sql(w.store, "SELECT 1 FROM deliveries UNION ALL SELECT 1 FROM outbound_targets")).length === 0) {
-        break;
-      }
-    }
-    const undoIds = new Set(sent.filter((s) => s.endsWith("/undo")));
+    const undoIds = new Set((await deliverAll(w, "cleanup")).filter((s) => s.endsWith("/undo")));
     expect(undoIds.size).toBe(1);
     // R's Delete again, then the cleanup to its end.
     await storeReceive(w.store, R, activityOf(R, remove), NOW);
@@ -1508,5 +1687,43 @@ describe("status deletes: the production cleanup", () => {
     expect(
       await sql(w.store, "SELECT id FROM outbound_activities WHERE object_uri = ? AND retracts = 1", boost.uri),
     ).toEqual([]);
+  }, 120_000);
+
+  // ID-7: a boost is withdrawn once. L's unboost withdrew it and its Undo went out while the boost's row stays (its
+  // receipts not yet deleted); R's Delete then starts the original's removal, whose job reaches the withdrawn boost
+  // with no cursor of its own: it records no second Undo(Announce) and sends none.
+  it("an original's removal records no Undo of a boost its booster withdrew", async () => {
+    const w = await setup();
+    const { original, boost } = await boostedWithReceipts(w);
+    expect(
+      (await w.h.request(`/api/v1/statuses/${original}/unreblog`, bearer(w.l.token, { method: "POST" }))).status,
+    ).toBe(200);
+    const undos = () =>
+      sql<{ id: number; staged: string | null }>(
+        w.store,
+        "SELECT id, staged FROM outbound_activities WHERE object_uri = ? AND retracts = 1",
+        boost.uri,
+      );
+    for (let round = 0; round < 20 && (await undos())[0]?.staged !== null; round++) {
+      await runStoreJobs(w.store, BUILD, { now: NOW });
+    }
+    expect((await undos()).map((u) => u.staged)).toEqual([null]);
+    const undoIds = new Set((await deliverAll(w, "unboost")).filter((s) => s.endsWith("/undo")));
+    expect(undoIds.size).toBe(1);
+    // Delivered: its intent is gone, while the boost's row stays, withdrawn.
+    expect(await undos()).toEqual([]);
+    expect(await sql(w.store, "SELECT withdrawn FROM statuses WHERE id = ?", boost.id)).toEqual([{ withdrawn: 1 }]);
+    const remove: Msg = { type: "Delete", id: `${S1}#delete`, object: S1, proven: false };
+    expect((await storeReceive(w.store, R, activityOf(R, remove), NOW)).reason).toBe("status-deleted");
+    expect(await undos()).toEqual([]);
+    for (let round = 0; round < 100; round++) {
+      expect(await undos()).toEqual([]);
+      if (!(await runStoreJobs(w.store, BUILD, { now: NOW })).pending) {
+        break;
+      }
+    }
+    expect(await undos()).toEqual([]);
+    expect(await deliverAll(w, "removal")).toEqual([]);
+    expect(await sql(w.store, "SELECT 1 FROM statuses")).toEqual([]);
   }, 120_000);
 });
