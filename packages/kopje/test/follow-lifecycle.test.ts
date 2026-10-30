@@ -5,7 +5,7 @@ import { describe, expect, it } from "vitest";
 import type { DeliveryOutcome } from "../src/domain/deliveries";
 import { bearer, json, sql } from "./api-helpers";
 import { NOW } from "./app-helpers";
-import { type Body, type Inbound, type Intent, Peer, Policy } from "./follow-model";
+import { type Body, type Inbound, type Intent, PAIR_SHAPE_BYTES, Peer, Policy } from "./follow-model";
 import { BUILD } from "./helpers";
 import { storeReceive } from "./inbox-store-helpers";
 import { runs } from "./policy-world";
@@ -182,7 +182,8 @@ async function project(w: World) {
     }>(
       `SELECT d.state, d.lease_token AS token, json_extract(o.body, '$.activity.type') AS type,
 				json_extract(o.body, '$.activity.id') AS id,
-				coalesce(json_extract(o.body, '$.activity.object.id'), json_extract(o.body, '$.activity.object')) AS object,
+				CASE json_type(o.body, '$.activity.object') WHEN 'object' THEN json_extract(o.body, '$.activity.object.id')
+					ELSE json_extract(o.body, '$.activity.object') END AS object,
 				o.superseded
 			FROM deliveries d JOIN outbound_activities o ON o.id = d.activity_id WHERE d.account_id = ? ORDER BY d.id`,
       w.l.id,
@@ -287,7 +288,7 @@ async function deliverToKopje(w: World, activity: Inbound, label: string): Promi
   if (
     activity.type === "Follow" &&
     predicted.applied &&
-    rl !== null &&
+    rl?.uri != null &&
     w.policy.rl?.uri === activity.id &&
     order.indexOf(activity.id) < order.indexOf(rl.uri)
   ) {
@@ -439,7 +440,8 @@ async function rowIdentity(w: World, delivery: string) {
     await sql<{ type: string; id: string; object: string }>(
       w.store,
       `SELECT json_extract(o.body, '$.activity.type') AS type, json_extract(o.body, '$.activity.id') AS id,
-				coalesce(json_extract(o.body, '$.activity.object.id'), json_extract(o.body, '$.activity.object')) AS object
+				CASE json_type(o.body, '$.activity.object') WHEN 'object' THEN json_extract(o.body, '$.activity.object.id')
+					ELSE json_extract(o.body, '$.activity.object') END AS object
 			FROM deliveries d JOIN outbound_activities o ON o.id = d.activity_id WHERE d.id = ?`,
       delivery,
     )
@@ -1035,6 +1037,73 @@ describe("follow lifecycle: R's inbound activities against the policy", () => {
       runs(CASES, SEED),
     );
   }, 300_000);
+});
+
+// Answers naming a Misskey pair id (`/follows/<a>/<b>`, which names every generation of the pair) or no Follow id, as
+// fixed sequences through the inbound harness (every step checked against the policy).
+describe("follow lifecycle: pair-shaped and unnamed answers against the policy", () => {
+  const PAIR = `${ORIGIN}/follows/r/alice`;
+  const [F1, F2] = FOLLOWS;
+  const lane = (w: World) => w.policy.lane.map((i) => [i.type, i.ref]);
+
+  it("a Follow replaces the Reject of a pair id", async () => {
+    const w = await setup();
+    await inbound(w, { k: "inFollow", id: PAIR });
+    await inbound(w, { k: "removeFollower" });
+    await inbound(w, { k: "inFollow", id: F1! });
+    expect(lane(w)).toEqual([["Accept", F1]]);
+  });
+
+  // NET-2 tests the pair shape only within 4,096 bytes: past it the Reject names another generation, and is kept.
+  it.each([
+    [PAIR_SHAPE_BYTES, false],
+    [PAIR_SHAPE_BYTES + 1, true],
+  ])("a Follow and the Reject of a %i-byte pair id (kept: %s)", async (bytes, kept) => {
+    const prefix = `${ORIGIN}/follows/`;
+    const id = `${prefix}${"a".repeat(bytes - prefix.length - "/alice".length)}/alice`;
+    expect(new TextEncoder().encode(id).byteLength).toBe(bytes);
+    const w = await setup();
+    await inbound(w, { k: "inFollow", id });
+    await inbound(w, { k: "removeFollower" });
+    await inbound(w, { k: "inFollow", id: F1! });
+    expect(lane(w)).toEqual([...(kept ? [["Reject", id]] : []), ["Accept", F1]]);
+  });
+
+  it("a Follow replaces the Reject of a follow stored without an id", async () => {
+    const w = await setup();
+    await inbound(w, { k: "inFollow", id: F1! });
+    await sql(w.store, "UPDATE follows SET uri = NULL WHERE account_id = ?", w.r);
+    w.policy.rl = { state: "accepted", uri: null };
+    await inbound(w, { k: "removeFollower" });
+    expect(lane(w)).toEqual([
+      ["Accept", F1],
+      ["Reject", null],
+    ]);
+    await inbound(w, { k: "inFollow", id: F2! });
+    expect(lane(w)).toEqual([["Accept", F2]]);
+  });
+
+  // ID-7: a typed pair Undo ends the pair's follow whatever its id, records that id (never the pair id) and cancels
+  // every answer of the pair; the pair id then follows again.
+  it("a typed pair Undo ends the follow of another id", async () => {
+    const w = await setup();
+    await inbound(w, { k: "inFollow", id: F1! });
+    await inbound(w, { k: "inUndo", id: PAIR, type: "Follow" });
+    expect(w.policy.rl).toBeNull();
+    expect([...w.policy.retracted]).toEqual([F1]);
+    expect(lane(w)).toEqual([]);
+    await inbound(w, { k: "inFollow", id: PAIR });
+    expect(w.policy.rl).toEqual({ state: "accepted", uri: PAIR });
+  });
+
+  // An untyped pair Undo matches only a follow with that id, and is not recorded (an accepted risk).
+  it("an untyped pair Undo that matches nothing is not recorded", async () => {
+    const w = await setup();
+    await inbound(w, { k: "inFollow", id: F1! });
+    await inbound(w, { k: "inUndo", id: PAIR, type: null });
+    expect(w.policy.rl).toEqual({ state: "accepted", uri: F1 });
+    expect(w.policy.retracted).toEqual(new Set());
+  });
 });
 
 const at = (i: number) => ({ i });

@@ -15,6 +15,8 @@
 // ---------------------------------------------------------------------------------------------------------------
 
 export type Edge = { state: "pending" | "accepted"; uri: string } | null;
+// R's follow of L: its uri is null for a follow stored without a Follow id (an imported one).
+export type RemoteEdge = { state: "pending" | "accepted"; uri: string | null } | null;
 
 // NET-2: "the POST timeout (30 s) is shorter than the lease (60 s)".
 export const LEASE_MS = 60_000;
@@ -59,11 +61,16 @@ export type Inbound =
   | { type: "Reject"; id: string; object: InboundRef };
 
 // A Misskey pair id (docs/threat-model.md: "a pair-shaped id (`/follows/<a>/<b>`)") names every generation of a
-// follow, so a Follow cannot tell an answer naming it from one of the generation it takes over.
+// follow (ID-7).
 const pairShaped = (id: string): boolean => /^\/follows\/[^/]+\/[^/]+$/.test(URL.parse(id)?.pathname ?? "");
 
+// NET-2: a Follow tests the pair shape of the Follow id a Reject names only within 4,096 bytes ("the pair shape is
+// tested on ids of at most 4,096 bytes"); a longer one is kept like any other Reject naming another generation.
+export const PAIR_SHAPE_BYTES = 4096;
+const utf8 = new TextEncoder();
+
 export class Policy {
-  rl: Edge = null;
+  rl: RemoteEdge = null;
   lr: Edge = null;
   blockRL: string | null = null;
   blockLR: string | null = null;
@@ -94,6 +101,14 @@ export class Policy {
   // Undo's object). Only ids of R's own origin are recorded (an Undo is checked for that before).
   private retract(uri: string): void {
     this.retracted.add(uri);
+  }
+
+  // ID-7: "Misskey's pair-shaped Follow id ... is never recorded as retracted, whether the Undo or the stored edge
+  // carries it", nor is a Follow stored without an id.
+  private retractFollow(uri: string | null): void {
+    if (uri !== null && !pairShaped(uri)) {
+      this.retract(uri);
+    }
   }
 
   // NET-2: a lane is (actor, inbox origin); everything L sends R's server is one lane, delivered in order.
@@ -157,7 +172,7 @@ export class Policy {
     this.promote(now);
   }
 
-  private answerOf(kind: "Accept" | "Reject", followUri: string, now: number, withdraws = false): void {
+  private answerOf(kind: "Accept" | "Reject", followUri: string | null, now: number, withdraws = false): void {
     this.record(now, {
       type: kind,
       ref: followUri,
@@ -197,7 +212,7 @@ export class Policy {
     if (this.rl === null) {
       return;
     }
-    this.retract(this.rl.uri);
+    this.retractFollow(this.rl.uri);
     this.answerOf("Reject", this.rl.uri, now, this.rl.state === "accepted");
     this.rl = null;
     this.dropFollowNotifications();
@@ -247,7 +262,7 @@ export class Policy {
     // the refused id is recorded (ID-7), and NET-2: "A Follow the target refuses because it blocks the follower
     // records its Reject and cancels nothing".
     if (this.blockLR !== null) {
-      this.retract(id);
+      this.retractFollow(id);
       this.answerOf("Reject", id, now);
       return { applied: true, reason: "follow-rejected" };
     }
@@ -264,13 +279,13 @@ export class Policy {
         answer.superseded ||
         answer.ref === null ||
         answer.ref === id ||
-        answer.ref === current ||
-        pairShaped(answer.ref),
+        (current !== null && answer.ref === current) ||
+        (utf8.encode(answer.ref).byteLength <= PAIR_SHAPE_BYTES && pairShaped(answer.ref)),
     );
     if (this.rl !== null) {
       // ID-7: a new generation; the superseded id is recorded as retracted. A pending request keeps waiting; an
       // accepted follow is accepted again under the new id.
-      this.retract(this.rl.uri);
+      this.retractFollow(this.rl.uri);
       this.rl = { state: this.rl.state, uri: id };
       if (this.rl.state === "pending") {
         return { applied: true, reason: "follow-request-updated", caught };
@@ -318,7 +333,9 @@ export class Policy {
   }
 
   // ID-7: "an Undo decides the undone type first (embedded, or a stored block with that id)"; its object is recorded
-  // as retracted whether or not it matched, so an Undo that overtook its activity keeps it from applying later.
+  // as retracted whether or not it matched, so an Undo that overtook its activity keeps it from applying later, except
+  // a Follow's pair-shaped id, which "the same pair can undo a later generation" with: a typed pair Undo of a Follow
+  // ends the pair's follow whatever its uri, and records that uri instead.
   private undo(ref: InboundRef, now: number): Answer & { caught?: Intent[] } {
     if (ref.actor !== null && ref.actor !== this.rUri) {
       return { applied: false, reason: "not-own" };
@@ -330,14 +347,21 @@ export class Policy {
     // NET-2: "An Undo of a Follow cancels and supersedes the same way the answers of the generation it undoes, typed,
     // embedded without a type or naming the Follow by its id alone ..., its edge stored or already ended (its id
     // retracted), and a Misskey pair Undo every answer of the pair".
-    const undoneAnswers = (): Intent[] => this.cancelAnswers(now, (answer) => pairShaped(id) || answer.ref === id);
+    // "An Undo naming no local target looks for the pairs through the local accounts": by an answer naming its id.
+    const ofPair = ref.object === this.lUri || this.lane.some((i) => i.answer && i.ref === id);
+    const undoneAnswers = (): Intent[] =>
+      this.cancelAnswers(now, (answer) => (ofPair && pairShaped(id)) || answer.ref === id);
     if (this.retracted.has(id)) {
       const caught = ref.type === null || ref.type === "Follow" ? undoneAnswers() : [];
       return { applied: false, reason: "retracted", caught };
     }
-    const followMatch = (ref.type === null || ref.type === "Follow") && this.rl?.uri === id;
+    const pair = ref.type === "Follow" && pairShaped(id) && ref.object === this.lUri;
+    const followMatch =
+      (ref.type === null || ref.type === "Follow") && this.rl !== null && (this.rl.uri === id || pair);
     const undoesBlock = ref.type === "Block" || (ref.type === null && !followMatch && this.blockRL === id);
-    const caught = !undoesBlock && (ref.type === null || ref.type === "Follow") ? undoneAnswers() : [];
+    const undoesFollow = !undoesBlock && (ref.type === null || ref.type === "Follow");
+    const caught = undoesFollow ? undoneAnswers() : [];
+    const ended = followMatch ? this.rl!.uri : null;
     let undone = false;
     if (followMatch) {
       this.rl = null;
@@ -347,7 +371,12 @@ export class Policy {
       this.blockRL = null;
       undone = true;
     }
-    this.retract(id);
+    if (undoesFollow) {
+      this.retractFollow(id);
+    } else {
+      this.retract(id);
+    }
+    this.retractFollow(ended);
     return { applied: true, reason: undone ? "undone" : "retraction-recorded", caught };
   }
 
@@ -414,7 +443,7 @@ export class Policy {
     if (this.rl?.state !== "pending") {
       return 404;
     }
-    this.retract(this.rl.uri);
+    this.retractFollow(this.rl.uri);
     this.answerOf("Reject", this.rl.uri, now);
     this.rl = null;
     this.notifications.delete("follow_request");
