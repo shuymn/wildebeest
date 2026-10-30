@@ -678,3 +678,13 @@ Outboxes (`/ap/users/:username/outbox` and the instance actor's `/actor/outbox`;
 - A request whose `Accept` prefers HTML or names no JSON type answers 406; Mastodon serves the collection whatever the
   `Accept`.
 - No `Cache-Control` is sent; Mastodon lets the collection be cached for three minutes and a page for one.
+
+Follow requests from an account that blocks the local one (`/api/v1/follow_requests`; the request an inbound `Block`
+keeps, or a `Follow` that arrives after its sender's `Block`):
+
+- The request is kept, listed, and may be authorized or rejected, as in Mastodon, but no notification of it is shown
+  while its sender blocks the account: Kopje's notification rule leaves out a notification from an account that blocks
+  its recipient (`shownSql`), so the kept request's `follow_request` notification is hidden and a later `Follow` writes
+  none, where Mastodon's `NotifyService::DropCondition#drop?` checks only the recipient's own blocks and mutes.
+- Authorizing a request (`POST /api/v1/follow_requests/:id/authorize`, or unlocking) writes no `follow` notification,
+  whoever the requester; Mastodon's controller queues one (`follow_requests_controller.rb:14-16`).

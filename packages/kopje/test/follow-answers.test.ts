@@ -492,6 +492,71 @@ describe("a renewal cancels every answer of the pair that is not leased, claimed
   });
 });
 
+// Mastodon's ActivityPub::Activity::Block (block.rb:14-16) ends the blocker's accepted follow with UnfollowService,
+// whose Reject (unfollow_service.rb:35-36) withdraws the Accept; an Accept of it still unsent never goes.
+describe("an inbound Block by an accepted follower sends one withdrawing Reject and no Accept of it", () => {
+  const blockFrom = (t: T) =>
+    receive(t.store, t.rUri, { id: `${REMOTE}/blocks/${++sequence}`, type: "Block", object: t.aliceUri });
+
+  it("an Accept queued and never claimed", async () => {
+    const t = await setup();
+    await outage(t);
+    const first = await followFrom(t);
+    expect(await blockFrom(t)).toMatchObject({ applied: true, reason: "blocked" });
+    expect(answers(await drain(t))).toEqual([["Reject", first.id]]);
+  });
+
+  it("an Accept leased and not confirmed, which its confirmation drops", async () => {
+    const t = await setup();
+    const first = await followFrom(t);
+    const token = `held-${++lease}`;
+    const [delivery] = (await t.store.claimDeliveries(BUILD, { now: NOW, leaseToken: token })).deliveries;
+    await blockFrom(t);
+    expect(await t.store.confirmDelivery(BUILD, { id: delivery!.id, leaseToken: token, now: NOW })).toMatchObject({
+      status: "dropped",
+    });
+    expect(answers(await drain(t))).toEqual([["Reject", first.id]]);
+  });
+
+  it("an Accept whose attempt failed, awaiting its retry", async () => {
+    const t = await setup();
+    const first = await followFrom(t);
+    expect(await claimOnce(t, FAIL)).toEqual(["Accept"]);
+    await blockFrom(t);
+    expect(answers(await drain(t))).toEqual([["Reject", first.id]]);
+  });
+
+  // Fills r's retraction cap (ID-7), so the next generation alice must record cannot be.
+  async function fillRetractions(t: T) {
+    await sql(
+      t.store,
+      `WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < ?2)
+			INSERT INTO inbound_retractions (actor_uri, target_uri, expires_at) SELECT ?1, ?1 || '/gone/' || i, ?3 FROM n`,
+      t.rUri,
+      MAX_RETRACTIONS_PER_ACTOR,
+      LATER,
+    );
+  }
+
+  it("at the retraction cap: an accepted follow keeps the Block from changing anything", async () => {
+    const t = await setup();
+    await followFrom(t);
+    await fillRetractions(t);
+    const before = await snapshot(t.store);
+    expect(await blockFrom(t)).toMatchObject({ applied: false, reason: "retraction-cap" });
+    expect(await snapshot(t.store)).toEqual(before);
+    expect(await sql(t.store, "SELECT 1 FROM blocks")).toEqual([]);
+  });
+
+  it("at the retraction cap: a pending request does not keep the Block from applying", async () => {
+    const t = await setup({ locked: true });
+    await followFrom(t);
+    await fillRetractions(t);
+    expect(await blockFrom(t)).toMatchObject({ applied: true, reason: "blocked" });
+    expect(await sql(t.store, "SELECT state FROM follows WHERE account_id = ?", t.r)).toEqual([{ state: "pending" }]);
+  });
+});
+
 describe("bounds and refusals (RES-6)", () => {
   // A pair history an imported or upgraded store may hold (a Follow within the bounds cancels every given-up answer
   // before it records its own): `intents` superseded answers of alice's to r, each with a given-up row a claim took.

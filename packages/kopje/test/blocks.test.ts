@@ -1,7 +1,9 @@
 import { runInDurableObject } from "cloudflare:test";
 import { describe, expect, it, vi } from "vitest";
 
+import { Db } from "../src/db/sql";
 import type { Relationship } from "../src/domain/accounts";
+import { canView } from "../src/domain/audience";
 import {
   blockDomain as blockDomainOperation,
   DOMAIN_BLOCK_BATCHES_PER_RUN,
@@ -15,6 +17,7 @@ import { type ApiHarness, bearer, json, login, settleDeliveries, sql } from "./a
 import { NOW } from "./app-helpers";
 import { BUILD, claimSent, runStoreJobs } from "./helpers";
 import { watchedCursor } from "./read-helpers";
+import { receive, rejects } from "./remote-suspension-helpers";
 import {
   act,
   community,
@@ -253,25 +256,17 @@ describe("blocks", () => {
     expect(await ids(h, next!.replace("https://kopje.test", ""), h.users.alice.token)).toEqual([targets[0]]);
   });
 
-  it("applies an inbound Block and its Undo: blocked_by, both follows ended, ours undone there", async () => {
+  it("applies an inbound Block and its Undo: blocked_by, both follows ended, theirs rejected, ours undone", async () => {
     const h = await community(["alice"]);
     const { alice } = h.users;
     const carol = await remoteAccount(h.store, "carol");
     const carolUri = "https://remote.example/users/carol";
     await follow(h, alice, carol);
     await remoteFollows(h.store, carol, alice.id);
-    const receive = (activity: Parameters<typeof h.store.receiveActivity>[1]["activity"]) =>
-      h.store.receiveActivity(BUILD, {
-        now: NOW,
-        origin: "https://kopje.test",
-        actorUri: carolUri,
-        actor: null,
-        actorRevision: null,
-        activity,
-      });
+    const from = (activity: Record<string, unknown> & { type: string }) => receive(h.store, carolUri, activity);
     const blockId = `${carolUri}#blocks/1`;
 
-    expect(await receive({ type: "Block", id: blockId, object: ALICE_URI })).toMatchObject({ applied: true });
+    expect(await from({ type: "Block", id: blockId, object: ALICE_URI })).toMatchObject({ applied: true });
     expect(await relationship(h, alice, carol)).toMatchObject({
       blocked_by: true,
       blocking: false,
@@ -280,12 +275,185 @@ describe("blocks", () => {
       followed_by: false,
     });
     expect(await follows(h)).toEqual([]);
-    expect((await outbound(h.store)).map((o) => o.activity.type)).toEqual(["Follow", "Undo"]);
+    expect((await outbound(h.store)).map((o) => o.activity.type)).toEqual(["Follow", "Reject", "Undo"]);
     expect((await act(h, alice, `/api/v1/accounts/${carol}/follow`)).status).toBe(403);
 
     const undo = { id: `${blockId}/undo`, object: { id: blockId, type: "Block", actor: carolUri, object: ALICE_URI } };
-    expect(await receive({ type: "Undo", ...undo })).toMatchObject({ applied: true });
+    expect(await from({ type: "Undo", ...undo })).toMatchObject({ applied: true });
     expect(await relationship(h, alice, carol)).toMatchObject({ blocked_by: false });
+  });
+});
+
+// An inbound Block of alice by r, as Mastodon's ActivityPub::Activity::Block (block.rb:14-16) applies it: r's accepted
+// follow ends with a withdrawing Reject (unfollow_service.rb:35-36), r's pending request stays for alice to authorize
+// or reject as any other (follow_requests_controller.rb, authorize_follow_service.rb, follow_request.rb#authorize!
+// check no block), and alice's follow and request of r end. A Follow r sends after its Block is taken as any other
+// (follow.rb:18 refuses only a follower the target blocks).
+describe("an inbound Block by a follower (VIS-13, ID-7)", () => {
+  const R_URI = "https://remote.example/users/r";
+  let n = 0;
+
+  async function blocked(options: { locked?: boolean } = {}) {
+    const h = await community(["alice"]);
+    const { alice } = h.users;
+    if (options.locked === true) {
+      await sql(h.store, "UPDATE accounts SET locked = 1 WHERE id = ?", alice.id);
+    }
+    const r = await remoteAccount(h.store, "r");
+    const from = (activity: Record<string, unknown> & { type: string }) => receive(h.store, R_URI, activity);
+    const followFrom = async (id = `https://remote.example/follows/${++n}`) => ({
+      id,
+      result: await from({ id, type: "Follow", object: ALICE_URI }),
+    });
+    const blockFrom = async (id = `https://remote.example/blocks/${++n}`) => ({
+      id,
+      result: await from({ id, type: "Block", object: ALICE_URI }),
+    });
+    const undoFrom = (object: { id: string; type: string }) =>
+      from({ id: `${object.id}/undo`, type: "Undo", object: { ...object, actor: R_URI, object: ALICE_URI } });
+    const answer = async (decision: "authorize" | "reject") =>
+      (await act(h, alice, `/api/v1/follow_requests/${r}/${decision}`)).status;
+    const types = async () => (await outbound(h.store)).map((o) => o.activity.type);
+    const retracted = async (uri: string) =>
+      (await sql(h.store, "SELECT 1 FROM inbound_retractions WHERE actor_uri = ? AND target_uri = ?", R_URI, uri))
+        .length > 0;
+    const followers = async () =>
+      (await sql<{ n: number }>(h.store, "SELECT followers_count AS n FROM accounts WHERE id = ?", alice.id))[0]!.n;
+    const canSee = (viewer: string, status: string) =>
+      runInDurableObject(h.store, (_instance, state) => canView(new Db(state.storage.sql), viewer, status));
+    return { h, alice, r, from, followFrom, blockFrom, undoFrom, answer, types, retracted, followers, canSee };
+  }
+
+  it("keeps a pending request: not retracted, listed, a replay a duplicate, nothing sent", async () => {
+    const t = await blocked({ locked: true });
+    const request = await t.followFrom();
+    expect(request.result).toMatchObject({ reason: "follow-requested" });
+    expect((await t.blockFrom()).result).toMatchObject({ applied: true, reason: "blocked" });
+    expect(await follows(t.h)).toEqual([{ account_id: t.r, target_account_id: t.alice.id, state: "pending" }]);
+    expect(await t.retracted(request.id)).toBe(false);
+    expect(await t.followFrom(request.id)).toMatchObject({ result: { applied: false, reason: "duplicate" } });
+    expect(await t.types()).toEqual([]);
+    expect(await ids(t.h, "/api/v1/follow_requests", t.alice.token)).toEqual([t.r]);
+    // The follow_request notification stays stored with its request; the notification rule hides it while r blocks
+    // alice (docs/mastodon-deviations.md).
+    expect(
+      await sql(
+        t.h.store,
+        "SELECT type FROM notifications WHERE account_id = ? AND from_account_id = ?",
+        t.alice.id,
+        t.r,
+      ),
+    ).toEqual([{ type: "follow_request" }]);
+    expect(await relationship(t.h, t.alice, t.r)).toMatchObject({ blocked_by: true, requested_by: true });
+  });
+
+  it("authorizes a kept request during the block: the Accept, the count, VIS-1 both ways; an Undo keeps it", async () => {
+    const t = await blocked({ locked: true });
+    const request = await t.followFrom();
+    const block = await t.blockFrom();
+    const mine = (await post(t.h, t.alice, { status: "followers only", visibility: "private" })).id;
+    const theirs = await seedStatus(t.h.store, {
+      accountId: t.r,
+      visibility: "private",
+      mentions: [{ accountId: t.alice.id }],
+    });
+    expect(await t.canSee(t.r, mine)).toBe(false);
+    expect(await t.answer("authorize")).toBe(200);
+    expect(await follows(t.h)).toEqual([{ account_id: t.r, target_account_id: t.alice.id, state: "accepted" }]);
+    const [accept] = await outbound(t.h.store);
+    expect(accept?.activity).toMatchObject({ type: "Accept", object: { id: request.id } });
+    expect(await t.followers()).toBe(1);
+    expect(await t.canSee(t.r, mine)).toBe(true);
+    expect(await t.canSee(t.alice.id, theirs)).toBe(false);
+    // A Block again under a new id updates the block only (block.rb's early return): the follow stays.
+    const again = await t.blockFrom();
+    expect(again.result).toMatchObject({ applied: true, reason: "block-updated" });
+    expect(await follows(t.h)).toHaveLength(1);
+    expect(await t.undoFrom({ id: again.id, type: "Block" })).toMatchObject({ applied: true });
+    expect(await t.undoFrom({ id: block.id, type: "Block" })).toMatchObject({ applied: false });
+    expect(await follows(t.h)).toEqual([{ account_id: t.r, target_account_id: t.alice.id, state: "accepted" }]);
+    expect(await relationship(t.h, t.alice, t.r)).toMatchObject({ blocked_by: false, followed_by: true });
+  });
+
+  it("rejects a kept request during the block: the Reject, and its replay is refused after the Undo", async () => {
+    const t = await blocked({ locked: true });
+    const request = await t.followFrom();
+    const block = await t.blockFrom();
+    expect(await t.answer("reject")).toBe(200);
+    expect(await follows(t.h)).toEqual([]);
+    expect(await t.types()).toEqual(["Reject"]);
+    expect(await t.retracted(request.id)).toBe(true);
+    expect(await t.undoFrom({ id: block.id, type: "Block" })).toMatchObject({ applied: true });
+    expect(await t.followFrom(request.id)).toMatchObject({ result: { applied: false, reason: "retracted" } });
+  });
+
+  it("an Undo of the Block keeps a pending request, and a replay of it is then a duplicate", async () => {
+    const t = await blocked({ locked: true });
+    const request = await t.followFrom();
+    const block = await t.blockFrom();
+    expect(await t.undoFrom({ id: block.id, type: "Block" })).toMatchObject({ applied: true });
+    expect(await follows(t.h)).toEqual([{ account_id: t.r, target_account_id: t.alice.id, state: "pending" }]);
+    expect(await t.followFrom(request.id)).toMatchObject({ result: { applied: false, reason: "duplicate" } });
+  });
+
+  it("unlocking authorizes a kept request during the block, with the Accept and the count", async () => {
+    const t = await blocked({ locked: true });
+    const request = await t.followFrom();
+    await t.blockFrom();
+    const unlocked = await t.h.request(
+      "/api/v1/accounts/update_credentials",
+      bearer(t.alice.token, { ...json({ locked: false }), method: "PATCH" }),
+    );
+    expect(unlocked.status).toBe(200);
+    await runStoreJobs(t.h.store, BUILD, { now: NOW });
+    expect(await follows(t.h)).toEqual([{ account_id: t.r, target_account_id: t.alice.id, state: "accepted" }]);
+    const accept = (await outbound(t.h.store)).find((o) => o.activity.type === "Accept");
+    expect(accept?.activity).toMatchObject({ object: { id: request.id } });
+    expect(await t.followers()).toBe(1);
+  });
+
+  it("ends an accepted follow with one withdrawing Reject; a replay stays retracted, an old Undo spares a new one", async () => {
+    const t = await blocked();
+    const first = await t.followFrom();
+    expect(first.result).toMatchObject({ reason: "followed" });
+    const block = await t.blockFrom();
+    expect(block.result).toMatchObject({ applied: true, reason: "blocked" });
+    expect(await follows(t.h)).toEqual([]);
+    expect(await t.followers()).toBe(0);
+    expect(await rejects(t.h.store)).toEqual([{ signer: t.alice.id, follower: R_URI, retracts: 1 }]);
+    expect(await t.retracted(first.id)).toBe(true);
+    expect(await t.undoFrom({ id: block.id, type: "Block" })).toMatchObject({ applied: true });
+    expect(await t.followFrom(first.id)).toMatchObject({ result: { applied: false, reason: "retracted" } });
+    const second = await t.followFrom();
+    expect(second.result).toMatchObject({ applied: true, reason: "followed" });
+    await t.undoFrom({ id: first.id, type: "Follow" });
+    expect(await sql(t.h.store, "SELECT uri, state FROM follows")).toEqual([{ uri: second.id, state: "accepted" }]);
+  });
+
+  it.each([
+    ["a locked account waits for its owner", true, "follow-requested", "pending", []],
+    ["an unlocked account accepts it", false, "followed", "accepted", ["Accept"]],
+  ])("a Follow after the blocker's Block: %s", async (_, locked, reason, state, sent) => {
+    const t = await blocked({ locked });
+    const block = await t.blockFrom();
+    const request = await t.followFrom();
+    expect(request.result).toMatchObject({ applied: true, reason });
+    expect(await follows(t.h)).toEqual([{ account_id: t.r, target_account_id: t.alice.id, state }]);
+    expect(await t.types()).toEqual(sent);
+    // Its replay changes nothing, during the block and after its Undo.
+    expect(await t.followFrom(request.id)).toMatchObject({ result: { applied: false, reason: "duplicate" } });
+    await t.undoFrom({ id: block.id, type: "Block" });
+    expect(await t.followFrom(request.id)).toMatchObject({ result: { applied: false, reason: "duplicate" } });
+    expect(await t.types()).toEqual(sent);
+  });
+
+  it.each(["pending", "accepted"])("ends alice's %s follow of the blocker and undoes it there", async (state) => {
+    const t = await blocked();
+    await follow(t.h, t.alice, t.r);
+    await sql(t.h.store, "UPDATE follows SET state = ?", state);
+    expect((await t.blockFrom()).result).toMatchObject({ applied: true, reason: "blocked" });
+    expect(await follows(t.h)).toEqual([]);
+    expect(await t.types()).toEqual(["Follow", "Undo"]);
   });
 });
 

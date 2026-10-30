@@ -25,7 +25,6 @@ import {
   availableLocalSql,
   availableSql,
   blockedSql,
-  blocksSql,
   canView,
   followableBySql,
   isDistributable,
@@ -615,10 +614,8 @@ const follow: Handler<"Follow"> = (db, actor, activity, { now }) => {
   if (isRetracted(db, actor.uri, activity.id, now)) {
     return ignored("retracted");
   }
-  // The follower blocks the target: Mastodon would not have sent this; nothing is recorded.
-  if (db.first(`SELECT 1 AS x WHERE ${blocksSql("?1", "?2")}`, actor.id, target.id)) {
-    return ignored("blocked");
-  }
+  // A follower that blocks the target is not refused: its Follow may arrive after its Block, and Mastodon's
+  // Follow#perform (follow.rb:18) refuses only a follower the target blocks.
   const existing = db.first<{ id: string; state: string; uri: string | null }>(
     "SELECT CAST(id AS TEXT) AS id, state, uri FROM follows WHERE account_id = ? AND target_account_id = ?",
     actor.id,
@@ -880,8 +877,11 @@ const undo: Handler<"Undo"> = (db, actor, activity, { now }) => {
   return undone ? applied("undone") : applied("retraction-recorded");
 };
 
-// Mastodon's ActivityPub::Activity::Block: both follows between the two end, then the block is recorded. The ids of
-// the removed follows are recorded as retracted, so a replayed Follow does not restore them (ID-7).
+// Mastodon's ActivityPub::Activity::Block (block.rb:14-16): the blocker's accepted follow ends with a Reject, as
+// UnfollowService#unfollow! answers a remote follower of a local account (unfollow_service.rb:35-36), the local
+// account's follow and request end, then the block is recorded. The blocker's pending request stays, for the owner to
+// authorize or reject as any other. The ended follow's id is recorded as retracted, so a replayed Follow does not
+// restore it (ID-7), and its Reject withdraws it: an Accept of it still waiting is superseded, never sent (NET-2).
 const block: Handler<"Block"> = (db, actor, activity, { now }) => {
   const target = localAccount(db, activity.object);
   if (target === undefined) {
@@ -907,16 +907,32 @@ const block: Handler<"Block"> = (db, actor, activity, { now }) => {
     db.run("UPDATE blocks SET uri = ? WHERE id = CAST(? AS INTEGER)", activity.id, existing.id);
     return applied("block-updated");
   }
-  const followUri = db.first<{ uri: string | null }>(
-    "SELECT uri FROM follows WHERE account_id = ? AND target_account_id = ?",
+  const accepted = db.first<{ id: string; uri: string | null }>(
+    `SELECT CAST(id AS TEXT) AS id, uri FROM follows
+		WHERE account_id = ? AND target_account_id = ? AND state = 'accepted'`,
     actor.id,
     target.id,
-  )?.uri;
-  // The removed follow's generation must be recorded, or the Block changes nothing (ID-7).
-  if (followUri != null && !retractFollow(db, actor.uri, followUri, now)) {
-    return ignored("retraction-cap");
+  );
+  if (accepted !== undefined) {
+    // The ended follow's generation must be recorded, or the Block changes nothing (ID-7).
+    if (accepted.uri !== null && !retractFollow(db, actor.uri, accepted.uri, now)) {
+      return ignored("retraction-cap");
+    }
+    removeFollow(db, actor.id, target.id);
+    recordOutbound(
+      db,
+      target.id,
+      followAnswerActivity("Reject", {
+        localActorUri: target.uri,
+        followerUri: actor.uri,
+        followerId: actor.id,
+        followUri: accepted.uri,
+        edgeId: accepted.id,
+      }),
+      now,
+      { withdraws: true },
+    );
   }
-  removeFollow(db, actor.id, target.id);
   // Mastodon's UnfollowService: the local account's follow of the blocker ends, and is undone there too.
   unfollowRemote(db, target, actor, now);
   db.run(
