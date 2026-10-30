@@ -609,8 +609,8 @@ export type Body = {
 export type PeerEvents = {
   // block.rb:16: Kopje's Block dropped R's request g (RejectFollowService, nothing sent).
   blockDroppedRequest: Set<string>;
-  // accept.rb:24 and reject.rb:25: answers of other generations (as `${type} ${the Follow id they name}`) applied to
-  // R's request or follow g by the account pair.
+  // accept.rb:24 and reject.rb:25: the receptions (by the tag their sender gave each, receive) of answers of other
+  // generations applied to R's request or follow g by the account pair.
   pairAnswer: Map<string, Set<string>>;
   // refollow_worker.rb:19-26: R's follow g dropped by a refollow whose replacement FollowService refused (nothing
   // sent).
@@ -641,7 +641,7 @@ export class Peer {
   readonly cache = new Map<string, number>();
   // Messages to Kopje not yet delivered, and bodies from Kopje received but not processed.
   outbox: PeerMessage[] = [];
-  inbox: { seq: number; body: Body }[] = [];
+  inbox: { seq: number; body: Body; tag: string }[] = [];
   readonly sent: PeerMessage[] = [];
   readonly events: PeerEvents = {
     blockDroppedRequest: new Set(),
@@ -844,8 +844,9 @@ export class Peer {
 
   // ---- Bodies from Kopje, processed in any order (each is its own job) ----
 
-  receive(body: Body): void {
-    this.inbox.push({ seq: ++this.seq, body });
+  // A body L's server POSTed; `tag` names that reception (the attempt that carried it) in the events.
+  receive(body: Body, tag = ""): void {
+    this.inbox.push({ seq: ++this.seq, body, tag });
   }
 
   process(index: number, now: number): Body | null {
@@ -853,7 +854,7 @@ export class Peer {
     if (item === undefined) {
       return null;
     }
-    const { body } = item;
+    const { body, tag } = item;
     const object = typeof body.object === "string" ? { id: body.object } : body.object;
     switch (body.type) {
       case "Follow":
@@ -870,10 +871,10 @@ export class Peer {
         this.processBlock(body.id, now);
         break;
       case "Accept":
-        this.processAccept(object.id ?? null);
+        this.processAccept(object.id ?? null, tag);
         break;
       case "Reject":
-        this.processReject(object.id ?? null);
+        this.processReject(object.id ?? null, tag);
         break;
       default:
         // A profile Update changes no relationship.
@@ -960,30 +961,30 @@ export class Peer {
     }
   }
 
-  private pairApplied(g: string, type: "Accept" | "Reject", answered: string | null): void {
-    const answers = this.events.pairAnswer.get(g) ?? new Set();
-    this.events.pairAnswer.set(g, answers.add(`${type} ${answered}`));
+  private pairApplied(g: string, tag: string): void {
+    const receptions = this.events.pairAnswer.get(g) ?? new Set();
+    this.events.pairAnswer.set(g, receptions.add(tag));
   }
 
   // accept.rb:4-35: R's request by the Follow's id, else (embedded Follow) by the account pair.
-  private processAccept(uri: string | null): void {
+  private processAccept(uri: string | null, tag: string): void {
     if (this.rl?.state !== "requested") {
       return;
     }
     if (this.rl.uri !== uri) {
-      this.pairApplied(this.rl.uri, "Accept", uri);
+      this.pairApplied(this.rl.uri, tag);
     }
     this.rl = { state: "accepted", uri: this.rl.uri };
   }
 
   // reject.rb:4-29: R's request by id, else R's follow by id (UnfollowService, which sends an Undo), else by the pair:
   // the request is rejected and a follow undone.
-  private processReject(uri: string | null): void {
+  private processReject(uri: string | null, tag: string): void {
     if (this.rl === null) {
       return;
     }
     if (this.rl.uri !== uri) {
-      this.pairApplied(this.rl.uri, "Reject", uri);
+      this.pairApplied(this.rl.uri, tag);
     }
     if (this.rl.state === "requested") {
       this.rl = null;
