@@ -164,11 +164,10 @@ export class Policy {
   }
 
   // NET-2: "A remote Follow cancels, in its receive transaction, every Accept and Reject of its pair that is not
-  // leased ... A leased answer is kept and holds its lane ... its intent is superseded". Returns how many it caught.
-  private cancelAnswers(now: number): number {
-    let caught = 0;
-    for (const intent of this.lane.filter((i) => i.answer)) {
-      caught++;
+  // leased ... A leased answer is kept and holds its lane ... its intent is superseded". Returns the answers it caught.
+  private cancelAnswers(now: number): Intent[] {
+    const caught = this.lane.filter((i) => i.answer);
+    for (const intent of caught) {
       if (intent.head?.kind === "leased") {
         intent.superseded = true;
       } else {
@@ -217,7 +216,7 @@ export class Policy {
 
   // ---- Inbound activities of R (ID-7, VIS-13, NET-2) ----
 
-  receive(activity: Inbound, now: number): Answer & { caught?: number } {
+  receive(activity: Inbound, now: number): Answer & { caught?: Intent[] } {
     switch (activity.type) {
       case "Follow":
         return this.follow(activity.id, now);
@@ -232,7 +231,7 @@ export class Policy {
     }
   }
 
-  private follow(id: string, now: number): Answer & { caught?: number } {
+  private follow(id: string, now: number): Answer & { caught?: Intent[] } {
     if (this.retracted.has(id)) {
       return { applied: false, reason: "retracted" };
     }
@@ -561,6 +560,9 @@ export type PeerEvents = {
   blockDroppedRequest: Set<string>;
   // accept.rb:24 and reject.rb:25: an answer of another generation applied to R's request g by the account pair.
   pairAnswer: Set<string>;
+  // refollow_worker.rb:19-26: R's follow g dropped by a refollow whose replacement FollowService refused (nothing
+  // sent).
+  refusedRefollow: Set<string>;
   // follow.rb:9: a Follow of L's that a cached Undo suppressed.
   undoBeforeFollow: number;
   // A Follow of L's processed again after an Undo removed that very follow: the follow is recreated.
@@ -592,6 +594,7 @@ export class Peer {
   readonly events: PeerEvents = {
     blockDroppedRequest: new Set(),
     pairAnswer: new Set(),
+    refusedRefollow: new Set(),
     undoBeforeFollow: 0,
     replayAfterUndo: new Set(),
     undoEnded: { follow: null, block: null },
@@ -681,14 +684,18 @@ export class Peer {
     return true;
   }
 
-  // RefollowWorker (refollow_worker.rb:12-26): R's accepted follow is dropped locally, then FollowService runs; a
-  // refusal is rescued and sends nothing.
+  // RefollowWorker (refollow_worker.rb:12-26): R's accepted follow is dropped locally (unfollow!, no Undo), then
+  // FollowService runs; a refusal (following_not_allowed?, follow_service.rb:56-58: either blocks the other) is
+  // rescued and sends nothing.
   refollow(): boolean {
     if (this.rl?.state !== "accepted") {
       return false;
     }
+    const dropped = this.rl.uri;
     this.rl = null;
-    this.follow();
+    if (!this.follow()) {
+      this.events.refusedRefollow.add(dropped);
+    }
     return true;
   }
 

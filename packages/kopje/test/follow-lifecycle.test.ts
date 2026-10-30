@@ -135,9 +135,14 @@ async function setup() {
     receivedAt: new Map<string, number>(),
     // R's generations an older Follow of R's reached Kopje after (its deliveries are independent jobs).
     olderFollowAfter: new Set<string>(),
+    // #1415: R's generations whose Reject an older Follow of R's cancelled, with that Follow and the Reject's intent.
+    cancelledReject: new Map<string, { olderFollow: string; intent: Intent }>(),
     // L's newest follow and block ids.
     lastFollow: null as string | null,
     lastBlock: null as string | null,
+    // The id each intent was first sent under (by its policy seq), and the intent each such id belongs to.
+    activityIds: new Map<number, string>(),
+    intentOfId: new Map<string, number>(),
     trace: [] as string[],
     stats: {} as Stats,
   };
@@ -288,6 +293,14 @@ async function deliverToKopje(w: World, activity: Inbound, label: string): Promi
   ) {
     w.olderFollowAfter.add(rl.uri);
   }
+  // #1415: an older Follow h cancelling the Reject of a later generation g that L had removed.
+  if (activity.type === "Follow") {
+    for (const intent of predicted.caught ?? []) {
+      if (intent.type === "Reject" && intent.ref !== null && order.indexOf(activity.id) < order.indexOf(intent.ref)) {
+        w.cancelledReject.set(intent.ref, { olderFollow: activity.id, intent });
+      }
+    }
+  }
   w.trace.push(`  -> ${result.reason}`);
   if (activity.type === "Follow" && !w.receivedAt.has(activity.id)) {
     w.receivedAt.set(activity.id, w.step);
@@ -295,7 +308,7 @@ async function deliverToKopje(w: World, activity: Inbound, label: string): Promi
   if (predicted.reason === "follow-request-updated" || predicted.reason === "follow-reaccepted") {
     tally(w.stats, "renewal");
   }
-  if ((predicted.caught ?? 0) > 0) {
+  if ((predicted.caught?.length ?? 0) > 0) {
     tally(w.stats, "stale answer cancelled");
   }
   if (activity.type === "Block" && predicted.reason === "blocked") {
@@ -485,11 +498,11 @@ async function claim(w: World): Promise<Attempt | null> {
   return attempt;
 }
 
-// The parts of a body the peer acts on: its type, its actor, the id of a Follow or Block (an answer's or an Undo's own
-// id only as L's), and its object with the fields an embedded Follow or Block carries.
-function bodyShape(w: World, body: Body) {
-  const own =
-    body.type === "Follow" || body.type === "Block" ? body.id : body.id.startsWith(`${w.lUri}#`) ? "L's" : body.id;
+// The parts of a body the peer acts on: its type, its actor, the id of a Follow or Block, and its object with the
+// fields an embedded Follow or Block carries. An answer's, an Undo's or an Update's own id is Kopje's to choose, so
+// only its identity is checked (activityIdentity).
+function bodyShape(w: World, body: Body, intent: Intent | null) {
+  const own = body.type === "Follow" || body.type === "Block" ? body.id : activityIdentity(w, body.id, intent);
   const object =
     typeof body.object === "string"
       ? body.object
@@ -499,20 +512,43 @@ function bodyShape(w: World, body: Body) {
   return { type: body.type, id: own, actor: body.actor, object };
 }
 
+// ID-7: an activity Kopje sends keeps its id across its attempts (a retry, a POST again after its lease), no two
+// activities share one, and each is on L's origin. The identity is the policy's intent while the id holds to that.
+function activityIdentity(w: World, id: string, intent: Intent | null): string {
+  if (intent === null) {
+    return id;
+  }
+  const known = w.activityIds.get(intent.seq);
+  const other = w.intentOfId.get(id);
+  if (new URL(id).origin !== new URL(w.lUri).origin) {
+    return `not on L's origin: ${id}`;
+  }
+  if (known !== undefined && known !== id) {
+    return `changed from ${known} to ${id}`;
+  }
+  if (other !== undefined && other !== intent.seq) {
+    return `${id}, already the id of intent ${other}`;
+  }
+  w.activityIds.set(intent.seq, id);
+  w.intentOfId.set(id, intent.seq);
+  return `intent ${intent.seq}`;
+}
+
 // The body the policy's intent stands for, in bodyShape's terms.
 function predictedShape(w: World, intent: Intent) {
   const base = { type: intent.type, actor: w.lUri };
+  const own = `intent ${intent.seq}`;
   switch (intent.type) {
     case "Follow":
     case "Block":
       return { ...base, id: intent.ref, object: w.rUri };
     case "Undo":
-      return { ...base, id: "L's", object: { id: intent.ref, type: intent.undoes, actor: w.lUri, object: w.rUri } };
+      return { ...base, id: own, object: { id: intent.ref, type: intent.undoes, actor: w.lUri, object: w.rUri } };
     case "Accept":
     case "Reject":
-      return { ...base, id: "L's", object: { id: intent.ref, type: "Follow", actor: w.rUri, object: w.lUri } };
+      return { ...base, id: own, object: { id: intent.ref, type: "Follow", actor: w.rUri, object: w.lUri } };
     case "Update":
-      return { ...base, id: "L's", object: { id: w.lUri, type: "Person" } };
+      return { ...base, id: own, object: { id: w.lUri, type: "Person" } };
   }
 }
 
@@ -543,7 +579,7 @@ async function confirm(w: World, attempt: Attempt): Promise<void> {
     attempt.phase = "confirmed";
     attempt.confirmedAt = w.step;
     await check(w, {
-      actual: { status: "send", body: bodyShape(w, body) },
+      actual: { status: "send", body: bodyShape(w, body, predicted.status === "send" ? predicted.intent : null) },
       predicted:
         predicted.status === "send"
           ? { status: "send", body: predictedShape(w, predicted.intent) }
@@ -746,7 +782,7 @@ async function settle(w: World): Promise<void> {
 // Quiescence: Kopje against the peer
 // ---------------------------------------------------------------------------------------------------------------
 
-type Exception = "net2-answer" | "block-race" | "reordered-follows" | null;
+type Exception = "net2-answer" | "block-race" | "reordered-follows" | "refused-refollow" | "known-defect-1415" | null;
 
 const peerState = (edge: { state: string; uri: string } | null) =>
   edge === null ? null : { state: edge.state === "pending" ? "requested" : edge.state, uri: edge.uri };
@@ -787,7 +823,30 @@ function rlException(w: World, kopje: { state: string; uri: string } | null): Ex
   if (w.olderFollowAfter.has(g) && mine?.uri !== g && theirs?.uri === g) {
     return "reordered-follows";
   }
-  return null;
+  // The accepted risk of a refused refollow: R's server dropped its accepted follow g for a refollow (RefollowWorker,
+  // which sends no Undo) and FollowService refused the replacement, since R blocks L (follow_service.rb:56-58). Kopje
+  // holds g accepted; R's server holds nothing.
+  if (peer.events.refusedRefollow.has(g) && mine?.uri === g && mine.state === "accepted" && theirs === null) {
+    return "refused-refollow";
+  }
+  return knownDefect1415(w, g, mine, theirs);
+}
+
+// Known defect #1415; the fix removes this function. An older Follow h of R's, reaching Kopje after L removed R's
+// later follow g, cancels g's Reject still waiting (NET-2's pair cancellation), where a Mastodon receiver delivers it
+// (remove_from_followers_service.rb:16-18, an independent DeliveryWorker job) and R's server then ends g
+// (reject.rb:7). Allowed only while that Reject never reached R's server: Kopje holds nothing; R's server holds g.
+function knownDefect1415(
+  w: World,
+  g: string,
+  mine: { state: string; uri: string } | null,
+  theirs: { state: string; uri: string } | null,
+): Exception {
+  const cancelled = w.cancelledReject.get(g);
+  if (cancelled === undefined || mine !== null || theirs?.uri !== g || theirs.state !== "accepted") {
+    return null;
+  }
+  return w.attempts.some((a) => a.intent === cancelled.intent && a.reached) ? null : "known-defect-1415";
 }
 
 // The differences allowed on L's follow of R, named by L's newest follow id u.
@@ -1012,6 +1071,27 @@ describe("follow lifecycle transitions", () => {
       { k: "drainPeer" },
     ]);
     expect(w.stats["stale answer cancelled"]).toBe(1);
+  });
+
+  // ID-7: a retried Undo keeps its id (checked at each confirmation, as are the other activities' distinct ids).
+  it("a retried Undo keeps its id", async () => {
+    const w = await run([
+      { k: "follow" },
+      { k: "send" },
+      { k: "unfollow" },
+      { k: "claim" },
+      { k: "confirm", ...at(0) },
+      { k: "transmit", reached: false, ...at(0) },
+      { k: "complete", ok: false, ...at(0) },
+      { k: "peerFollow" },
+      { k: "drainPeer" },
+    ]);
+    const confirmed = (type: string) =>
+      w.attempts.filter((a) => a.intent.type === type && a.body !== null).map((a) => (JSON.parse(a.body!) as Body).id);
+    expect(confirmed("Undo")).toHaveLength(2);
+    expect(new Set(confirmed("Undo")).size).toBe(1);
+    expect(confirmed("Accept")).toHaveLength(1);
+    expect(w.intentOfId.size).toBe(2);
   });
 
   it("a stale attempt is refused at its confirmation and its completion", async () => {
@@ -1313,5 +1393,52 @@ describe("follow lifecycle: the blocker's own follow", () => {
     const state = await project(w);
     expect(state.rl?.state).toBe("accepted");
     expect(state.notifications).toEqual([]);
+  });
+
+  // The accepted risk of a refused refollow: L authorized R's kept request, so R follows L while blocking it; then R's
+  // server refollows (RefollowWorker drops the follow without an Undo, refollow_worker.rb:17-19) and FollowService
+  // refuses the replacement because R blocks L (follow_service.rb:56-58), which the worker rescues: nothing is sent,
+  // and Kopje keeps the follow.
+  it("a refollow R's server refuses because R blocks L", async () => {
+    const w = await run([
+      { k: "lock", locked: true },
+      { k: "peerFollow" },
+      { k: "peerBlock" },
+      { k: "drainPeer" },
+      { k: "authorize" },
+      { k: "send" },
+      { k: "drainPeer" },
+      { k: "peerRefollow" },
+    ]);
+    expect(w.stats["exception refused-refollow"]).toBe(1);
+    expect(w.peer.sent.filter((m) => m.activity.type === "Follow")).toHaveLength(1);
+    expect((await project(w)).rl).toEqual({ state: "accepted", uri: w.peer.lastRGeneration });
+    expect(w.peer.rl).toBeNull();
+  });
+});
+
+describe("follow lifecycle known defects", () => {
+  // #1415, a known defect: R follows (h), undoes it and follows again (g); Kopje gets g first and accepts it, then L
+  // removes R from its followers, queueing a Reject of g. The older h arrives next and cancels that Reject (NET-2's
+  // cancellation of the pair's answers), and h's Undo ends h, so Kopje holds nothing while R's server, which never
+  // gets the Reject, holds g. A Mastodon receiver delivers the Reject (remove_from_followers_service.rb:16-18) and R's
+  // server ends g (reject.rb:7). This assertion flips when the fix lands.
+  it("an older Follow cancels the Reject of a removed later follow (known defect #1415)", async () => {
+    const w = await run([
+      { k: "peerFollow" },
+      { k: "peerUnfollow" },
+      { k: "peerFollow" },
+      { k: "deliver", ...at(2) },
+      { k: "send" },
+      { k: "process", ...at(0) },
+      { k: "removeFollower" },
+      { k: "deliver", ...at(0) },
+      { k: "deliver", ...at(0) },
+    ]);
+    const [h, g] = w.peer.generations;
+    expect(w.cancelledReject.get(g!)?.olderFollow).toBe(h);
+    expect(w.stats["exception known-defect-1415"]).toBe(1);
+    expect((await project(w)).rl).toBeNull();
+    expect(w.peer.rl).toEqual({ state: "accepted", uri: g });
   });
 });
