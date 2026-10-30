@@ -673,9 +673,18 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
   first login with the bootstrap", "a failure at the first login's insert, after the registration is counted, rolls it
   back"); `test-node/activity-writers.test.ts` is the inventory of the writers of local statuses and accounts, so a new
   one needs a witness of its own.
-- **VIS-13: a block cuts both ways, as Mastodon's does.** A block (local, or a remote `Block` that passes ID-6)
-  ends the follows between the two accounts in both directions and in either state; while it lasts neither may
-  follow the other (a remote `Follow` is answered with a `Reject`), the blocked account sees nothing of the blocker
+- **VIS-13: a block cuts both ways, as Mastodon's does.** A local block ends the follows between the two accounts in
+  both directions and in either state. A remote `Block` (one that passes ID-6) does what Mastodon's
+  `ActivityPub::Activity::Block` does (`block.rb:14-16`): it ends the blocker's accepted follow with a `Reject` that
+  withdraws it (`UnfollowService`, `unfollow_service.rb:35-36`; an `Accept` of it not yet sent is superseded and never
+  sent, NET-2) and the local account's follow and request of the blocker, and keeps the blocker's pending request; if
+  the ended follow's id cannot be recorded as retracted (ID-7), the `Block` changes nothing. While a block lasts the
+  blocked account may not start a follow of the blocker (a remote `Follow` from it is answered with a `Reject`). The
+  blocker's kept request may still be authorized or rejected by the local owner, and unlocking authorizes it, as
+  Mastodon's `AuthorizeFollowService` and `FollowRequest#authorize!` check no block; a `Follow` from a remote blocker
+  is taken as any other, since it may arrive after its `Block` and Mastodon's `follow.rb:18` refuses only a follower
+  the target blocks. Once such a follow is accepted, the local account's statuses reach the blocker as any follower's,
+  and the blocker's still do not reach the local account. The blocked account sees nothing of the blocker
   (VIS-1) and cannot favourite or boost the blocker's statuses (an inbound `Like` or `Announce` of one is ignored,
   where Mastodon stores it and only filters its notification), and nothing from the blocked account reaches the
   blocker: no list shows it (VIS-5), and no notification of it is written or shown, including a mention or reply
@@ -693,9 +702,10 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
   in `src/domain/inbox.ts`, `resolveMentions` and `editStatus` in `src/domain/statuses.ts`, `audienceTargets` in
   `src/domain/deliveries.ts`, `shownSql` and `homeFilterSql` in `src/domain/audience.ts`, `homeTimeline` in
   `src/domain/timelines.ts`, `mayInteract` in `src/domain/inbox.ts`; `test/blocks.test.ts` ("blocks a local account",
-  "sends a remote account Undo Follow, Reject and Block", "applies an inbound Block and its Undo", "blocked
-  recipients", "mentions of blocked and muted accounts", "names and reaches the author in the Undo of a boost"),
-  `test/inbox.test.ts` ("records a Block, ends both follows"), `test/policy-writes.test.ts` (the outbound and
+  "sends a remote account Undo Follow, Reject and Block", "applies an inbound Block and its Undo", "an inbound Block
+  by a follower", "blocked recipients", "mentions of blocked and muted accounts", "names and reaches the author in the Undo of a boost"),
+  `test/inbox.test.ts` ("records a Block, ends both follows"), `test/follow-answers.test.ts` ("an inbound Block by an
+  accepted follower sends one withdrawing Reject and no Accept of it"), `test/policy-writes.test.ts` (the outbound and
   notification rules on generated worlds), `test/inbox-statuses.test.ts` ("ignores a Like by an actor the author
   blocks", "ignores a boost by an actor the author blocks").
 - **VIS-14: a mute hides only for the muter, and only while it lasts.** A mute is never federated and changes nothing

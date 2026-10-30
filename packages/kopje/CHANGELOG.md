@@ -8,6 +8,15 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
 
 ## [Unreleased]
 
+### Fixed
+
+- An inbound `Block` of a local account by its remote follower now treats the blocker's own follow as Mastodon does:
+  an accepted follow ends with a `Reject`, which withdraws an `Accept` of it not yet sent, so the blocker's server no
+  longer ends up following an account it blocks; a pending request stays, and the account's owner may still authorize
+  or reject it (unlocking authorizes it too). Before, both were removed without a word, so the two servers disagreed
+  afterwards. A `Follow` from an account that blocks the local one, which may arrive after its `Block`, is now taken
+  as any other instead of being ignored. No migration, no `wrangler.jsonc` change.
+
 ## [0.2.0] - 2026-10-29
 
 The second release, published under the npm dist-tag `latest`. Two changes refuse what 0.1.0 accepted:
