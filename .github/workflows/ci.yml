@@ -67,7 +67,7 @@ jobs:
         with:
           persist-credentials: false
       # node and pnpm at the versions mise.lock pins; the hooks' tools are not needed here.
-      - uses: jdx/mise-action@82a612c5ab8bcda7cc5db6b7e81a8e7584c3dc6e # v5.2.3
+      - uses: jdx/mise-action@6be3c7ed4c21d4f76b208d351d95aac273ebb76d # v5.2.4
         with:
           install_args: node pnpm
 
@@ -105,7 +105,7 @@ jobs:
         with:
           persist-credentials: false
       # node and pnpm at the versions mise.lock pins; the hooks' tools are not needed here.
-      - uses: jdx/mise-action@82a612c5ab8bcda7cc5db6b7e81a8e7584c3dc6e # v5.2.3
+      - uses: jdx/mise-action@6be3c7ed4c21d4f76b208d351d95aac273ebb76d # v5.2.4
         with:
           install_args: node pnpm
 
@@ -156,7 +156,7 @@ jobs:
           pattern: coverage-*
 
       # octocov at the version and checksum mise.lock pins.
-      - uses: jdx/mise-action@82a612c5ab8bcda7cc5db6b7e81a8e7584c3dc6e # v5.2.3
+      - uses: jdx/mise-action@6be3c7ed4c21d4f76b208d351d95aac273ebb76d # v5.2.4
         with:
           install_args: github:k1LoW/octocov
 
@@ -185,7 +185,7 @@ jobs:
           # release (packages/kopje/scripts/build-assets.mjs), and the migration check reads every release tag.
           fetch-depth: 0
       # node and pnpm at the versions mise.lock pins; the hooks' tools are not needed here.
-      - uses: jdx/mise-action@82a612c5ab8bcda7cc5db6b7e81a8e7584c3dc6e # v5.2.3
+      - uses: jdx/mise-action@6be3c7ed4c21d4f76b208d351d95aac273ebb76d # v5.2.4
         with:
           install_args: node pnpm
 
@@ -243,7 +243,7 @@ jobs:
         with:
           persist-credentials: false
       # node and pnpm at the versions mise.lock pins; the hooks' tools are not needed here.
-      - uses: jdx/mise-action@82a612c5ab8bcda7cc5db6b7e81a8e7584c3dc6e # v5.2.3
+      - uses: jdx/mise-action@6be3c7ed4c21d4f76b208d351d95aac273ebb76d # v5.2.4
         with:
           install_args: node pnpm
 
