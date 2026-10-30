@@ -33,6 +33,8 @@ export type Intent = {
   // What identifies the activity: a Follow's or a Block's own id, else the id of the activity it undoes or answers;
   // null for L's profile Update, which only holds its place in the lane.
   ref: string | null;
+  // What an Undo undoes (the type its embedded object names); null for every other activity.
+  undoes: "Follow" | "Block" | null;
   // What the activity is about: the id a retraction of it names.
   subject: string | null;
   // An Accept or Reject of R's Follow (NET-2's follow answers).
@@ -117,7 +119,11 @@ export class Policy {
 
   private record(
     now: number,
-    input: Pick<Intent, "type" | "ref" | "subject"> & { answer?: boolean; retracts?: boolean },
+    input: Pick<Intent, "type" | "ref" | "subject"> & {
+      undoes?: Intent["undoes"];
+      answer?: boolean;
+      retracts?: boolean;
+    },
   ): void {
     const answer = input.answer === true;
     if (answer) {
@@ -143,7 +149,16 @@ export class Policy {
         this.remove(earlier, now);
       }
     }
-    this.lane.push({ ...input, seq: ++this.seq, answer, retracts, superseded: false, head: null, attempts: 0 });
+    this.lane.push({
+      ...input,
+      undoes: input.undoes ?? null,
+      seq: ++this.seq,
+      answer,
+      retracts,
+      superseded: false,
+      head: null,
+      attempts: 0,
+    });
     this.promote(now);
   }
 
@@ -172,8 +187,8 @@ export class Policy {
     return caught;
   }
 
-  private undoOf(id: string, now: number): void {
-    this.record(now, { type: "Undo", ref: id, subject: id, retracts: true });
+  private undoOf(id: string, undoes: "Follow" | "Block", now: number): void {
+    this.record(now, { type: "Undo", ref: id, subject: id, undoes, retracts: true });
   }
 
   // How the local account's follow notifications go with the follow (Mastodon destroys them with it).
@@ -198,7 +213,7 @@ export class Policy {
     if (this.lr === null) {
       return;
     }
-    this.undoOf(this.lr.uri, now);
+    this.undoOf(this.lr.uri, "Follow", now);
     this.lr = null;
   }
 
@@ -418,7 +433,7 @@ export class Policy {
   // VIS-13: "an unblock sends the Block's Undo, which supersedes a Block still waiting".
   localUnblock(now: number): number {
     if (this.blockLR !== null) {
-      this.undoOf(this.blockLR, now);
+      this.undoOf(this.blockLR, "Block", now);
       this.blockLR = null;
     }
     return 200;
@@ -546,6 +561,7 @@ export type PeerMessage = { seq: number; activity: Inbound };
 export type Body = {
   type: string;
   id: string;
+  actor?: string;
   object: string | { id?: string; type?: string; actor?: string; object?: string };
 };
 
@@ -557,21 +573,26 @@ export type PeerEvents = {
   blockKeptRequest: Set<string>;
   // accept.rb:24 and reject.rb:25: an answer of another generation applied to R's request g by the account pair.
   pairAnswer: Set<string>;
-  // undo.rb:89-101: a typed Undo of L's follow that named generation u removed generation v != u (by the pair).
-  pairUndo: Set<string>;
   // follow.rb:9: a Follow of L's that a cached Undo suppressed.
   undoBeforeFollow: number;
-  // A Follow of L's processed after its Undo was matched: the follow is recreated.
+  // A Follow of L's processed again after an Undo removed that very follow: the follow is recreated.
   replayAfterUndo: Set<string>;
+  // The id named by the typed Undo that ended L's follow of R (undo.rb:89-101) and L's block of R (undo.rb:116-126)
+  // at R's server, while that end stands. Mastodon matches both by the account pair, so the id may be an older one
+  // than the relationship it ended.
+  undoEnded: { follow: string | null; block: string | null };
+  // The ids named by a typed Undo that ended a different follow or block of L's (by the pair): no cached Undo then
+  // suppresses the named Follow or Block (activity.rb:92-98), which applies when it is processed later.
+  undoNamedOther: { follow: Set<string>; block: Set<string> };
 };
 
 export class Peer {
   // R's follow of L, and L's follow of R as R's server holds them (Follow or FollowRequest).
   rl: PeerEdge = null;
-  lr: PeerEdge = null;
   rBlocks: string | null = null;
-  lBlocks: string | null = null;
   locked = false;
+  private lrEdge: PeerEdge = null;
+  private lBlock: string | null = null;
   // AuthorizeFollowWorker jobs, each for L's request (update_account_service.rb:22-28).
   jobs = 0;
   // delete_upon_arrival keys (activity.rb:92-98): the undone object's id and its expiry.
@@ -584,14 +605,16 @@ export class Peer {
     blockDroppedRequest: new Set(),
     blockKeptRequest: new Set(),
     pairAnswer: new Set(),
-    pairUndo: new Set(),
     undoBeforeFollow: 0,
     replayAfterUndo: new Set(),
+    undoEnded: { follow: null, block: null },
+    undoNamedOther: { follow: new Set(), block: new Set() },
   };
-  // R's newest Follow id, and L's follow ids whose Undo the peer matched.
+  // R's newest Follow id.
   lastRGeneration: string | null = null;
   // R's Follow ids, oldest first.
   readonly generations: string[] = [];
+  // L's follow ids an Undo removed at R's server (the follow it removed, whatever id the Undo named).
   private readonly undoneLocal = new Set<string>();
   private n = 0;
   private seq = 0;
@@ -601,6 +624,26 @@ export class Peer {
     readonly rUri: string,
     readonly lUri: string,
   ) {}
+
+  // L's follow of R and L's block of R: any change of either but an Undo's (processUndoFollow, processUndoBlock) ends
+  // what undoEnded records for it.
+  get lr(): PeerEdge {
+    return this.lrEdge;
+  }
+
+  set lr(edge: PeerEdge) {
+    this.lrEdge = edge;
+    this.events.undoEnded.follow = null;
+  }
+
+  get lBlocks(): string | null {
+    return this.lBlock;
+  }
+
+  set lBlocks(uri: string | null) {
+    this.lBlock = uri;
+    this.events.undoEnded.block = null;
+  }
 
   private id(kind: string): string {
     return `${this.origin}/peer/${kind}/${++this.n}`;
@@ -675,11 +718,10 @@ export class Peer {
 
   // BlockService (block_service.rb:6-20): R's accepted follow is undone (UnfollowService), L's follow of R ends with a
   // Reject (UnfollowService sends one for a remote follower, unfollow_service.rb:35-36) and L's request is rejected
-  // (RejectFollowService); R's own request stays. Then the Block.
+  // (RejectFollowService); R's own request stays. Then the Block. Nothing guards a block R already holds (the API's
+  // block calls BlockService every time, accounts_controller.rb:54-57): the cleanup runs again, and the Block is sent
+  // again under its id (block! finds the existing block, interactions.rb:75-78, whose uri BlockSerializer names).
   block(): boolean {
-    if (this.rBlocks !== null) {
-      return false;
-    }
     if (this.rl?.state === "accepted") {
       this.unfollow();
     } else if (this.rl !== null) {
@@ -690,9 +732,8 @@ export class Peer {
       this.lr = null;
       this.sendReject(uri);
     }
-    const uri = this.id("blocks");
-    this.rBlocks = uri;
-    this.send({ type: "Block", id: uri, object: this.lUri });
+    this.rBlocks ??= this.id("blocks");
+    this.send({ type: "Block", id: this.rBlocks, object: this.lUri });
     return true;
   }
 
@@ -825,26 +866,31 @@ export class Peer {
     }
   }
 
-  // undo.rb:89-101: matched by the pair, not by the Follow's id.
+  // undo.rb:89-101: matched by the pair, not by the Follow's id, so it removes whichever follow or request L holds.
   private processUndoFollow(uri: string, now: number): void {
     if (this.lr === null) {
       this.cache.set(uri, now + UNDO_CACHE_MS);
       return;
     }
     if (this.lr.uri !== uri) {
-      this.events.pairUndo.add(this.lr.uri);
+      this.events.undoNamedOther.follow.add(uri);
     }
-    this.undoneLocal.add(uri);
+    this.undoneLocal.add(this.lr.uri);
     this.lr = null;
+    this.events.undoEnded.follow = uri;
   }
 
-  // undo.rb:116-126.
+  // undo.rb:116-126: matched by the pair (blocking?), not by the Block's id.
   private processUndoBlock(uri: string, now: number): void {
     if (this.lBlocks === null) {
       this.cache.set(uri, now + UNDO_CACHE_MS);
       return;
     }
+    if (this.lBlocks !== uri) {
+      this.events.undoNamedOther.block.add(uri);
+    }
     this.lBlocks = null;
+    this.events.undoEnded.block = uri;
   }
 
   // block.rb:4-22: an existing block takes the new id; else L's follow of R ends with a Reject, R's follow of L with

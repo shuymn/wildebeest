@@ -101,22 +101,34 @@ async function setup() {
   const store = h.store;
   const l = h.users.alice;
   const r = await remoteAccount(store, "r");
-  const [lUri, rUri] = await Promise.all(
+  const [lAccount, rAccount] = await Promise.all(
     [l.id, r].map(
-      async (id) => (await sql<{ uri: string }>(store, "SELECT uri FROM accounts WHERE id = ?", id))[0]!.uri,
+      async (id) =>
+        (
+          await sql<{ uri: string; inbox_url: string; shared_inbox_url: string | null }>(
+            store,
+            "SELECT uri, inbox_url, shared_inbox_url FROM accounts WHERE id = ?",
+            id,
+          )
+        )[0]!,
     ),
   );
+  const lUri = lAccount!.uri;
+  const rUri = rAccount!.uri;
   const world = {
     h,
     store,
     l,
     r,
-    lUri: lUri!,
-    rUri: rUri!,
+    lUri,
+    rUri,
+    // docs/visibility.md (audienceTargets): an activity without `to` goes to its recipient's shared inbox, else its
+    // personal inbox.
+    rInbox: rAccount!.shared_inbox_url ?? rAccount!.inbox_url,
     clock: NOW,
     step: 0,
-    policy: new Policy(lUri!, rUri!),
-    peer: new Peer(ORIGIN, rUri!, lUri!),
+    policy: new Policy(lUri, rUri),
+    peer: new Peer(ORIGIN, rUri, lUri),
     attempts: [] as Attempt[],
     // R's messages Kopje has received, and the step each of R's Follows first reached Kopje.
     delivered: [] as Inbound[],
@@ -127,6 +139,7 @@ async function setup() {
     olderFollowAfter: new Set<string>(),
     // L's newest follow and block ids.
     lastFollow: null as string | null,
+    lastBlock: null as string | null,
     trace: [] as string[],
     stats: {} as Stats,
   };
@@ -265,14 +278,21 @@ async function deliverToKopje(w: World, activity: Inbound, label: string): Promi
   const before = `R->L ${edgeName(w.policy.rl)}, L->R ${edgeName(w.policy.lr)}`;
   const rl = w.policy.rl;
   const order = w.peer.generations;
-  if (activity.type === "Follow" && rl !== null && order.indexOf(activity.id) < order.indexOf(rl.uri)) {
-    w.olderFollowAfter.add(rl.uri);
-  }
   if (activity.type === "Block" && rl?.state === "accepted" && w.peer.events.blockKeptRequest.has(rl.uri)) {
     w.blockEndedAccepted.add(rl.uri);
   }
   const result = await storeReceive(w.store, w.rUri, activity, w.clock);
   const predicted = w.policy.receive(activity, w.clock);
+  // Only an older Follow that took over as the next generation (a renewal applied) arms the exception.
+  if (
+    activity.type === "Follow" &&
+    predicted.applied &&
+    rl !== null &&
+    w.policy.rl?.uri === activity.id &&
+    order.indexOf(activity.id) < order.indexOf(rl.uri)
+  ) {
+    w.olderFollowAfter.add(rl.uri);
+  }
   w.trace.push(`  -> ${result.reason}`);
   if (activity.type === "Follow" && !w.receivedAt.has(activity.id)) {
     w.receivedAt.set(activity.id, w.step);
@@ -348,6 +368,7 @@ async function local(w: World, a: Action): Promise<void> {
       status = await api(w, `/api/v1/accounts/${r}/block`);
       const uri = await currentUri(w, "blocks");
       predicted = p.localBlock(now, must(uri));
+      w.lastBlock = p.blockLR ?? w.lastBlock;
       break;
     }
     case "unblock":
@@ -434,15 +455,24 @@ async function claim(w: World): Promise<Attempt | null> {
   if (predicted.gaveUp !== null) {
     throw new Error(`a delivery gave up, failing the eventual-delivery assumption\n${w.trace.join("\n")}`);
   }
-  const claimed = await Promise.all(result.deliveries.map((d) => rowIdentity(w, d.id)));
+  const claimed = await Promise.all(
+    result.deliveries.map(async (d) => ({
+      ...(await rowIdentity(w, d.id)),
+      inbox: d.inbox,
+      signer: d.signer,
+      actor: result.signers[d.signer]?.actorUri,
+    })),
+  );
   const leased = predicted.leased;
   w.trace.push(`  -> ${JSON.stringify(claimed)}${predicted.dropped === null ? "" : " (dropped a stale answer)"}`);
   if (predicted.dropped !== null) {
     tally(w.stats, "stale answer dropped");
   }
+  // NET-2: everything L sends R goes to R's inbox, signed as L.
   await check(w, {
     actual: claimed,
-    predicted: leased === null ? [] : [{ type: leased.type, ref: leased.ref }],
+    predicted:
+      leased === null ? [] : [{ type: leased.type, ref: leased.ref, inbox: w.rInbox, signer: w.l.id, actor: w.lUri }],
   });
   if (leased === null) {
     return null;
@@ -458,6 +488,37 @@ async function claim(w: World): Promise<Attempt | null> {
   };
   w.attempts.push(attempt);
   return attempt;
+}
+
+// The parts of a body the peer acts on: its type, its actor, the id of a Follow or Block (an answer's or an Undo's own
+// id only as L's), and its object with the fields an embedded Follow or Block carries.
+function bodyShape(w: World, body: Body) {
+  const own =
+    body.type === "Follow" || body.type === "Block" ? body.id : body.id.startsWith(`${w.lUri}#`) ? "L's" : body.id;
+  const object =
+    typeof body.object === "string"
+      ? body.object
+      : body.type === "Update"
+        ? { id: body.object.id, type: body.object.type }
+        : { id: body.object.id, type: body.object.type, actor: body.object.actor, object: body.object.object };
+  return { type: body.type, id: own, actor: body.actor, object };
+}
+
+// The body the policy's intent stands for, in bodyShape's terms.
+function predictedShape(w: World, intent: Intent) {
+  const base = { type: intent.type, actor: w.lUri };
+  switch (intent.type) {
+    case "Follow":
+    case "Block":
+      return { ...base, id: intent.ref, object: w.rUri };
+    case "Undo":
+      return { ...base, id: "L's", object: { id: intent.ref, type: intent.undoes, actor: w.lUri, object: w.rUri } };
+    case "Accept":
+    case "Reject":
+      return { ...base, id: "L's", object: { id: intent.ref, type: "Follow", actor: w.rUri, object: w.lUri } };
+    case "Update":
+      return { ...base, id: "L's", object: { id: w.lUri, type: "Person" } };
+  }
 }
 
 const bodyRef = (body: Body) =>
@@ -487,10 +548,10 @@ async function confirm(w: World, attempt: Attempt): Promise<void> {
     attempt.phase = "confirmed";
     attempt.confirmedAt = w.step;
     await check(w, {
-      actual: { status: "send", type: body.type, ref: bodyRef(body) },
+      actual: { status: "send", body: bodyShape(w, body) },
       predicted:
         predicted.status === "send"
-          ? { status: "send", type: predicted.intent.type, ref: predicted.intent.ref }
+          ? { status: "send", body: predictedShape(w, predicted.intent) }
           : { status: predicted.status },
     });
     return;
@@ -771,15 +832,59 @@ function knownDefect1412(
   return null;
 }
 
-// The difference allowed on L's follow of R, named by L's newest follow id u. The accepted risk of at-least-once
-// delivery: a Follow POSTed again after its lease (its completion lost) reached R's server after the Undo that
-// followed it was processed there (each body is its own job), so Mastodon recreates the follow (follow.rb:31-37);
-// Kopje has ended it. Kopje holds nothing; R's server holds u.
-function lrExceptionOf(w: World, kopje: { state: string; uri: string } | null): "at-least-once-follow" | null {
+// The differences allowed on L's follow of R, named by L's newest follow id u.
+function lrExceptionOf(
+  w: World,
+  kopje: { state: string; uri: string } | null,
+): "at-least-once-follow" | "undo-after-newer-follow" | "undo-matched-older-follow" | null {
   const u = w.lastFollow;
-  return u !== null && w.peer.events.replayAfterUndo.has(u) && kopje === null && w.peer.lr?.uri === u
-    ? "at-least-once-follow"
-    : null;
+  if (u === null) {
+    return null;
+  }
+  const peer = w.peer;
+  // The accepted risk of at-least-once delivery: u was POSTed again after its lease (its completion lost), and the
+  // repeat reached R's server after the Undo that removed u there (each body is its own job), so Mastodon recreates
+  // the follow (follow.rb:31-37); Kopje has ended it. Kopje holds nothing; R's server holds u.
+  const reached = w.attempts.filter((a) => a.intent.type === "Follow" && a.intent.ref === u && a.reached).length;
+  if (reached >= 2 && peer.events.replayAfterUndo.has(u) && kopje === null && peer.lr?.uri === u) {
+    return "at-least-once-follow";
+  }
+  // The accepted risk of an older Undo processed after a newer Follow: R's server processed L's Undo of an earlier
+  // follow after u (each body is its own job), and Mastodon's Undo matches by the account pair (undo.rb:89-101), so it
+  // ended u there. Kopje holds u; R's server holds nothing.
+  const endedBy = peer.events.undoEnded.follow;
+  if (kopje?.uri === u && peer.lr === null && endedBy !== null && endedBy !== u) {
+    return "undo-after-newer-follow";
+  }
+  // The same race the other way: u's Undo was processed before u, while an earlier follow stood, and ended that one
+  // by the pair, so nothing suppresses u, which then recreates the follow. Kopje holds nothing; R's server holds u.
+  if (kopje === null && peer.lr?.uri === u && peer.events.undoNamedOther.follow.has(u)) {
+    return "undo-matched-older-follow";
+  }
+  return null;
+}
+
+// The differences allowed on L's block of R, named by L's newest block id b: the same races for blocks, as Mastodon's
+// Undo of a Block matches by the account pair (undo.rb:116-126). An older Undo processed after b ended b at R's
+// server (Kopje holds b; R's server nothing), or b's Undo, processed before b, ended an earlier block, so b then
+// applied there (Kopje holds nothing; R's server holds b).
+function lBlockExceptionOf(
+  w: World,
+  kopje: string | null,
+): "undo-after-newer-block" | "undo-matched-older-block" | null {
+  const b = w.lastBlock;
+  if (b === null) {
+    return null;
+  }
+  const peer = w.peer;
+  const endedBy = peer.events.undoEnded.block;
+  if (kopje === b && peer.lBlocks === null && endedBy !== null && endedBy !== b) {
+    return "undo-after-newer-block";
+  }
+  if (kopje === null && peer.lBlocks === b && peer.events.undoNamedOther.block.has(b)) {
+    return "undo-matched-older-block";
+  }
+  return null;
 }
 
 async function quiescence(w: World): Promise<void> {
@@ -788,7 +893,8 @@ async function quiescence(w: World): Promise<void> {
   const context = w.trace.join("\n");
   const exception = rlException(w, state.rl);
   const lrException = lrExceptionOf(w, state.lr);
-  for (const e of [exception, lrException]) {
+  const lBlockException = lBlockExceptionOf(w, state.blockLR);
+  for (const e of [exception, lrException, lBlockException]) {
     if (e !== null) {
       tally(w.stats, `exception ${e}`);
     }
@@ -797,13 +903,13 @@ async function quiescence(w: World): Promise<void> {
     rl: exception === null ? peerState(state.rl) : "excepted",
     lr: lrException === null ? peerState(state.lr) : "excepted",
     rBlocks: state.blockRL,
-    lBlocks: state.blockLR,
+    lBlocks: lBlockException === null ? state.blockLR : "excepted",
   };
   const theirs = {
     rl: exception === null ? peer.rl : "excepted",
     lr: lrException === null ? peer.lr : "excepted",
     rBlocks: peer.rBlocks,
-    lBlocks: peer.lBlocks,
+    lBlocks: lBlockException === null ? peer.lBlocks : "excepted",
   };
   expect(kopje, context).toEqual(theirs);
 }
@@ -1071,6 +1177,27 @@ describe("follow lifecycle transitions", () => {
     expect(w.peer.lr?.state).toBe("accepted");
     expect((await project(w)).lr).toBeNull();
   });
+
+  // Mastodon's BlockService has no guard for a block R already holds: blocking again runs its cleanup, which now
+  // undoes R's follow that Kopje's Accept completed after the first Block, and sends the Block again under its id.
+  it("R's server blocks again: its cleanup runs again and the Block is resent under its id", async () => {
+    const w = await run([
+      { k: "peerFollow" },
+      { k: "peerBlock" },
+      { k: "deliver", ...at(0) },
+      { k: "deliver", ...at(0) },
+      { k: "send" },
+      { k: "drainPeer" },
+      { k: "peerBlock" },
+    ]);
+    const blocks = w.peer.sent.filter((m) => m.activity.type === "Block").map((m) => m.activity.id);
+    expect(blocks).toHaveLength(2);
+    expect(new Set(blocks).size).toBe(1);
+    expect(w.peer.sent.filter((m) => m.activity.type === "Undo")).toHaveLength(1);
+    expect(w.trace).toContain("  -> duplicate");
+    expect(w.peer.rl).toBeNull();
+    expect((await project(w)).blockRL).toBe(blocks[0]);
+  });
 });
 
 describe("follow lifecycle accepted races", () => {
@@ -1120,6 +1247,76 @@ describe("follow lifecycle accepted races", () => {
     expect(w.stats["exception reordered-follows"]).toBe(1);
     expect((await project(w)).rl).toBeNull();
     expect(w.peer.rl?.state).toBe("accepted");
+  });
+
+  // The older Follow arrives after its own Undo, which recorded it as retracted (ID-7): it is ignored, takes nothing
+  // over, and so allows no difference.
+  it("R's older Follow ignored after its Undo allows no difference", async () => {
+    const w = await run([
+      { k: "peerFollow" },
+      { k: "peerUnfollow" },
+      { k: "peerFollow" },
+      { k: "deliver", ...at(2) },
+      { k: "deliver", ...at(1) },
+      { k: "deliver", ...at(0) },
+    ]);
+    expect(w.trace).toContain("  -> retracted");
+    expect(w.olderFollowAfter.size).toBe(0);
+    expect(w.stats["exception reordered-follows"]).toBeUndefined();
+  });
+
+  // L's lane delivers in order, but R's server processes each body as its own job, and Mastodon's typed Undo of a
+  // Follow or a Block matches by the account pair (undo.rb:89-101, 116-126), not by the id it names.
+  const cycle = (on: "follow" | "block", off: "unfollow" | "unblock"): Action[] => [
+    { k: on },
+    { k: "send" },
+    { k: off },
+    { k: "send" },
+    { k: on },
+    { k: "send" },
+  ];
+
+  // The earlier Undo, processed after the newer Follow (which fast-forwarded the follow, follow.rb:23-29), ends it.
+  it("L's earlier Undo processed after its newer Follow at R's server", async () => {
+    const w = await run([...cycle("follow", "unfollow"), ...[0, 1, 0].map((i) => ({ k: "process", i }) as const)]);
+    expect(w.stats["exception undo-after-newer-follow"]).toBe(1);
+    expect((await project(w)).lr).toEqual({ state: "accepted", uri: w.lastFollow });
+    expect(w.peer.lr).toBeNull();
+  });
+
+  // The newer Undo, processed before its Follow while the earlier follow stood, ends that one instead of being
+  // cached (activity.rb:92-98), so the newer Follow then applies; no Follow was POSTed twice.
+  it("L's newer Undo processed before its Follow at R's server", async () => {
+    const w = await run([
+      ...cycle("follow", "unfollow"),
+      { k: "unfollow" },
+      { k: "send" },
+      ...[0, 2, 0, 0].map((i) => ({ k: "process", i }) as const),
+    ]);
+    expect(w.stats["exception undo-matched-older-follow"]).toBe(1);
+    expect(w.stats["exception at-least-once-follow"]).toBeUndefined();
+    expect(w.attempts.filter((a) => a.intent.type === "Follow" && a.reached)).toHaveLength(2);
+    expect((await project(w)).lr).toBeNull();
+    expect(w.peer.lr?.uri).toBe(w.lastFollow);
+  });
+
+  it("L's earlier Undo of a Block processed after its newer Block at R's server", async () => {
+    const w = await run([...cycle("block", "unblock"), ...[0, 1, 0].map((i) => ({ k: "process", i }) as const)]);
+    expect(w.stats["exception undo-after-newer-block"]).toBe(1);
+    expect((await project(w)).blockLR).toBe(w.lastBlock);
+    expect(w.peer.lBlocks).toBeNull();
+  });
+
+  it("L's newer Undo of a Block processed before its Block at R's server", async () => {
+    const w = await run([
+      ...cycle("block", "unblock"),
+      { k: "unblock" },
+      { k: "send" },
+      ...[0, 2, 0, 0].map((i) => ({ k: "process", i }) as const),
+    ]);
+    expect(w.stats["exception undo-matched-older-block"]).toBe(1);
+    expect((await project(w)).blockLR).toBeNull();
+    expect(w.peer.lBlocks).toBe(w.lastBlock);
   });
 });
 
