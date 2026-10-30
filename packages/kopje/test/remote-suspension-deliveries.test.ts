@@ -194,7 +194,7 @@ describe("lane order with the withdrawing Rejects", () => {
 });
 
 describe("a re-formed follow after the severing", () => {
-  it("sends only the new follow's Accept: the first follow's Accept and Reject, never claimed, are cancelled", async () => {
+  it("sends the severing Reject and the new follow's Accept: the first follow's Accept, never claimed, is cancelled", async () => {
     const w = await world();
     const r = await remoteAccount(w.h.store, "r", "remote.example");
     const uri = await uriOf(w.h.store, r);
@@ -205,14 +205,18 @@ describe("a re-formed follow after the severing", () => {
     expect(await unsuspend(w, r)).toMatchObject({ status: 200 });
     // The lane holds the first follow's Accept, queued before the suspension, and the Reject that withdraws it.
     expect((await deliveries(w.h.store)).map((d) => d.type)).toEqual(["Accept", "Reject"]);
-    // r follows alice again: both are stale, and only the new follow's Accept goes.
+    // r follows alice again: the Accept is stale, and the Reject of the severed follow, which r's server may still
+    // hold, goes ahead of the new follow's Accept (NET-2).
     const renewal = "https://remote.example/follows/renewed";
     expect(await receive(w.h.store, uri, { id: renewal, type: "Follow", object: alice })).toMatchObject({
       applied: true,
     });
     await settle(w.h.store);
     const sent = await drainSent(w.h.store);
-    expect(sent.map(({ body }) => [body.type, body.actor, body.object.id])).toEqual([["Accept", alice, renewal]]);
+    expect(sent.map(({ body }) => [body.type, body.actor, body.object.id])).toEqual([
+      ["Reject", alice, expect.any(String)],
+      ["Accept", alice, renewal],
+    ]);
   });
 });
 

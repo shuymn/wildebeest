@@ -16,6 +16,11 @@ Each version says whether it changes the Store's schema (adds migrations) and wh
   or reject it (unlocking authorizes it too). Before, both were removed without a word, so the two servers disagreed
   afterwards. A `Follow` from an account that blocks the local one, which may arrive after its `Block`, is now taken
   as any other instead of being ignored. No migration, no `wrangler.jsonc` change.
+- A remote account's `Follow` of a local account no longer cancels a queued `Reject` that ended or refused an earlier
+  follow Kopje had already ended (a removal from the followers, a block, a refused request): a `Follow` sent before
+  that follow and delivered late made Kopje drop the `Reject`, so the follower's server kept following while Kopje did
+  not. The `Follow` still cancels the earlier `Accept`s of the pair, and the follower's `Undo` of a follow now cancels
+  that follow's own unsent `Accept` or `Reject`. No migration, no `wrangler.jsonc` change.
 
 ## [0.2.0] - 2026-10-29
 
