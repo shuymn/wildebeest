@@ -153,8 +153,8 @@ async function snapshot(store: StoreStub) {
   );
 }
 
-describe("each renewal path sends only its own answer when the stale ones were never claimed", () => {
-  it("block, unblock, re-follow: the old Accept and the withdrawing Reject go, the new Accept is sent", async () => {
+describe("each renewal path sends only its own answer and the Rejects of earlier generations", () => {
+  it("block, unblock, re-follow: the old Accept goes, the withdrawing Reject and the new Accept are sent", async () => {
     const t = await setup();
     await outage(t);
     const first = await followFrom(t);
@@ -170,8 +170,11 @@ describe("each renewal path sends only its own answer when the stale ones were n
     const second = await followFrom(t);
     expect(second.result).toMatchObject({ applied: true, reason: "followed" });
     const sent = await drain(t);
-    expect(answers(sent)).toEqual([["Accept", second.id]]);
-    expect(sent.map(([type]) => type)).toEqual(["Create", "Block", "Undo", "Accept"]);
+    expect(answers(sent)).toEqual([
+      ["Reject", first.id],
+      ["Accept", second.id],
+    ]);
+    expect(sent.map(([type]) => type)).toEqual(["Create", "Reject", "Block", "Undo", "Accept"]);
   });
 
   it.each([
@@ -180,7 +183,7 @@ describe("each renewal path sends only its own answer when the stale ones were n
   ])("remote suspension (%s), unsuspension, re-follow", async (_, completed) => {
     const t = await setup();
     await outage(t);
-    await followFrom(t);
+    const first = await followFrom(t);
     expect(await act(t.w, t.r, { type: "suspend" })).toMatchObject({ status: 200 });
     if (completed) {
       await settle(t.store);
@@ -200,7 +203,8 @@ describe("each renewal path sends only its own answer when the stale ones were n
     );
     const second = await followFrom(t);
     expect(second.result).toMatchObject({ applied: true });
-    expect(answers(await drain(t))).toEqual([["Accept", second.id]]);
+    // The severing Reject of the suspended generation is kept; the unsent Accept of it goes.
+    expect(answers(await drain(t))).toEqual([...(completed ? [["Reject", first.id]] : []), ["Accept", second.id]]);
   });
 
   it("locked, authorized, then renewed: only the renewal’s Accept", async () => {
@@ -214,7 +218,7 @@ describe("each renewal path sends only its own answer when the stale ones were n
     expect(answers(await drain(t))).toEqual([["Accept", second.id]]);
   });
 
-  it("locked, rejected, then asked again: the Reject goes, and the new request waits for the owner", async () => {
+  it("locked, rejected, then asked again: the Reject is sent, and the new request waits for the owner", async () => {
     const t = await setup({ locked: true });
     await outage(t);
     const first = await followFrom(t);
@@ -225,7 +229,7 @@ describe("each renewal path sends only its own answer when the stale ones were n
     ]);
     const second = await followFrom(t);
     expect(second.result).toMatchObject({ reason: "follow-requested" });
-    expect(answers(await drain(t))).toEqual([]);
+    expect(answers(await drain(t))).toEqual([["Reject", first.id]]);
     expect(await sql(t.store, "SELECT state, uri FROM follows WHERE account_id = ?", t.r)).toEqual([
       { state: "pending", uri: second.id },
     ]);
@@ -283,6 +287,172 @@ describe("each renewal path sends only its own answer when the stale ones were n
   });
 });
 
+// #1415: a Follow Kopje receives after it ended or refused the generation g that the follower's server may still hold.
+// Mastodon's FollowService sends no new Follow while the follower follows or has requested, so one arriving then
+// without an Undo of g was sent before g and delivered late (h, whose Undo follows). Mastodon delivers its own Reject
+// of g as an independent job (remove_from_followers_service.rb, follow.rb), so the Reject of g is kept and sent.
+describe("a Follow keeps the Reject of a generation Kopje no longer holds", () => {
+  const blockId = () => `${REMOTE}/blocks/${++sequence}`;
+  // Each way Kopje ends or refuses r's generation g with a Reject that a Follow arriving later does not take over. The
+  // lane is held behind a failed head, so the Reject is queued, never claimed.
+  const ENDINGS: [string, (t: T) => Promise<{ g: string; others: string[] }>][] = [
+    [
+      "a removal from the followers",
+      async (t) => {
+        const g = await accepted(t);
+        await api(t, `/api/v1/accounts/${t.r}/remove_from_followers`);
+        return { g, others: [] };
+      },
+    ],
+    [
+      "a local block, then an unblock",
+      async (t) => {
+        const g = await accepted(t);
+        await api(t, `/api/v1/accounts/${t.r}/block`);
+        await api(t, `/api/v1/accounts/${t.r}/unblock`);
+        return { g, others: ["Block", "Undo"] };
+      },
+    ],
+    [
+      "the owner's refusal of a request, then an unlock",
+      async (t) => {
+        await sql(t.store, "UPDATE accounts SET locked = 1 WHERE id = ?", t.w.alice.id);
+        await outage(t);
+        const { id: g } = await followFrom(t);
+        await api(t, `/api/v1/follow_requests/${t.r}/reject`);
+        await sql(t.store, "UPDATE accounts SET locked = 0 WHERE id = ?", t.w.alice.id);
+        return { g, others: [] };
+      },
+    ],
+    [
+      "an inbound Block by the follower, then its Undo",
+      async (t) => {
+        const g = await accepted(t);
+        const id = blockId();
+        expect(await receive(t.store, t.rUri, { id, type: "Block", object: t.aliceUri })).toMatchObject({
+          reason: "blocked",
+        });
+        expect(
+          await receive(t.store, t.rUri, {
+            type: "Undo",
+            object: { id, type: "Block", actor: t.rUri, object: t.aliceUri },
+          }),
+        ).toMatchObject({ applied: true });
+        return { g, others: [] };
+      },
+    ],
+  ];
+
+  // g followed and its Accept delivered, then the lane held behind a failed head.
+  async function accepted(t: T): Promise<string> {
+    const { id } = await followFrom(t);
+    expect(await claimOnce(t, OK)).toEqual(["Accept"]);
+    await outage(t);
+    return id;
+  }
+
+  it.each(ENDINGS)("%s: the older h's Follow keeps the Reject of g, and both answers are sent", async (_, end) => {
+    const t = await setup();
+    const { g, others } = await end(t);
+    expect((await lane(t)).filter((row) => row.type === "Reject").map((row) => [row.object, row.state])).toEqual([
+      [g, "queued"],
+    ]);
+    const h = await followFrom(t);
+    expect(h.result).toMatchObject({ applied: true, reason: "followed" });
+    const sent = await drain(t);
+    expect(answers(sent)).toEqual([
+      ["Reject", g],
+      ["Accept", h.id],
+    ]);
+    expect(sent.map(([type]) => type)).toEqual(["Create", "Reject", ...others, "Accept"]);
+    // h's Undo, delivered last, leaves no follow on either side.
+    expect(await undoFrom(t, h.id)).toMatchObject({ applied: true, reason: "undone" });
+    expect(await sql(t.store, "SELECT 1 FROM follows WHERE account_id = ?", t.r)).toEqual([]);
+    expect(await drain(t)).toEqual([]);
+  });
+
+  it("h's Undo arriving before any delivery cancels h's Accept and leaves the Reject of g", async () => {
+    const t = await setup();
+    const g = await accepted(t);
+    await api(t, `/api/v1/accounts/${t.r}/remove_from_followers`);
+    const h = await followFrom(t);
+    expect(await undoFrom(t, h.id)).toMatchObject({ applied: true, reason: "undone" });
+    expect(answers(await drain(t))).toEqual([["Reject", g]]);
+    expect(await sql(t.store, "SELECT 1 FROM follows WHERE account_id = ?", t.r)).toEqual([]);
+  });
+
+  // The follower's own Undo of g, which Kopje had already ended, says its server no longer holds g: the Reject of g is
+  // cancelled, so it cannot reach the newer request k through Mastodon's pair fallback (reject.rb).
+  it("an Undo of g before a newer Follow k cancels the Reject of g; only k's Accept is sent", async () => {
+    const t = await setup();
+    const g = await accepted(t);
+    await api(t, `/api/v1/accounts/${t.r}/remove_from_followers`);
+    expect(await undoFrom(t, g)).toMatchObject({ applied: false, reason: "retracted" });
+    const k = await followFrom(t);
+    expect(answers(await drain(t))).toEqual([["Accept", k.id]]);
+  });
+
+  // Misskey undoes with the pair-shaped id, which names every generation of the pair.
+  it("a pair-shaped Undo cancels the pair's Reject of g, whatever id g has", async () => {
+    const t = await setup();
+    await accepted(t);
+    await api(t, `/api/v1/accounts/${t.r}/remove_from_followers`);
+    expect(await undoFrom(t, `${REMOTE}/follows/r/alice`)).toMatchObject({ applied: true });
+    const k = await followFrom(t);
+    expect(answers(await drain(t))).toEqual([["Accept", k.id]]);
+  });
+
+  // An Undo of g that k overtook still cancels the Reject of g while it waits.
+  it("an Undo of g after a newer Follow k, before any delivery, cancels the Reject of g", async () => {
+    const t = await setup();
+    const g = await accepted(t);
+    await api(t, `/api/v1/accounts/${t.r}/remove_from_followers`);
+    const k = await followFrom(t);
+    expect(await undoFrom(t, g)).toMatchObject({ applied: false, reason: "retracted" });
+    expect(answers(await drain(t))).toEqual([["Accept", k.id]]);
+  });
+
+  // The accepted risk (docs/threat-model.md): k overtaking the follower's Undo of g cannot be told from an older Follow,
+  // so the Reject of g is sent before k's Accept, as Mastodon sends it, and the Undo of g arriving after it changes
+  // nothing: Kopje holds k, which the Reject may have ended at the follower's server through the pair.
+  it("a newer Follow k and the Reject of g sent before the Undo of g arrives: Kopje keeps k", async () => {
+    const t = await setup();
+    const g = await accepted(t);
+    await api(t, `/api/v1/accounts/${t.r}/remove_from_followers`);
+    const k = await followFrom(t);
+    expect(answers(await drain(t))).toEqual([
+      ["Reject", g],
+      ["Accept", k.id],
+    ]);
+    expect(await undoFrom(t, g)).toMatchObject({ applied: false, reason: "retracted" });
+    expect(await drain(t)).toEqual([]);
+    expect(await sql(t.store, "SELECT state, uri FROM follows WHERE account_id = ?", t.r)).toEqual([
+      { state: "accepted", uri: k.id },
+    ]);
+  });
+
+  // A Reject that names no Follow id (an edge stored without one) or a Misskey pair id cannot be told from one of the
+  // generation a Follow takes over, whatever its id, so it goes as before.
+  it.each([
+    ["a Misskey pair id", `${REMOTE}/follows/r/alice`],
+    ["no Follow id", null],
+  ])("cancels a Reject naming %s", async (_, uri) => {
+    const t = await setup();
+    await accepted(t);
+    await sql(t.store, "UPDATE follows SET uri = ? WHERE account_id = ?", uri, t.r);
+    await api(t, `/api/v1/accounts/${t.r}/remove_from_followers`);
+    expect(
+      await sql(
+        t.store,
+        "SELECT object_uri FROM outbound_activities WHERE json_extract(body, '$.activity.type') = 'Reject'",
+      ),
+    ).toEqual([{ object_uri: uri }]);
+    const next = await followFrom(t);
+    expect(next.result).toMatchObject({ applied: true, reason: "followed" });
+    expect(answers(await drain(t))).toEqual([["Accept", next.id]]);
+  });
+});
+
 describe("lanes after a cancellation", () => {
   it("deletes queued rows on both sides of a surviving row behind a surviving head; no promotion", async () => {
     const t = await setup();
@@ -305,11 +475,15 @@ describe("lanes after a cancellation", () => {
     expect(after.map((row) => [row.type, row.state, row.exposed])).toEqual([
       ["Create", "pending", 1],
       ["Create", "queued", 0],
+      ["Reject", "queued", 0],
       ["Block", "queued", 0],
       ["Undo", "queued", 0],
       ["Accept", "queued", 0],
     ]);
-    expect(answers(await drain(t))).toEqual([["Accept", second.id]]);
+    expect(answers(await drain(t))).toEqual([
+      ["Reject", first.id],
+      ["Accept", second.id],
+    ]);
   });
 
   it("deletes a pending head never claimed and promotes the oldest row behind it; new work is admitted queued", async () => {
@@ -468,8 +642,9 @@ describe("a renewal cancels every answer of the pair that is not leased, claimed
     expect(answers(await drain(t))).toEqual([["Accept", second.id]]);
   });
 
-  // Neither the exposed Accept nor the withdrawing Reject that would have countered it reaches the new request.
-  it("cancels an exposed old Accept and an unexposed withdrawing Reject before a new locked request", async () => {
+  // Neither the exposed Accept nor the withdrawing Reject that would have countered it reaches the new request: the
+  // follower's Undo of the old generation, which Kopje had already ended, cancels both.
+  it("an Undo of the ended generation cancels its exposed Accept and unexposed withdrawing Reject", async () => {
     const t = await setup();
     const first = await followFrom(t);
     expect(await claimOnce(t, FAIL)).toEqual(["Accept"]);
@@ -482,6 +657,7 @@ describe("a renewal cancels every answer of the pair that is not leased, claimed
       ["Block", t.rUri, 0],
       ["Undo", expect.any(String), 0],
     ]);
+    expect(await undoFrom(t, first.id)).toMatchObject({ applied: false, reason: "retracted" });
     const second = await followFrom(t);
     expect(second.result).toMatchObject({ reason: "follow-requested" });
     expect((await drain(t)).map(([type, object]) => [type, object === first.id])).toEqual([
@@ -1193,7 +1369,7 @@ describe("a superseded answer under lease gets no further attempt", () => {
     ]);
   });
 
-  it("a withdrawing Reject (a retraction) that a renewal superseded under its lease is dropped too", async () => {
+  it("a withdrawing Reject (a retraction) that the follower's Undo superseded under its lease is dropped too", async () => {
     const t = await setup();
     const first = await followFrom(t);
     expect(await claimOnce(t, OK)).toEqual(["Accept"]);
@@ -1201,6 +1377,7 @@ describe("a superseded answer under lease gets no further attempt", () => {
     const token = `held-${++lease}`;
     const [delivery] = (await t.store.claimDeliveries(BUILD, { now: NOW, leaseToken: token })).deliveries;
     await api(t, `/api/v1/accounts/${t.r}/unblock`);
+    expect(await undoFrom(t, first.id)).toMatchObject({ applied: false, reason: "retracted" });
     const second = await followFrom(t);
     expect(second.result).toMatchObject({ applied: true, reason: "followed" });
     const [reject] = await lane(t);

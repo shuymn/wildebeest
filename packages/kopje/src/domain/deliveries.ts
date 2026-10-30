@@ -2149,21 +2149,27 @@ function nextDueAt(db: Db, now: number, ownLease: string | null = null): number 
 // Follow answers
 // ---------------------------------------------------------------------------------------------------------------
 
-// A remote Follow cancels its pair's answers (Accept, Reject) that no POST of Kopje's can be in flight for, and the
-// unexpanded ones (inbox.ts follow): for interoperability with servers that match an answer by account pair, not only
-// by the Follow it names (Misskey's UserFollowingService; Mastodon's Accept and Reject fall back to the pair), so a
-// stale one would act on the new request. Every row that is not leased goes (queued, pending or given up, claimed
-// before or not: a pending row's attempt has completed). A leased row keeps its lane, so the new answer waits behind
-// it, and its intent is superseded: the claim, the confirmation and a failed completion drop a superseded answer
-// (STALE_ANSWER) instead of sending, retrying or giving it up. Only a POST whose confirmation was granted before the
-// Follow committed still goes (the accepted risk in docs/threat-model.md).
+// A remote Follow cancels the answers of its pair that it replaces (Accept, Reject) that no POST of Kopje's can be in
+// flight for, and the unexpanded ones (inbox.ts follow): for interoperability with servers that match an answer by
+// account pair, not only by the Follow it names (Misskey's UserFollowingService; Mastodon's Accept and Reject fall back
+// to the pair), so a stale one would act on the new request. It replaces every Accept, and a Reject only of the
+// generation it takes over (one naming its own id or the edge's current one, or no id or a pair-shaped id, which
+// cannot be told from it). Any other Reject ends or refuses a generation Kopje no longer holds, which the follower's
+// server may still hold (an older Follow arriving late cannot be told from a newer one), so it is kept and delivered,
+// as Mastodon delivers its own (remove_from_followers_service.rb, follow.rb). An Undo of a Follow cancels the answers
+// of the generation it undoes, and a pair-shaped one every answer of the pair (inbox.ts undo): the follower withdrew
+// it itself, and a Reject of it sent later would reach its next request through the pair. Every row that is not
+// leased goes (queued, pending or given up, claimed before or not: a pending row's attempt has completed). A leased
+// row keeps its lane, so the new answer waits behind it, and its intent is superseded: the claim, the confirmation and
+// a failed completion drop a superseded answer (STALE_ANSWER) instead of sending, retrying or giving it up. Only a POST
+// whose confirmation was granted before the Follow committed still goes (the accepted risk in docs/threat-model.md).
 //
-// Bounds (RES-6): a Follow reads at most FOLLOW_ANSWER_INTENTS + 1 unsettled answers of its pair, and of them
+// Bounds (RES-6): a Follow, or an Undo of one, reads at most FOLLOW_ANSWER_INTENTS + 1 unsettled answers of its pair, and of them
 // FOLLOW_ANSWER_ROWS + 1 rows (leased or not) and FOLLOW_ANSWER_CHUNKS + 1 unexpanded chunks; over any bound it is
 // refused (followAnswersOf returns null) before anything is written, and the peer delivers it again. An answer has
 // one target, so one row or chunk: the intent bound bites first, and the others bound stored rows from elsewhere (an
 // imported store). Answers leave the bound as their rows deliver or are cancelled, and as sweepDeliveries deletes the
-// given-up rows of superseded ones.
+// given-up rows of superseded ones at once and those of a kept Reject at the 30-day retention.
 export const FOLLOW_ANSWER_INTENTS = 32;
 export const FOLLOW_ANSWER_ROWS = 64;
 export const FOLLOW_ANSWER_CHUNKS = 32;
@@ -2188,14 +2194,36 @@ export const FOLLOW_ANSWER_ROWS_SQL = `SELECT CAST(id AS TEXT) AS id, CAST(activ
 export const FOLLOW_ANSWER_CHUNKS_SQL = `SELECT CAST(id AS TEXT) AS id FROM outbound_targets
 	WHERE activity_id IN (SELECT CAST(value AS INTEGER) FROM json_each(?)) LIMIT ?`;
 
-// Reads only: the unsettled answers of signerId to followerId, or null over a bound.
-export function followAnswersOf(db: Db, signerId: string, followerId: string): FollowAnswers | null {
-  const intents = db
+// An unsettled answer as followAnswersOf's `replaces` judges it: its type (ANSWER_TYPE), the Follow it answers
+// (object_uri) and whether it is superseded already.
+export type FollowAnswer = { type: string; object: string | null; superseded: number };
+
+// Reads only: the unsettled answers of signerId to followerId that `replaces` selects (all by default), or null over a
+// bound. Every unsettled answer counts toward the intent bound, selected or not; the rows and chunks are those of the
+// selected ones. The answers' type, subject and flag are read by primary key, at most FOLLOW_ANSWER_INTENTS of them.
+export function followAnswersOf(
+  db: Db,
+  signerId: string,
+  followerId: string,
+  replaces: (answer: FollowAnswer) => boolean = () => true,
+): FollowAnswers | null {
+  const found = db
     .all<{ id: string }>(FOLLOW_ANSWER_INTENTS_SQL, signerId, followerId, FOLLOW_ANSWER_INTENTS + 1)
     .map((r) => r.id);
-  if (intents.length > FOLLOW_ANSWER_INTENTS) {
+  if (found.length > FOLLOW_ANSWER_INTENTS) {
     return null;
   }
+  const intents =
+    found.length === 0
+      ? found
+      : db
+          .all<FollowAnswer & { id: string }>(
+            `SELECT CAST(o.id AS TEXT) AS id, ${ANSWER_TYPE} AS type, o.object_uri AS object, o.superseded
+						FROM outbound_activities o WHERE o.id IN (SELECT CAST(value AS INTEGER) FROM json_each(?)) ORDER BY o.id`,
+            JSON.stringify(found),
+          )
+          .filter(replaces)
+          .map((r) => r.id);
   if (intents.length === 0) {
     return { intents, rows: [], chunks: [] };
   }
