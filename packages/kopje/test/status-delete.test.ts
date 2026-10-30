@@ -665,11 +665,14 @@ const indexed = <K extends string>(k: K, weight: number) => ({
   weight,
 });
 
+// s1, which L reacts to, most often.
+const statusArb = fc.constantFrom(0, 0, 0, 1, 2);
+
 const actionArb: fc.Arbitrary<Action> = fc.oneof(
-  { arbitrary: fc.record({ k: fc.constant("post" as const), s: fc.nat(2), snapshot: snapshotArb }), weight: 2 },
-  { arbitrary: fc.record({ k: fc.constant("edit" as const), s: fc.nat(2), snapshot: snapshotArb }), weight: 4 },
-  { arbitrary: fc.record({ k: fc.constant("delete" as const), s: fc.nat(2), proven: fc.boolean() }), weight: 2 },
-  indexed("deliver", 8),
+  { arbitrary: fc.record({ k: fc.constant("post" as const), s: statusArb, snapshot: snapshotArb }), weight: 2 },
+  { arbitrary: fc.record({ k: fc.constant("edit" as const), s: statusArb, snapshot: snapshotArb }), weight: 4 },
+  { arbitrary: fc.record({ k: fc.constant("delete" as const), s: statusArb, proven: fc.boolean() }), weight: 3 },
+  indexed("deliver", 10),
   indexed("redeliver", 2),
   simple("favourite", 2),
   simple("unfavourite", 1),
@@ -772,8 +775,8 @@ async function deliverSent(w: World, msg: Msg, label: string): Promise<void> {
   if (msg.type === "Delete" && msg.proven) {
     w.proven.set(msg.id, proof(R, msg));
   }
-  if (msg.type !== "Delete" && !w.policy.statuses.has(msg.object.uri) && !w.everStored.has(msg.object.uri)) {
-    tally(w.stats, `${msg.type} before any Create was stored`);
+  if (msg.type === "Update" && !w.everStored.has(msg.object.uri)) {
+    tally(w.stats, "Update before its Create");
   }
   if (msg.type === "Delete" && !w.everStored.has(msg.object)) {
     tally(w.stats, "Delete before Create");
