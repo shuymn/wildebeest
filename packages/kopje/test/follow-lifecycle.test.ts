@@ -15,7 +15,7 @@ import { community, remoteAccount } from "./status-helpers";
 // VIS-13 in docs/threat-model.md). Generated sequences of R's server's actions, L's API actions and Kopje's delivery
 // steps run through the Store and the API; after every step the Store's projection and each answer must equal the
 // policy's (test/follow-model.ts), and once everything has settled Kopje's edges and blocks must equal those of the
-// peer, a Mastodon v4.5.11 model fed the bytes Kopje confirmed, except where an accepted risk or a known defect names
+// peer, a Mastodon v4.5.11 model fed the bytes Kopje confirmed, except where an accepted risk names
 // the generation that differs (`exceptions`).
 
 const ORIGIN = "https://remote.example";
@@ -133,8 +133,6 @@ async function setup() {
     // R's messages Kopje has received, and the step each of R's Follows first reached Kopje.
     delivered: [] as Inbound[],
     receivedAt: new Map<string, number>(),
-    // #1412: R's generations accepted at Kopje when Kopje processed R's Block, whose request R's Block kept at R's server.
-    blockEndedAccepted: new Set<string>(),
     // R's generations an older Follow of R's reached Kopje after (its deliveries are independent jobs).
     olderFollowAfter: new Set<string>(),
     // L's newest follow and block ids.
@@ -278,9 +276,6 @@ async function deliverToKopje(w: World, activity: Inbound, label: string): Promi
   const before = `R->L ${edgeName(w.policy.rl)}, L->R ${edgeName(w.policy.lr)}`;
   const rl = w.policy.rl;
   const order = w.peer.generations;
-  if (activity.type === "Block" && rl?.state === "accepted" && w.peer.events.blockKeptRequest.has(rl.uri)) {
-    w.blockEndedAccepted.add(rl.uri);
-  }
   const result = await storeReceive(w.store, w.rUri, activity, w.clock);
   const predicted = w.policy.receive(activity, w.clock);
   // Only an older Follow that took over as the next generation (a renewal applied) arms the exception.
@@ -751,14 +746,7 @@ async function settle(w: World): Promise<void> {
 // Quiescence: Kopje against the peer
 // ---------------------------------------------------------------------------------------------------------------
 
-type Exception =
-  | "net2-answer"
-  | "block-race"
-  | "reordered-follows"
-  | "known-defect-1412-pending"
-  | "known-defect-1412-accepted"
-  | "known-defect-1412-follow-of-blocker"
-  | null;
+type Exception = "net2-answer" | "block-race" | "reordered-follows" | null;
 
 const peerState = (edge: { state: string; uri: string } | null) =>
   edge === null ? null : { state: edge.state === "pending" ? "requested" : edge.state, uri: edge.uri };
@@ -798,36 +786,6 @@ function rlException(w: World, kopje: { state: string; uri: string } | null): Ex
   // while R's server holds g. Kopje holds anything but g; R's server holds g.
   if (w.olderFollowAfter.has(g) && mine?.uri !== g && theirs?.uri === g) {
     return "reordered-follows";
-  }
-  return knownDefect1412(w, g, mine, theirs);
-}
-
-// Known defect #1412, both of its cases; the fix removes this function. Kopje's handling of R's Block of L ends R's
-// follow of L silently in either state, where Mastodon's Block handler keeps the blocker's own request (block.rb:14-16,
-// as BlockService does on R's server, block_service.rb:9-11) and ends an accepted follow with a Reject
-// (UnfollowService, unfollow_service.rb:35-36).
-function knownDefect1412(
-  w: World,
-  g: string,
-  mine: { state: string; uri: string } | null,
-  theirs: { state: string; uri: string } | null,
-): Exception {
-  if (mine !== null || theirs?.uri !== g) {
-    return null;
-  }
-  // R's request g was pending at Kopje when R's Block removed it; R's server still holds it.
-  if (w.policy.events.blockRemovedRequest.has(g) && theirs.state === "requested") {
-    return "known-defect-1412-pending";
-  }
-  // R's follow g was accepted at Kopje when R's Block removed it, and R's Block had kept R's request at R's server:
-  // Kopje's Accept makes it a follow there (before or after the Block reaches Kopje), which no Reject ends.
-  if (w.blockEndedAccepted.has(g) && theirs.state === "accepted") {
-    return "known-defect-1412-accepted";
-  }
-  // R's Follow g reached Kopje after R's Block and was ignored because R blocks L, where Mastodon takes it
-  // (follow.rb:18 refuses only a follower the target blocks).
-  if (w.policy.events.followOfBlocker.has(g)) {
-    return "known-defect-1412-follow-of-blocker";
   }
   return null;
 }
@@ -1179,13 +1137,16 @@ describe("follow lifecycle transitions", () => {
   });
 
   // Mastodon's BlockService has no guard for a block R already holds: blocking again runs its cleanup, which now
-  // undoes R's follow that Kopje's Accept completed after the first Block, and sends the Block again under its id.
+  // undoes R's follow that began when L authorized the request the first Block kept, and sends the Block again
+  // under its id.
   it("R's server blocks again: its cleanup runs again and the Block is resent under its id", async () => {
     const w = await run([
+      { k: "lock", locked: true },
       { k: "peerFollow" },
       { k: "peerBlock" },
       { k: "deliver", ...at(0) },
       { k: "deliver", ...at(0) },
+      { k: "authorize" },
       { k: "send" },
       { k: "drainPeer" },
       { k: "peerBlock" },
@@ -1320,37 +1281,37 @@ describe("follow lifecycle accepted races", () => {
   });
 });
 
-describe("follow lifecycle known defects", () => {
-  // #1412, a known defect: Mastodon v4.5.11 keeps the blocker's outgoing follow request on both sides. BlockService
-  // (block_service.rb:9-11) removes only the blocker's accepted follow, and the receiver's Block handler
-  // (block.rb:14-16) unfollows the blocker's accepted follow and rejects the blocked account's request, never the
-  // blocker's own. Kopje removes it; this assertion flips when the fix lands.
-  it("a remote Block while its follow request is pending (known defect #1412)", async () => {
+// R's Block of L while R's own follow of L stands or waits (VIS-13, docs/visibility.md R21), as Mastodon handles it on
+// both sides: BlockService keeps the blocker's request at R's server (block_service.rb:9-11), and the receiver's Block
+// handler keeps it too and ends an accepted follow with a Reject (block.rb:14-16, unfollow_service.rb:35-36).
+describe("follow lifecycle: the blocker's own follow", () => {
+  it("a remote Block keeps the blocker's pending request", async () => {
     const w = await run([{ k: "lock", locked: true }, { k: "peerFollow" }, { k: "deliver", i: 0 }, { k: "peerBlock" }]);
     expect(w.peer.rl?.state).toBe("requested");
-    expect((await project(w)).rl).toBeNull();
-    expect(w.stats["exception known-defect-1412-pending"]).toBe(1);
+    expect((await project(w)).rl).toEqual({ state: "pending", uri: w.peer.lastRGeneration });
   });
 
-  // #1412, a known defect: R blocks L while its request still waits at R's server, which keeps it (block_service.rb:
-  // 9-11). Kopje accepted the Follow and then removes it on the Block without the Reject Mastodon's Block handler sends
-  // for an accepted follow (block.rb:14, unfollow_service.rb:35-36), so Kopje's Accept makes it a follow at R's server
-  // (accept.rb:6) that nothing ends. This assertion flips when the fix lands.
-  it("a remote Block while its accepted follow's Accept is on its way (known defect #1412)", async () => {
+  // Kopje accepted R's Follow, whose request R's Block kept at R's server: the Block ends the follow with one Reject
+  // that withdraws it, and the Accept still waiting is superseded and never sent (NET-2), so R's server drops the
+  // request (reject.rb) and both sides end with nothing.
+  it("a remote Block ends the blocker's accepted follow with one withdrawing Reject", async () => {
     const w = await run([{ k: "peerFollow" }, { k: "peerBlock" }]);
-    expect(w.peer.rl?.state).toBe("accepted");
+    const sent = w.attempts.filter((a) => a.body !== null).map((a) => a.intent.type);
+    expect(sent.filter((type) => type === "Reject")).toHaveLength(1);
+    expect(sent).not.toContain("Accept");
+    expect(w.peer.rl).toBeNull();
     expect((await project(w)).rl).toBeNull();
-    expect(w.stats["exception known-defect-1412-accepted"]).toBe(1);
   });
 
-  // #1412, a known defect: R's Follow reaches Kopje after R's Block (Mastodon's deliveries are independent jobs), and
-  // Kopje ignores it because R blocks L, where Mastodon's Follow handler refuses only a follower the target blocks
-  // (follow.rb:18). R's server keeps the request (block_service.rb:9-11). This assertion flips when the fix lands.
-  it("a Follow that arrives after its follower's Block (known defect #1412)", async () => {
+  // R's Follow reaches Kopje after R's Block (Mastodon's deliveries are independent jobs) and is taken as any other,
+  // as Mastodon's Follow handler refuses only a follower the target blocks (follow.rb:18); no notification of it is
+  // written (docs/mastodon-deviations.md).
+  it("a Follow that arrives after its follower's Block is taken", async () => {
     const w = await run([{ k: "peerFollow" }, { k: "peerBlock" }, { k: "deliver", i: 1 }]);
-    expect(w.trace).toContain("  -> blocked");
-    expect(w.peer.rl?.state).toBe("requested");
-    expect((await project(w)).rl).toBeNull();
-    expect(w.stats["exception known-defect-1412-follow-of-blocker"]).toBe(1);
+    expect(w.trace).toContain("  -> followed");
+    expect(w.peer.rl?.state).toBe("accepted");
+    const state = await project(w);
+    expect(state.rl?.state).toBe("accepted");
+    expect(state.notifications).toEqual([]);
   });
 });

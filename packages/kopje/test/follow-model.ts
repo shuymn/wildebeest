@@ -58,14 +58,6 @@ export type Inbound =
   | { type: "Accept"; id: string; object: InboundRef }
   | { type: "Reject"; id: string; object: InboundRef };
 
-// The events the quiescence exceptions read (rlException in follow-lifecycle.test.ts).
-export type PolicyEvents = {
-  // #1412: R's pending generation that R's Block removed at Kopje.
-  blockRemovedRequest: Set<string>;
-  // #1412: R's Follows refused because R blocks L.
-  followOfBlocker: Set<string>;
-};
-
 export class Policy {
   rl: Edge = null;
   lr: Edge = null;
@@ -76,7 +68,6 @@ export class Policy {
   notifications = new Set<"follow" | "follow_request">();
   lane: Intent[] = [];
   unlockJob = false;
-  readonly events: PolicyEvents = { blockRemovedRequest: new Set(), followOfBlocker: new Set() };
   // Every follow and block id L has used, and every answer id recorded (ID-7: none is recorded twice).
   private readonly localIds = new Set<string>();
   private readonly answerIds = new Set<string>();
@@ -245,12 +236,10 @@ export class Policy {
     if (this.retracted.has(id)) {
       return { applied: false, reason: "retracted" };
     }
-    // The follower blocks the target: its server would not have sent this; nothing is recorded.
-    if (this.blockRL !== null) {
-      // #1412: Mastodon takes it (follow.rb:18 refuses only a follower the target blocks).
-      this.events.followOfBlocker.add(id);
-      return { applied: false, reason: "blocked" };
-    }
+    // A follower that blocks the target is taken as any other (VIS-13; docs/visibility.md R21, as Mastodon's
+    // follow.rb:18 refuses only a follower the target blocks), but no notification of it is written
+    // (docs/mastodon-deviations.md, follow requests from an account that blocks the local one).
+    const notify = this.blockRL === null;
     // VIS-13: while the block lasts the blocked account may not follow (a remote Follow is answered with a Reject);
     // the refused id is recorded (ID-7), and NET-2: "A Follow the target refuses because it blocks the follower
     // records its Reject and cancels nothing".
@@ -276,12 +265,16 @@ export class Policy {
     }
     if (this.locked) {
       this.rl = { state: "pending", uri: id };
-      this.notifications.add("follow_request");
+      if (notify) {
+        this.notifications.add("follow_request");
+      }
       return { applied: true, reason: "follow-requested", caught };
     }
     this.rl = { state: "accepted", uri: id };
     this.answerOf("Accept", id, now);
-    this.notifications.add("follow");
+    if (notify) {
+      this.notifications.add("follow");
+    }
     return { applied: true, reason: "followed", caught };
   }
 
@@ -298,15 +291,11 @@ export class Policy {
       this.blockRL = id;
       return { applied: true, reason: "block-updated" };
     }
-    // VIS-13: a remote Block "ends the follows between the two accounts in both directions and in either state".
-    if (this.rl !== null) {
-      if (this.rl.state === "pending") {
-        // #1412: Mastodon keeps the blocker's request here (block.rb:14-16).
-        this.events.blockRemovedRequest.add(this.rl.uri);
-      }
-      this.retract(this.rl.uri);
-      this.rl = null;
-      this.dropFollowNotifications();
+    // VIS-13: a remote Block does what Mastodon's Block handler does (block.rb:14-16): it ends the blocker's accepted
+    // follow with a Reject that withdraws it (an Accept of it not yet sent is superseded, NET-2) and the local
+    // account's follow and request of the blocker, and keeps the blocker's pending request.
+    if (this.rl?.state === "accepted") {
+      this.endRemoteFollow(now);
     }
     this.endLocalFollow(now);
     this.blockRL = id;
@@ -369,7 +358,8 @@ export class Policy {
 
   // ---- L's actions through the API ----
 
-  // VIS-13: while a block lasts neither may follow the other. An existing follow only changes its options.
+  // VIS-13: while a block lasts the blocked account may not start a follow of the blocker; and L may not follow an
+  // account it blocks (docs/visibility.md R21, followableBySql). An existing follow only changes its options.
   localFollow(now: number, uri: () => string): number {
     if (this.blockLR !== null || this.blockRL !== null) {
       return 403;
@@ -569,8 +559,6 @@ export type Body = {
 export type PeerEvents = {
   // block.rb:16: Kopje's Block dropped R's request g (RejectFollowService, nothing sent).
   blockDroppedRequest: Set<string>;
-  // block_service.rb:9-11: R's Block kept R's own request g.
-  blockKeptRequest: Set<string>;
   // accept.rb:24 and reject.rb:25: an answer of another generation applied to R's request g by the account pair.
   pairAnswer: Set<string>;
   // follow.rb:9: a Follow of L's that a cached Undo suppressed.
@@ -603,7 +591,6 @@ export class Peer {
   readonly sent: PeerMessage[] = [];
   readonly events: PeerEvents = {
     blockDroppedRequest: new Set(),
-    blockKeptRequest: new Set(),
     pairAnswer: new Set(),
     undoBeforeFollow: 0,
     replayAfterUndo: new Set(),
@@ -724,8 +711,6 @@ export class Peer {
   block(): boolean {
     if (this.rl?.state === "accepted") {
       this.unfollow();
-    } else if (this.rl !== null) {
-      this.events.blockKeptRequest.add(this.rl.uri);
     }
     if (this.lr !== null) {
       const uri = this.lr.uri;
