@@ -2198,8 +2198,8 @@ export const FOLLOW_ANSWER_CHUNKS_SQL = `SELECT CAST(id AS TEXT) AS id FROM outb
 // An unsettled answer as followAnswersOf's `replaces` judges it, classified in SQL: its type (ANSWER_TYPE), whether it
 // is superseded already, whether it names no Follow (object_uri NULL), whether its Follow is one of the selection's
 // (`named`: object_uri equal, byte for byte, to the selection's id or to the uri of its edge; DATA-6), and `shape`, the
-// Follow id it names when that is within ACTIVITY_ID_LIMIT bytes (else null), for a shape test only, never as an
-// identity: an imported id may be malformed UTF-8, which decodes lossily.
+// Follow id it names when that is within ACTIVITY_ID_LIMIT bytes (else null, and its shape is not tested), for a shape
+// test only, never as an identity: an imported id may be malformed UTF-8, which decodes lossily.
 export type FollowAnswer = { type: string; superseded: number; unnamed: number; named: number; shape: string | null };
 
 // What followAnswersOf selects: the answers `replaces` accepts, judged against `id` and the uri of the follows row

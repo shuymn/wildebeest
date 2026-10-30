@@ -17,6 +17,7 @@ import {
 import { MAX_RETRACTIONS_PER_ACTOR, UNDONE_ANSWER_SIGNERS_SQL } from "../src/domain/inbox";
 import { readOperation } from "../src/domain/operation";
 import { deliveryRound } from "../src/jobs/deliver";
+import { ACTIVITY_ID_LIMIT } from "../src/platform/identity-bounds";
 import type { StoreStub } from "../src/platform/store-client";
 import { bearer, json, settle, sql } from "./api-helpers";
 import { NOW } from "./app-helpers";
@@ -345,8 +346,8 @@ describe("a Follow keeps the Reject of a generation Kopje no longer holds", () =
   ];
 
   // g followed and its Accept delivered, then the lane held behind a failed head.
-  async function accepted(t: T): Promise<string> {
-    const { id } = await followFrom(t);
+  async function accepted(t: T, g = followId()): Promise<string> {
+    const { id } = await followFrom(t, g);
     expect(await claimOnce(t, OK)).toEqual(["Accept"]);
     await outage(t);
     return id;
@@ -370,6 +371,21 @@ describe("a Follow keeps the Reject of a generation Kopje no longer holds", () =
     expect(await undoFrom(t, h.id)).toMatchObject({ applied: true, reason: "undone" });
     expect(await sql(t.store, "SELECT 1 FROM follows WHERE account_id = ?", t.r)).toEqual([]);
     expect(await drain(t)).toEqual([]);
+  });
+
+  // A Follow id too long for the pair-shape test (over ACTIVITY_ID_LIMIT bytes) is still compared in SQL, which shows
+  // that g names neither h nor the edge, so the Reject of g is kept.
+  it("keeps the Reject of a g whose id is longer than 4,096 bytes", async () => {
+    const t = await setup();
+    const g = await accepted(t, `${REMOTE}/follows/${"a".repeat(4_100)}`);
+    expect(new TextEncoder().encode(g).length).toBeGreaterThan(ACTIVITY_ID_LIMIT);
+    await api(t, `/api/v1/accounts/${t.r}/remove_from_followers`);
+    const h = await followFrom(t);
+    expect(h.result).toMatchObject({ applied: true, reason: "followed" });
+    expect(answers(await drain(t))).toEqual([
+      ["Reject", g],
+      ["Accept", h.id],
+    ]);
   });
 
   it("h's Undo arriving before any delivery cancels h's Accept and leaves the Reject of g", async () => {

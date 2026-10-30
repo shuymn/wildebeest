@@ -695,10 +695,11 @@ const follow: Handler<"Follow"> = (db, actor, activity, { now }) => {
 
 // Whether a Follow replaces an unsettled answer of its pair (deliveries.ts followAnswersOf): an Accept (or an imported
 // answer of no type), and a Reject of the generation the Follow takes over, one naming the new Follow's id or the
-// edge's current one (`named`, compared in SQL). A Reject naming no Follow id, a Misskey pair id or one too long to
-// judge cannot be told from one of that generation, and a superseded one is never sent again, so those go too. Any other Reject ends or refuses an
-// earlier generation Kopje no longer holds and is kept: the follower's server may still hold it, as a Follow sent
-// before it and delivered late cannot be told from a newer one (Mastodon's FollowService sends no new Follow while the
+// edge's current one (`named`, compared in SQL). A Reject naming no Follow id or a Misskey pair id cannot be told from
+// one of that generation, and a superseded one is never sent again, so those go too. Any other Reject ends or refuses
+// an earlier generation Kopje no longer holds and is kept, one whose id is too long to test its shape (`shape` null)
+// included, as SQL has shown it names another Follow: the follower's server may still hold it, as a Follow sent before
+// it and delivered late cannot be told from a newer one (Mastodon's FollowService sends no new Follow while the
 // follower still follows or has requested).
 function replacedAnswer(answer: FollowAnswer): boolean {
   return (
@@ -706,8 +707,7 @@ function replacedAnswer(answer: FollowAnswer): boolean {
     answer.superseded === 1 ||
     answer.unnamed === 1 ||
     answer.named === 1 ||
-    answer.shape === null ||
-    isMisskeyPairId(answer.shape)
+    (answer.shape !== null && isMisskeyPairId(answer.shape))
   );
 }
 
