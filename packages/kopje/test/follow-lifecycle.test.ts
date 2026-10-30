@@ -142,7 +142,7 @@ async function setup() {
     lastBlock: null as string | null,
     // The id each intent was first sent under (by its policy seq), and the intent each such id belongs to.
     activityIds: new Map<number, string>(),
-    intentOfId: new Map<string, number>(),
+    intentOfId: new Map<string, Intent>(),
     trace: [] as string[],
     stats: {} as Stats,
   };
@@ -511,8 +511,8 @@ function bodyShape(w: World, body: Body, intent: Intent | null) {
 }
 
 // ID-7: an activity Kopje sends keeps its id across its attempts (a retry, a POST again after its lease), no two
-// activities share one (but the answers of a pair-shaped Follow id, whose id derives from it, ID-7), and each is on L's
-// origin. The identity is the policy's intent while the id holds to that.
+// activities share one (but the same answer to a pair-shaped Follow id in each generation, its id deriving from it,
+// ID-7), and each is on L's origin. The identity is the policy's intent while the id holds to that.
 function activityIdentity(w: World, id: string, intent: Intent | null): string {
   if (intent === null) {
     return id;
@@ -525,12 +525,19 @@ function activityIdentity(w: World, id: string, intent: Intent | null): string {
   if (known !== undefined && known !== id) {
     return `changed from ${known} to ${id}`;
   }
-  const pairAnswer = intent.answer && intent.ref !== null && pairShaped(intent.ref);
-  if (other !== undefined && other !== intent.seq && !pairAnswer) {
-    return `${id}, already the id of intent ${other}`;
+  const sameAnswer =
+    other !== undefined &&
+    intent.answer &&
+    other.answer &&
+    other.type === intent.type &&
+    intent.ref !== null &&
+    other.ref === intent.ref &&
+    pairShaped(intent.ref);
+  if (other !== undefined && other.seq !== intent.seq && !sameAnswer) {
+    return `${id}, already the id of intent ${other.seq}`;
   }
   w.activityIds.set(intent.seq, id);
-  w.intentOfId.set(id, intent.seq);
+  w.intentOfId.set(id, intent);
   return `intent ${intent.seq}`;
 }
 
@@ -1127,6 +1134,24 @@ describe("follow lifecycle: pair-shaped and unnamed answers against the policy",
     expect(accepts.map((a) => a.intent.ref)).toEqual([PAIR, PAIR]);
     expect(new Set(accepts.map((a) => (JSON.parse(a.body!) as Body).id)).size).toBe(1);
     expect(new Set(accepts.map((a) => a.intent.seq)).size).toBe(2);
+  });
+
+  // Only the same answer reuses a pair id's answer id: its Accept and its Reject are two activities.
+  it("a pair id's Accept and Reject have different ids", async () => {
+    const w = await setup();
+    await inbound(w, { k: "inFollow", id: PAIR });
+    await act(w, { k: "send" });
+    await inbound(w, { k: "removeFollower" });
+    await act(w, { k: "send" });
+    const ids = (type: string) =>
+      new Set(
+        w.attempts
+          .filter((a) => a.intent.type === type && a.body !== null)
+          .map((a) => (JSON.parse(a.body!) as Body).id),
+      );
+    expect(ids("Accept").size).toBe(1);
+    expect(ids("Reject").size).toBe(1);
+    expect([...ids("Accept")]).not.toEqual([...ids("Reject")]);
   });
 
   // An untyped pair Undo matches only a follow with that id, and is not recorded (an accepted risk).
