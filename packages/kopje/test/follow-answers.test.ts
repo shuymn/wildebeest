@@ -5,6 +5,7 @@ import {
   type DeliveryOutcome,
   FOLLOW_ANSWER_CHUNKS,
   FOLLOW_ANSWER_CHUNKS_SQL,
+  FOLLOW_ANSWER_CLASSES_SQL,
   FOLLOW_ANSWER_INTENTS,
   FOLLOW_ANSWER_INTENTS_SQL,
   FOLLOW_ANSWER_ROWS,
@@ -13,9 +14,10 @@ import {
   LEASE_MS,
   MAX_ATTEMPTS,
 } from "../src/domain/deliveries";
-import { MAX_RETRACTIONS_PER_ACTOR } from "../src/domain/inbox";
+import { MAX_RETRACTIONS_PER_ACTOR, UNDONE_ANSWER_SIGNERS_SQL } from "../src/domain/inbox";
 import { readOperation } from "../src/domain/operation";
 import { deliveryRound } from "../src/jobs/deliver";
+import { ACTIVITY_ID_LIMIT } from "../src/platform/identity-bounds";
 import type { StoreStub } from "../src/platform/store-client";
 import { bearer, json, settle, sql } from "./api-helpers";
 import { NOW } from "./app-helpers";
@@ -153,8 +155,8 @@ async function snapshot(store: StoreStub) {
   );
 }
 
-describe("each renewal path sends only its own answer when the stale ones were never claimed", () => {
-  it("block, unblock, re-follow: the old Accept and the withdrawing Reject go, the new Accept is sent", async () => {
+describe("each renewal path sends only its own answer and the Rejects of earlier generations", () => {
+  it("block, unblock, re-follow: the old Accept goes, the withdrawing Reject and the new Accept are sent", async () => {
     const t = await setup();
     await outage(t);
     const first = await followFrom(t);
@@ -170,8 +172,11 @@ describe("each renewal path sends only its own answer when the stale ones were n
     const second = await followFrom(t);
     expect(second.result).toMatchObject({ applied: true, reason: "followed" });
     const sent = await drain(t);
-    expect(answers(sent)).toEqual([["Accept", second.id]]);
-    expect(sent.map(([type]) => type)).toEqual(["Create", "Block", "Undo", "Accept"]);
+    expect(answers(sent)).toEqual([
+      ["Reject", first.id],
+      ["Accept", second.id],
+    ]);
+    expect(sent.map(([type]) => type)).toEqual(["Create", "Reject", "Block", "Undo", "Accept"]);
   });
 
   it.each([
@@ -180,7 +185,7 @@ describe("each renewal path sends only its own answer when the stale ones were n
   ])("remote suspension (%s), unsuspension, re-follow", async (_, completed) => {
     const t = await setup();
     await outage(t);
-    await followFrom(t);
+    const first = await followFrom(t);
     expect(await act(t.w, t.r, { type: "suspend" })).toMatchObject({ status: 200 });
     if (completed) {
       await settle(t.store);
@@ -200,7 +205,8 @@ describe("each renewal path sends only its own answer when the stale ones were n
     );
     const second = await followFrom(t);
     expect(second.result).toMatchObject({ applied: true });
-    expect(answers(await drain(t))).toEqual([["Accept", second.id]]);
+    // The severing Reject of the suspended generation is kept; the unsent Accept of it goes.
+    expect(answers(await drain(t))).toEqual([...(completed ? [["Reject", first.id]] : []), ["Accept", second.id]]);
   });
 
   it("locked, authorized, then renewed: only the renewal’s Accept", async () => {
@@ -214,7 +220,7 @@ describe("each renewal path sends only its own answer when the stale ones were n
     expect(answers(await drain(t))).toEqual([["Accept", second.id]]);
   });
 
-  it("locked, rejected, then asked again: the Reject goes, and the new request waits for the owner", async () => {
+  it("locked, rejected, then asked again: the Reject is sent, and the new request waits for the owner", async () => {
     const t = await setup({ locked: true });
     await outage(t);
     const first = await followFrom(t);
@@ -225,7 +231,7 @@ describe("each renewal path sends only its own answer when the stale ones were n
     ]);
     const second = await followFrom(t);
     expect(second.result).toMatchObject({ reason: "follow-requested" });
-    expect(answers(await drain(t))).toEqual([]);
+    expect(answers(await drain(t))).toEqual([["Reject", first.id]]);
     expect(await sql(t.store, "SELECT state, uri FROM follows WHERE account_id = ?", t.r)).toEqual([
       { state: "pending", uri: second.id },
     ]);
@@ -283,6 +289,238 @@ describe("each renewal path sends only its own answer when the stale ones were n
   });
 });
 
+// #1415: a Follow Kopje receives after it ended or refused the generation g that the follower's server may still hold.
+// Mastodon's FollowService sends no new Follow while the follower follows or has requested, so one arriving then
+// without an Undo of g was sent before g and delivered late (h, whose Undo follows). Mastodon delivers its own Reject
+// of g as an independent job (remove_from_followers_service.rb, follow.rb), so the Reject of g is kept and sent.
+describe("a Follow keeps the Reject of a generation Kopje no longer holds", () => {
+  const blockId = () => `${REMOTE}/blocks/${++sequence}`;
+  // Each way Kopje ends or refuses r's generation g with a Reject that a Follow arriving later does not take over. The
+  // lane is held behind a failed head, so the Reject is queued, never claimed.
+  const ENDINGS: [string, (t: T) => Promise<{ g: string; others: string[] }>][] = [
+    [
+      "a removal from the followers",
+      async (t) => {
+        const g = await accepted(t);
+        await api(t, `/api/v1/accounts/${t.r}/remove_from_followers`);
+        return { g, others: [] };
+      },
+    ],
+    [
+      "a local block, then an unblock",
+      async (t) => {
+        const g = await accepted(t);
+        await api(t, `/api/v1/accounts/${t.r}/block`);
+        await api(t, `/api/v1/accounts/${t.r}/unblock`);
+        return { g, others: ["Block", "Undo"] };
+      },
+    ],
+    [
+      "the owner's refusal of a request, then an unlock",
+      async (t) => {
+        await sql(t.store, "UPDATE accounts SET locked = 1 WHERE id = ?", t.w.alice.id);
+        await outage(t);
+        const { id: g } = await followFrom(t);
+        await api(t, `/api/v1/follow_requests/${t.r}/reject`);
+        await sql(t.store, "UPDATE accounts SET locked = 0 WHERE id = ?", t.w.alice.id);
+        return { g, others: [] };
+      },
+    ],
+    [
+      "an inbound Block by the follower, then its Undo",
+      async (t) => {
+        const g = await accepted(t);
+        const id = blockId();
+        expect(await receive(t.store, t.rUri, { id, type: "Block", object: t.aliceUri })).toMatchObject({
+          reason: "blocked",
+        });
+        expect(
+          await receive(t.store, t.rUri, {
+            type: "Undo",
+            object: { id, type: "Block", actor: t.rUri, object: t.aliceUri },
+          }),
+        ).toMatchObject({ applied: true });
+        return { g, others: [] };
+      },
+    ],
+  ];
+
+  // g followed and its Accept delivered, then the lane held behind a failed head.
+  async function accepted(t: T, g = followId()): Promise<string> {
+    const { id } = await followFrom(t, g);
+    expect(await claimOnce(t, OK)).toEqual(["Accept"]);
+    await outage(t);
+    return id;
+  }
+
+  it.each(ENDINGS)("%s: the older h's Follow keeps the Reject of g, and both answers are sent", async (_, end) => {
+    const t = await setup();
+    const { g, others } = await end(t);
+    expect((await lane(t)).filter((row) => row.type === "Reject").map((row) => [row.object, row.state])).toEqual([
+      [g, "queued"],
+    ]);
+    const h = await followFrom(t);
+    expect(h.result).toMatchObject({ applied: true, reason: "followed" });
+    const sent = await drain(t);
+    expect(answers(sent)).toEqual([
+      ["Reject", g],
+      ["Accept", h.id],
+    ]);
+    expect(sent.map(([type]) => type)).toEqual(["Create", "Reject", ...others, "Accept"]);
+    // h's Undo, delivered last, leaves no follow on either side.
+    expect(await undoFrom(t, h.id)).toMatchObject({ applied: true, reason: "undone" });
+    expect(await sql(t.store, "SELECT 1 FROM follows WHERE account_id = ?", t.r)).toEqual([]);
+    expect(await drain(t)).toEqual([]);
+  });
+
+  // A Follow id too long for the pair-shape test (over ACTIVITY_ID_LIMIT bytes) is still compared in SQL, which shows
+  // that g names neither h nor the edge, so the Reject of g is kept.
+  it("keeps the Reject of a g whose id is longer than 4,096 bytes", async () => {
+    const t = await setup();
+    const g = await accepted(t, `${REMOTE}/follows/${"a".repeat(4_100)}`);
+    expect(new TextEncoder().encode(g).length).toBeGreaterThan(ACTIVITY_ID_LIMIT);
+    await api(t, `/api/v1/accounts/${t.r}/remove_from_followers`);
+    const h = await followFrom(t);
+    expect(h.result).toMatchObject({ applied: true, reason: "followed" });
+    expect(answers(await drain(t))).toEqual([
+      ["Reject", g],
+      ["Accept", h.id],
+    ]);
+  });
+
+  it("h's Undo arriving before any delivery cancels h's Accept and leaves the Reject of g", async () => {
+    const t = await setup();
+    const g = await accepted(t);
+    await api(t, `/api/v1/accounts/${t.r}/remove_from_followers`);
+    const h = await followFrom(t);
+    expect(await undoFrom(t, h.id)).toMatchObject({ applied: true, reason: "undone" });
+    expect(answers(await drain(t))).toEqual([["Reject", g]]);
+    expect(await sql(t.store, "SELECT 1 FROM follows WHERE account_id = ?", t.r)).toEqual([]);
+  });
+
+  // The follower's own Undo of g, which Kopje had already ended, says its server no longer holds g: the Reject of g is
+  // cancelled, so it cannot reach the newer request k through Mastodon's pair fallback (reject.rb).
+  it("an Undo of g before a newer Follow k cancels the Reject of g; only k's Accept is sent", async () => {
+    const t = await setup();
+    const g = await accepted(t);
+    await api(t, `/api/v1/accounts/${t.r}/remove_from_followers`);
+    expect(await undoFrom(t, g)).toMatchObject({ applied: false, reason: "retracted" });
+    const k = await followFrom(t);
+    expect(answers(await drain(t))).toEqual([["Accept", k.id]]);
+  });
+
+  // Misskey undoes with the pair-shaped id, which names every generation of the pair.
+  it("a pair-shaped Undo cancels the pair's Reject of g, whatever id g has", async () => {
+    const t = await setup();
+    await accepted(t);
+    await api(t, `/api/v1/accounts/${t.r}/remove_from_followers`);
+    expect(await undoFrom(t, `${REMOTE}/follows/r/alice`)).toMatchObject({ applied: true });
+    const k = await followFrom(t);
+    expect(answers(await drain(t))).toEqual([["Accept", k.id]]);
+  });
+
+  // Mastodon's Undo#handle_reference undoes a Follow named by its id alone, or embedded without a type (each as the
+  // inbound parser hands it to the Store, inbound.ts refOf). g is still recorded as retracted, or its record expired.
+  const untyped: [string, (t: T, g: string) => Record<string, unknown>][] = [
+    ["embedded without a type", (t, g) => ({ id: g, type: null, actor: t.rUri, object: t.aliceUri, instrument: null })],
+    ["named by its id alone", (_, g) => ({ id: g, type: null, actor: null, object: null, instrument: null })],
+  ];
+  it.each(
+    untyped.flatMap(([shape, undo]) => [
+      [shape, "recorded", undo, { applied: false, reason: "retracted" }] as const,
+      [shape, "expired", undo, { applied: true, reason: "retraction-recorded" }] as const,
+    ]),
+  )("an Undo of g %s (its retraction %s), before a newer Follow k, cancels the Reject of g", async (...args) => {
+    const [, retraction, undo, result] = args;
+    const t = await setup();
+    const g = await accepted(t);
+    await api(t, `/api/v1/accounts/${t.r}/remove_from_followers`);
+    if (retraction === "expired") {
+      await sql(t.store, "DELETE FROM inbound_retractions WHERE target_uri = ?", g);
+    }
+    expect(await receive(t.store, t.rUri, { type: "Undo", object: undo(t, g) })).toMatchObject(result);
+    const k = await followFrom(t);
+    expect(answers(await drain(t))).toEqual([["Accept", k.id]]);
+  });
+
+  // An Undo of g that k overtook still cancels the Reject of g while it waits.
+  it("an Undo of g after a newer Follow k, before any delivery, cancels the Reject of g", async () => {
+    const t = await setup();
+    const g = await accepted(t);
+    await api(t, `/api/v1/accounts/${t.r}/remove_from_followers`);
+    const k = await followFrom(t);
+    expect(await undoFrom(t, g)).toMatchObject({ applied: false, reason: "retracted" });
+    expect(answers(await drain(t))).toEqual([["Accept", k.id]]);
+  });
+
+  // The accepted risk (docs/threat-model.md): k overtaking the follower's Undo of g cannot be told from an older
+  // Follow, so the Reject of g is sent before k's Accept, as Mastodon sends it, and the Undo of g arriving after it
+  // changes nothing: Kopje holds k, which the Reject may have ended at the follower's server through the pair.
+  it("a newer Follow k and the Reject of g sent before the Undo of g arrives: Kopje keeps k", async () => {
+    const t = await setup();
+    const g = await accepted(t);
+    await api(t, `/api/v1/accounts/${t.r}/remove_from_followers`);
+    const k = await followFrom(t);
+    expect(answers(await drain(t))).toEqual([
+      ["Reject", g],
+      ["Accept", k.id],
+    ]);
+    expect(await undoFrom(t, g)).toMatchObject({ applied: false, reason: "retracted" });
+    expect(await drain(t)).toEqual([]);
+    expect(await sql(t.store, "SELECT state, uri FROM follows WHERE account_id = ?", t.r)).toEqual([
+      { state: "accepted", uri: k.id },
+    ]);
+  });
+
+  // DATA-6: the Reject's Follow is compared by its stored bytes. An imported one ending in the byte FF decodes to the
+  // same string as a Follow id ending in U+FFFD, but names another Follow, so the Follow keeps it.
+  it("compares the Reject's Follow id byte for byte", async () => {
+    const t = await setup();
+    await outage(t);
+    const prefix = `${REMOTE}/follows/`;
+    await sql(
+      t.store,
+      `INSERT INTO outbound_activities (id, account_id, body, object_uri, created_at, follow_pair)
+			VALUES (77, ?1, '{"activity":{"type":"Reject"},"audience":{"followers":false,"accounts":[]}}',
+				CAST(CAST(?2 AS BLOB) || X'FF' AS TEXT), 0, ?3)`,
+      t.w.alice.id,
+      prefix,
+      t.r,
+    );
+    expect(
+      await sql(
+        t.store,
+        "SELECT object_uri FROM outbound_activities WHERE id = 77 AND object_uri = ?",
+        `${prefix}\uFFFD`,
+      ),
+    ).toEqual([]);
+    const k = await followFrom(t, `${prefix}\uFFFD`);
+    expect(k.result).toMatchObject({ applied: true, reason: "followed" });
+    expect(await sql(t.store, "SELECT superseded FROM outbound_activities WHERE id = 77")).toEqual([{ superseded: 0 }]);
+  });
+
+  // A Reject that names no Follow id (an edge stored without one) or a Misskey pair id cannot be told from one of the
+  // generation a Follow takes over, whatever its id, so it goes as before.
+  it.each([
+    ["a Misskey pair id", `${REMOTE}/follows/r/alice`],
+    ["no Follow id", null],
+  ])("cancels a Reject naming %s", async (_, uri) => {
+    const t = await setup();
+    await accepted(t);
+    await sql(t.store, "UPDATE follows SET uri = ? WHERE account_id = ?", uri, t.r);
+    await api(t, `/api/v1/accounts/${t.r}/remove_from_followers`);
+    expect(
+      await sql(
+        t.store,
+        "SELECT object_uri FROM outbound_activities WHERE json_extract(body, '$.activity.type') = 'Reject'",
+      ),
+    ).toEqual([{ object_uri: uri }]);
+    const next = await followFrom(t);
+    expect(next.result).toMatchObject({ applied: true, reason: "followed" });
+    expect(answers(await drain(t))).toEqual([["Accept", next.id]]);
+  });
+});
+
 describe("lanes after a cancellation", () => {
   it("deletes queued rows on both sides of a surviving row behind a surviving head; no promotion", async () => {
     const t = await setup();
@@ -305,11 +543,15 @@ describe("lanes after a cancellation", () => {
     expect(after.map((row) => [row.type, row.state, row.exposed])).toEqual([
       ["Create", "pending", 1],
       ["Create", "queued", 0],
+      ["Reject", "queued", 0],
       ["Block", "queued", 0],
       ["Undo", "queued", 0],
       ["Accept", "queued", 0],
     ]);
-    expect(answers(await drain(t))).toEqual([["Accept", second.id]]);
+    expect(answers(await drain(t))).toEqual([
+      ["Reject", first.id],
+      ["Accept", second.id],
+    ]);
   });
 
   it("deletes a pending head never claimed and promotes the oldest row behind it; new work is admitted queued", async () => {
@@ -468,8 +710,9 @@ describe("a renewal cancels every answer of the pair that is not leased, claimed
     expect(answers(await drain(t))).toEqual([["Accept", second.id]]);
   });
 
-  // Neither the exposed Accept nor the withdrawing Reject that would have countered it reaches the new request.
-  it("cancels an exposed old Accept and an unexposed withdrawing Reject before a new locked request", async () => {
+  // Neither the exposed Accept nor the withdrawing Reject that would have countered it reaches the new request: the
+  // follower's Undo of the old generation, which Kopje had already ended, cancels both.
+  it("an Undo of the ended generation cancels its exposed Accept and unexposed withdrawing Reject", async () => {
     const t = await setup();
     const first = await followFrom(t);
     expect(await claimOnce(t, FAIL)).toEqual(["Accept"]);
@@ -482,6 +725,7 @@ describe("a renewal cancels every answer of the pair that is not leased, claimed
       ["Block", t.rUri, 0],
       ["Undo", expect.any(String), 0],
     ]);
+    expect(await undoFrom(t, first.id)).toMatchObject({ applied: false, reason: "retracted" });
     const second = await followFrom(t);
     expect(second.result).toMatchObject({ reason: "follow-requested" });
     expect((await drain(t)).map(([type, object]) => [type, object === first.id])).toEqual([
@@ -700,6 +944,111 @@ describe("bounds and refusals (RES-6)", () => {
     expect(await sql(t.store, "SELECT * FROM outbound_activities WHERE id = 77")).toEqual([]);
   });
 
+  // `count` Rejects of alice's to r that a Follow keeps (unsuperseded, each naming an earlier Follow of its own), each
+  // with a queued row; `superseded` marks them superseded instead.
+  async function rejects(t: T, count: number, superseded = 0) {
+    await sql(
+      t.store,
+      `WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < ?3)
+			INSERT INTO outbound_activities (id, account_id, body, object_uri, superseded, created_at, follow_pair)
+			SELECT 1000 + i, ?1, '{"activity":{"type":"Reject"},"audience":{"followers":false,"accounts":[]}}',
+				'https://remote.example/follows/earlier-' || i, ?4, 0, ?2
+			FROM n`,
+      t.w.alice.id,
+      t.r,
+      count,
+      superseded,
+    );
+    await sql(
+      t.store,
+      `INSERT INTO deliveries (activity_id, account_id, inbox_url, lane, state, next_attempt_at, updated_at)
+			SELECT id, account_id, 'https://remote.example/inbox', 'https://remote.example', 'queued', 0, ?
+			FROM outbound_activities WHERE follow_pair IS NOT NULL`,
+      NOW,
+    );
+  }
+
+  // Kept Rejects count toward the bound as any other answer: the bound is applied before the selection.
+  it("answers 503 with nothing written over the intent bound of kept Rejects", async () => {
+    const t = await setup();
+    await rejects(t, FOLLOW_ANSWER_INTENTS + 1);
+    const before = await snapshot(t.store);
+    expect((await followFrom(t)).result).toMatchObject({ reason: "follow-answer-backlog", retry: true });
+    expect(await snapshot(t.store)).toEqual(before);
+  });
+
+  it("cancels an unleased superseded Reject of an unrelated Follow", async () => {
+    const t = await setup();
+    await rejects(t, 1, 1);
+    expect((await followFrom(t)).result).toMatchObject({ applied: true, reason: "followed" });
+    expect(await sql(t.store, "SELECT 1 FROM outbound_activities WHERE id = 1001")).toEqual([]);
+    expect(await sql(t.store, "SELECT 1 FROM deliveries WHERE activity_id = 1001")).toEqual([]);
+  });
+
+  // Over the bound, an Undo of a Follow answers 503 and writes nothing, on either path: its id already recorded as
+  // retracted, or not.
+  it.each([
+    ["recorded as retracted", true],
+    ["not recorded", false],
+  ])("answers 503 with nothing written for an Undo over the bound, its Follow %s", async (_, recorded) => {
+    const t = await setup();
+    await rejects(t, FOLLOW_ANSWER_INTENTS + 1);
+    const g = `${REMOTE}/follows/earlier-1`;
+    if (recorded) {
+      await sql(
+        t.store,
+        "INSERT INTO inbound_retractions (actor_uri, target_uri, expires_at) VALUES (?, ?, ?)",
+        t.rUri,
+        g,
+        LATER,
+      );
+    }
+    const before = await snapshot(t.store);
+    expect(await undoFrom(t, g)).toMatchObject({ reason: "follow-answer-backlog", retry: true });
+    expect(await snapshot(t.store)).toEqual(before);
+  });
+
+  // An Undo naming the Follow by its id alone finds the pairs through the local accounts: one over the bound refuses
+  // it, wherever the undone answer sits, and within the bound the answer is found wherever it sits.
+  const idOnly = (id: string) => ({
+    type: "Undo",
+    object: { id, type: null, actor: null, object: null, instrument: null },
+  });
+  it.each([
+    ["recorded as retracted", true],
+    ["not recorded", false],
+  ])("answers 503 with nothing written for an id-only Undo past the bound, its Follow %s", async (_, recorded) => {
+    const t = await setup();
+    const count = FOLLOW_ANSWER_INTENTS + 8;
+    await rejects(t, count);
+    const g = `${REMOTE}/follows/earlier-${count}`;
+    if (recorded) {
+      await sql(
+        t.store,
+        "INSERT INTO inbound_retractions (actor_uri, target_uri, expires_at) VALUES (?, ?, ?)",
+        t.rUri,
+        g,
+        LATER,
+      );
+    }
+    const before = await snapshot(t.store);
+    expect(await receive(t.store, t.rUri, idOnly(g))).toMatchObject({ reason: "follow-answer-backlog", retry: true });
+    expect(await snapshot(t.store)).toEqual(before);
+  });
+
+  it("cancels the last answer of a pair at the bound for an id-only Undo", async () => {
+    const t = await setup();
+    await rejects(t, FOLLOW_ANSWER_INTENTS);
+    const last = 1000 + FOLLOW_ANSWER_INTENTS;
+    expect(await receive(t.store, t.rUri, idOnly(`${REMOTE}/follows/earlier-${FOLLOW_ANSWER_INTENTS}`))).toMatchObject({
+      applied: true,
+    });
+    expect(await sql(t.store, "SELECT 1 FROM outbound_activities WHERE id = ?", last)).toEqual([]);
+    expect(await sql(t.store, "SELECT count(*) AS n FROM outbound_activities")).toEqual([
+      { n: FOLLOW_ANSWER_INTENTS - 1 },
+    ]);
+  });
+
   it("cancels nothing for a duplicate Follow or a renewal at the retraction cap", async () => {
     const t = await setup();
     await outage(t);
@@ -743,6 +1092,26 @@ describe("bounds and refusals (RES-6)", () => {
       (await sql<{ detail: string }>(t.store, `EXPLAIN QUERY PLAN ${query}`, ...params)).map((row) => row.detail);
     expect(await plan(FOLLOW_ANSWER_INTENTS_SQL, "1", "2", 33)).toEqual([
       "SEARCH o USING COVERING INDEX outbound_activities_follow_pair (account_id=? AND follow_pair=?)",
+    ]);
+    // The classes of at most 32 answers, by primary key, and the edge's uri by its id.
+    expect(await plan(FOLLOW_ANSWER_CLASSES_SQL, "[1]", "x", "1", 4096)).toEqual([
+      "SEARCH o USING INTEGER PRIMARY KEY (rowid=?)",
+      "LIST SUBQUERY 2",
+      "SCAN json_each VIRTUAL TABLE INDEX 1:",
+      "SCALAR SUBQUERY 1",
+      "SEARCH f USING INTEGER PRIMARY KEY (rowid=?)",
+    ]);
+    // The signers an Undo naming its Follow by id alone looks through: the local accounts, each a bounded seek.
+    expect(await plan(UNDONE_ANSWER_SIGNERS_SQL, "2", "x", 33)).toEqual([
+      "SCAN l USING COVERING INDEX sqlite_autoindex_local_accounts_1",
+      "CORRELATED SCALAR SUBQUERY 2",
+      "CO-ROUTINE (subquery-1)",
+      "SEARCH o USING COVERING INDEX outbound_activities_follow_pair (account_id=? AND follow_pair=?)",
+      "SCAN (subquery-1)",
+      "CORRELATED SCALAR SUBQUERY 4",
+      "CO-ROUTINE a",
+      "SEARCH o USING INDEX outbound_activities_follow_pair (account_id=? AND follow_pair=?)",
+      "SCAN a",
     ]);
     for (const query of [FOLLOW_ANSWER_ROWS_SQL, FOLLOW_ANSWER_CHUNKS_SQL]) {
       const detail = await plan(query, "[1]", 65);
@@ -1193,7 +1562,7 @@ describe("a superseded answer under lease gets no further attempt", () => {
     ]);
   });
 
-  it("a withdrawing Reject (a retraction) that a renewal superseded under its lease is dropped too", async () => {
+  it("a withdrawing Reject (a retraction) that the follower's Undo superseded under its lease is dropped too", async () => {
     const t = await setup();
     const first = await followFrom(t);
     expect(await claimOnce(t, OK)).toEqual(["Accept"]);
@@ -1201,6 +1570,7 @@ describe("a superseded answer under lease gets no further attempt", () => {
     const token = `held-${++lease}`;
     const [delivery] = (await t.store.claimDeliveries(BUILD, { now: NOW, leaseToken: token })).deliveries;
     await api(t, `/api/v1/accounts/${t.r}/unblock`);
+    expect(await undoFrom(t, first.id)).toMatchObject({ applied: false, reason: "retracted" });
     const second = await followFrom(t);
     expect(second.result).toMatchObject({ applied: true, reason: "followed" });
     const [reject] = await lane(t);

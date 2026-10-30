@@ -1,6 +1,7 @@
 import { ACCOUNTS_ID_INDEX, STATUSES_ID_INDEX, STATUSES_URI_INDEX } from "../db/indexes";
 import type { Db } from "../db/sql";
 import { hostDomain } from "../platform/domain-name";
+import { ACTIVITY_ID_LIMIT } from "../platform/identity-bounds";
 import {
   type Audience,
   availableLocalSql,
@@ -2149,21 +2150,27 @@ function nextDueAt(db: Db, now: number, ownLease: string | null = null): number 
 // Follow answers
 // ---------------------------------------------------------------------------------------------------------------
 
-// A remote Follow cancels its pair's answers (Accept, Reject) that no POST of Kopje's can be in flight for, and the
-// unexpanded ones (inbox.ts follow): for interoperability with servers that match an answer by account pair, not only
-// by the Follow it names (Misskey's UserFollowingService; Mastodon's Accept and Reject fall back to the pair), so a
-// stale one would act on the new request. Every row that is not leased goes (queued, pending or given up, claimed
-// before or not: a pending row's attempt has completed). A leased row keeps its lane, so the new answer waits behind
-// it, and its intent is superseded: the claim, the confirmation and a failed completion drop a superseded answer
-// (STALE_ANSWER) instead of sending, retrying or giving it up. Only a POST whose confirmation was granted before the
-// Follow committed still goes (the accepted risk in docs/threat-model.md).
+// A remote Follow cancels the answers of its pair that it replaces (Accept, Reject) that no POST of Kopje's can be in
+// flight for, and the unexpanded ones (inbox.ts follow): for interoperability with servers that match an answer by
+// account pair, not only by the Follow it names (Misskey's UserFollowingService; Mastodon's Accept and Reject fall back
+// to the pair), so a stale one would act on the new request. It replaces every Accept, and a Reject only of the
+// generation it takes over (one naming its own id or the edge's current one, or no id or a pair-shaped id, which
+// cannot be told from it). Any other Reject ends or refuses a generation Kopje no longer holds, which the follower's
+// server may still hold (an older Follow arriving late cannot be told from a newer one), so it is kept and delivered,
+// as Mastodon delivers its own (remove_from_followers_service.rb, follow.rb). An Undo of a Follow cancels the answers
+// of the generation it undoes, and a pair-shaped one every answer of the pair (inbox.ts undo): the follower withdrew
+// it itself, and a Reject of it sent later would reach its next request through the pair. Every row that is not
+// leased goes (queued, pending or given up, claimed before or not: a pending row's attempt has completed). A leased
+// row keeps its lane, so the new answer waits behind it, and its intent is superseded: the claim, the confirmation and
+// a failed completion drop a superseded answer (STALE_ANSWER) instead of sending, retrying or giving it up. Only a POST
+// whose confirmation was granted before the Follow committed still goes (the accepted risk in docs/threat-model.md).
 //
-// Bounds (RES-6): a Follow reads at most FOLLOW_ANSWER_INTENTS + 1 unsettled answers of its pair, and of them
-// FOLLOW_ANSWER_ROWS + 1 rows (leased or not) and FOLLOW_ANSWER_CHUNKS + 1 unexpanded chunks; over any bound it is
-// refused (followAnswersOf returns null) before anything is written, and the peer delivers it again. An answer has
-// one target, so one row or chunk: the intent bound bites first, and the others bound stored rows from elsewhere (an
-// imported store). Answers leave the bound as their rows deliver or are cancelled, and as sweepDeliveries deletes the
-// given-up rows of superseded ones.
+// Bounds (RES-6): a Follow, or an Undo of one, reads at most FOLLOW_ANSWER_INTENTS + 1 unsettled answers of its pair,
+// and of them FOLLOW_ANSWER_ROWS + 1 rows (leased or not) and FOLLOW_ANSWER_CHUNKS + 1 unexpanded chunks; over any
+// bound it is refused (followAnswersOf returns null) before anything is written, and the peer delivers it again. An
+// answer has one target, so one row or chunk: the intent bound bites first, and the others bound stored rows from
+// elsewhere (an imported store). Answers leave the bound as their rows deliver or are cancelled, and as sweepDeliveries
+// deletes the given-up rows of superseded ones at once and those of a kept Reject at the 30-day retention.
 export const FOLLOW_ANSWER_INTENTS = 32;
 export const FOLLOW_ANSWER_ROWS = 64;
 export const FOLLOW_ANSWER_CHUNKS = 32;
@@ -2188,14 +2195,60 @@ export const FOLLOW_ANSWER_ROWS_SQL = `SELECT CAST(id AS TEXT) AS id, CAST(activ
 export const FOLLOW_ANSWER_CHUNKS_SQL = `SELECT CAST(id AS TEXT) AS id FROM outbound_targets
 	WHERE activity_id IN (SELECT CAST(value AS INTEGER) FROM json_each(?)) LIMIT ?`;
 
-// Reads only: the unsettled answers of signerId to followerId, or null over a bound.
-export function followAnswersOf(db: Db, signerId: string, followerId: string): FollowAnswers | null {
-  const intents = db
+// An unsettled answer as followAnswersOf's `replaces` judges it, classified in SQL: its type (ANSWER_TYPE), whether it
+// is superseded already, whether it names no Follow (object_uri NULL), whether its Follow is one of the selection's
+// (`named`: object_uri equal, byte for byte, to the selection's id or to the uri of its edge; DATA-6), and `shape`, the
+// Follow id it names when that is within ACTIVITY_ID_LIMIT bytes (else null, and its shape is not tested), for a shape
+// test only, never as an identity: an imported id may be malformed UTF-8, which decodes lossily.
+export type FollowAnswer = { type: string; superseded: number; unnamed: number; named: number; shape: string | null };
+
+// What followAnswersOf selects: the answers `replaces` accepts, judged against `id` and the uri of the follows row
+// `edgeId` (each may be null).
+export type FollowAnswerSelection = {
+  id: string | null;
+  edgeId: string | null;
+  replaces: (answer: FollowAnswer) => boolean;
+};
+
+// The answer's type as classified and logged: Accept or Reject, else 'other' (an imported body with no such type), never null.
+const ANSWER_TYPE = `CASE json_extract(o.body, '$.activity.type') WHEN 'Accept' THEN 'Accept' WHEN 'Reject' THEN 'Reject'
+	ELSE 'other' END`;
+
+export const FOLLOW_ANSWER_CLASSES_SQL = `SELECT CAST(o.id AS TEXT) AS id, ${ANSWER_TYPE} AS type, o.superseded,
+	o.object_uri IS NULL AS unnamed,
+	coalesce(o.object_uri = ?2 OR o.object_uri = (SELECT f.uri FROM follows f WHERE f.id = CAST(?3 AS INTEGER)), 0) AS named,
+	CASE WHEN length(CAST(o.object_uri AS BLOB)) <= ?4 THEN o.object_uri END AS shape
+	FROM outbound_activities o WHERE o.id IN (SELECT CAST(value AS INTEGER) FROM json_each(?1)) ORDER BY o.id`;
+
+// Reads only: the unsettled answers of signerId to followerId that `select` selects (all without one), or null over a
+// bound. Every unsettled answer counts toward the intent bound, selected or not; the rows and chunks are those of the
+// selected ones. The answers' classes (FollowAnswer) are read by primary key, at most FOLLOW_ANSWER_INTENTS of them,
+// each of bounded size.
+export function followAnswersOf(
+  db: Db,
+  signerId: string,
+  followerId: string,
+  select?: FollowAnswerSelection,
+): FollowAnswers | null {
+  const found = db
     .all<{ id: string }>(FOLLOW_ANSWER_INTENTS_SQL, signerId, followerId, FOLLOW_ANSWER_INTENTS + 1)
     .map((r) => r.id);
-  if (intents.length > FOLLOW_ANSWER_INTENTS) {
+  if (found.length > FOLLOW_ANSWER_INTENTS) {
     return null;
   }
+  const intents =
+    found.length === 0 || select === undefined
+      ? found
+      : db
+          .all<FollowAnswer & { id: string }>(
+            FOLLOW_ANSWER_CLASSES_SQL,
+            JSON.stringify(found),
+            select.id,
+            select.edgeId,
+            ACTIVITY_ID_LIMIT,
+          )
+          .filter(select.replaces)
+          .map((r) => r.id);
   if (intents.length === 0) {
     return { intents, rows: [], chunks: [] };
   }
@@ -2333,21 +2386,18 @@ const REFUSED_SENDER = `EXISTS (SELECT 1 FROM local_accounts l
 			AND json_extract(o.body, '$.activity.object.suspended') IS 1
 			AND json_extract(o.body, '$.activity.object.id') = json_extract(o.body, '$.activity.actor')))`;
 
-// 1 for a follow answer whose intent a later Follow of its pair, or a block's withdrawing Reject, superseded (NET-2),
-// else 0 (also with no activity row). It reads only the two stored columns, never the activity's JSON, which an
-// imported row may lack. Read with the row, and judged apart from sendRefused, so VIS-30's retraction exemption does
-// not cover it: a withdrawing Reject is stale too once a newer Follow supersedes it. superseded is never cleared, and
-// the row is read under its lease token, so the check needs no caller time. Its activity is `o`.
+// 1 for a follow answer whose intent a later Follow of its pair, an Undo of its generation, or a block's withdrawing
+// Reject superseded (NET-2), else 0 (also with no activity row). It reads only the two stored columns, never the
+// activity's JSON, which an imported row may lack. Read with the row, and judged apart from sendRefused, so VIS-30's
+// retraction exemption does not cover it: a withdrawing Reject is stale too once a newer Follow supersedes it.
+// superseded is never cleared, and the row is read under its lease token, so the check needs no caller time. Its
+// activity is `o`.
 const STALE_ANSWER = `(o.follow_pair IS NOT NULL AND o.superseded = 1)`;
 
-// The answer's type as logged: Accept or Reject, else 'other' (an imported body with no such type), never null.
-const ANSWER_TYPE = `CASE json_extract(o.body, '$.activity.type') WHEN 'Accept' THEN 'Accept' WHEN 'Reject' THEN 'Reject'
-	ELSE 'other' END`;
-
-// DATA-5: the answer's type (ANSWER_TYPE) and where it was caught, nothing else. `cancel`: a Follow deleted a row a
-// claim had taken; `claim`, `confirm`, `failure`: a leased one was dropped instead of being leased again, sent, or
-// retried or given up; `sent_in_flight`: one confirmed before it was superseded was delivered. That is local evidence
-// that the peer may have applied it after the newer Follow, not an observed disagreement.
+// DATA-5: the answer's type (ANSWER_TYPE) and where it was caught, nothing else. `cancel`: a Follow or an Undo deleted
+// a row a claim had taken; `claim`, `confirm`, `failure`: a leased one was dropped instead of being leased again, sent,
+// or retried or given up; `sent_in_flight`: one confirmed before it was superseded was delivered. That is local
+// evidence that the peer may have applied it after the newer Follow, not an observed disagreement.
 function staleAnswer(type: string, at: "cancel" | "claim" | "confirm" | "failure" | "sent_in_flight"): void {
   console.warn({ event: "kopje.delivery.stale_follow_answer", type, at });
 }
