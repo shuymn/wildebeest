@@ -677,8 +677,10 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
   both directions and in either state. A remote `Block` (one that passes ID-6) does what Mastodon's
   `ActivityPub::Activity::Block` does (`block.rb:14-16`): it ends the blocker's accepted follow with a `Reject` that
   withdraws it (`UnfollowService`, `unfollow_service.rb:35-36`; an `Accept` of it not yet sent is superseded and never
-  sent, NET-2) and the local account's follow and request of the blocker, and keeps the blocker's pending request; if
-  the ended follow's id cannot be recorded as retracted (ID-7), the `Block` changes nothing. While a block lasts the
+  sent, NET-2, except for a follow stored without an id, as an import may leave it, whose `Accept` is not superseded, as
+  a local block's is not: one waiting in the `Reject`'s lane goes before it, and one given up may still be retried
+  by the operator) and the local account's follow and request of the blocker, and keeps the blocker's pending request;
+  if the ended follow's id cannot be recorded as retracted (ID-7), the `Block` changes nothing. While a block lasts the
   blocked account may not start a follow of the blocker (a remote `Follow` from it is answered with a `Reject`). The
   blocker's kept request may still be authorized or rejected by the local owner, and unlocking authorizes it, as
   Mastodon's `AuthorizeFollowService` and `FollowRequest#authorize!` check no block; a `Follow` from a remote blocker
@@ -686,7 +688,7 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
   the target blocks. Once such a follow is accepted, the local account's statuses reach the blocker as any follower's,
   and the blocker's still do not reach the local account. The blocked account sees nothing of the blocker
   (VIS-1) and cannot favourite or boost the blocker's statuses (an inbound `Like` or `Announce` of one is ignored,
-  where Mastodon stores it and only filters its notification), and nothing from the blocked account reaches the
+  where Mastodon stores it and only filters its notification), and nothing from the blocked account reaches a local
   blocker: no list shows it (VIS-5), and no notification of it is written or shown, including a mention or reply
   that mentions or answers it and a post notification (`notify`) of a status that mentions it. Relationships show `blocking` and `blocked_by`. A local block of a remote account
   sends, in order, the `Undo` of our follow, a `Reject` of theirs (one that withdraws it if it was accepted) and the
