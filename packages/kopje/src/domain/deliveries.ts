@@ -2361,21 +2361,22 @@ const REFUSED_SENDER = `EXISTS (SELECT 1 FROM local_accounts l
 			AND json_extract(o.body, '$.activity.object.suspended') IS 1
 			AND json_extract(o.body, '$.activity.object.id') = json_extract(o.body, '$.activity.actor')))`;
 
-// 1 for a follow answer whose intent a later Follow of its pair, or a block's withdrawing Reject, superseded (NET-2),
-// else 0 (also with no activity row). It reads only the two stored columns, never the activity's JSON, which an
-// imported row may lack. Read with the row, and judged apart from sendRefused, so VIS-30's retraction exemption does
-// not cover it: a withdrawing Reject is stale too once a newer Follow supersedes it. superseded is never cleared, and
-// the row is read under its lease token, so the check needs no caller time. Its activity is `o`.
+// 1 for a follow answer whose intent a later Follow of its pair, an Undo of its generation, or a block's withdrawing
+// Reject superseded (NET-2), else 0 (also with no activity row). It reads only the two stored columns, never the
+// activity's JSON, which an imported row may lack. Read with the row, and judged apart from sendRefused, so VIS-30's
+// retraction exemption does not cover it: a withdrawing Reject is stale too once a newer Follow supersedes it.
+// superseded is never cleared, and the row is read under its lease token, so the check needs no caller time. Its
+// activity is `o`.
 const STALE_ANSWER = `(o.follow_pair IS NOT NULL AND o.superseded = 1)`;
 
 // The answer's type as logged: Accept or Reject, else 'other' (an imported body with no such type), never null.
 const ANSWER_TYPE = `CASE json_extract(o.body, '$.activity.type') WHEN 'Accept' THEN 'Accept' WHEN 'Reject' THEN 'Reject'
 	ELSE 'other' END`;
 
-// DATA-5: the answer's type (ANSWER_TYPE) and where it was caught, nothing else. `cancel`: a Follow deleted a row a
-// claim had taken; `claim`, `confirm`, `failure`: a leased one was dropped instead of being leased again, sent, or
-// retried or given up; `sent_in_flight`: one confirmed before it was superseded was delivered. That is local evidence
-// that the peer may have applied it after the newer Follow, not an observed disagreement.
+// DATA-5: the answer's type (ANSWER_TYPE) and where it was caught, nothing else. `cancel`: a Follow or an Undo deleted
+// a row a claim had taken; `claim`, `confirm`, `failure`: a leased one was dropped instead of being leased again, sent,
+// or retried or given up; `sent_in_flight`: one confirmed before it was superseded was delivered. That is local
+// evidence that the peer may have applied it after the newer Follow, not an observed disagreement.
 function staleAnswer(type: string, at: "cancel" | "claim" | "confirm" | "failure" | "sent_in_flight"): void {
   console.warn({ event: "kopje.delivery.stale_follow_answer", type, at });
 }

@@ -237,12 +237,13 @@ against their own instance. TLS is assumed between all parties.
   when that start would pass 18 digits; exhaustion aborts the writer's whole transaction. See the migration header and
   `test/migrations.test.ts` (0054). A Follow has generations: a superseded, undone, refused or blocked Follow id is
   recorded as retracted, so no late Undo, Accept, Reject or replay reaches a newer generation, and no Accept or
-  Reject is recorded twice; an answer's id derives from the Follow it answers; a new generation cancels the earlier
-  generations' answers that are not leased and supersedes a leased one (NET-2). A Move is a job keyed by its id that
-  never moves a follow made after it. The Store rounds of one request carry the same actor document and revision, and
-  only the first round that finds the revision stores the document (ID-1). An actor's deletion is a tombstone
-  (`inbound_jobs`) independent of the retraction cap and TTL, honoured by every upsert and by every Move batch, and
-  recorded even for a verified Delete of an actor never stored. A generation change whose retraction cannot be recorded
+  Reject is recorded twice; an answer's id derives from the Follow it answers; a new generation cancels the answers it
+  replaces that are not leased and supersedes a leased one, and an `Undo` those of the generation it undoes (NET-2).
+  A Move is a job keyed by its id that never moves a follow made after it. The Store rounds of one request carry the
+  same actor document and revision, and only the first round that finds the revision stores the document (ID-1). An
+  actor's deletion is a tombstone (`inbound_jobs`) independent of the retraction cap and TTL, honoured by every upsert
+  and by every Move batch, and recorded even for a verified Delete of an actor never stored. A generation change whose
+  retraction cannot be recorded
   (the per-actor cap) is not made: a Block, and a local reject of a request (which records the remote Follow as
   retracted and answers 503 if it cannot), change nothing then. Misskey's pair-shaped
   Follow id (`/follows/<a>/<b>`) is never recorded as retracted, whether the Undo or the stored edge carries it, so the
@@ -1610,14 +1611,23 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
   inbox once when the shared inbox answers 404"), `test/delivery-post.test.ts` ("NET-2: never
   follows a redirect", "NET-2: times out the POST before the lease ends"), `test/delivery-regressions.test.ts` ("keeps a
   Create to a server's shared inbox ahead of an Update", "counts slow DNS and slow key loading against the budget",
-  "refuses to send once the lease budget has run out"). A remote `Follow` cancels, in its receive transaction, every
-  `Accept` and `Reject` of its pair that is not leased (queued, pending a retry or given up, whether or not a claim
-  took it before: a pending row's attempt has completed) or that is still unexpanded, for interoperability with
+  "refuses to send once the lease budget has run out"). A remote `Follow` cancels, in its receive transaction, the
+  answers of its pair it replaces that are not leased (queued, pending a retry or given up, whether or not a claim
+  took it before: a pending row's attempt has completed) or that are still unexpanded, for interoperability with
   servers that match answers by account pair (Mastodon 4.5's `Accept` and `Reject` fall back to the pair; Misskey
   2026.10.0 resolves a `Reject` to the pair's request and following, ignoring the `Follow` id): the follower's server
-  gets only the new generation's answer. A leased answer is kept and holds its lane, so the new answer waits behind
-  it when both share that lane (an answer to a follower whose inbox origin has changed since is in another lane, and
-  is not held); its intent is superseded, and from then on it gets no further attempt and no failure backoff, the
+  gets only the new generation's answer. It replaces every `Accept`, and a `Reject` of the generation it takes over: one
+  naming its own id or the edge's current one, naming no id or a Misskey pair id (which cannot be told from it), or
+  already superseded. Any other `Reject` (a removal from the followers, a local block, an inbound `Block`, a refused
+  request, a suspension's severing) ends or refuses a generation Kopje no longer holds and is kept and delivered: the
+  follower's server may still hold that generation, as a `Follow` sent before it and delivered late cannot be told from
+  a newer one, and Mastodon delivers its own `Reject` as a job nothing cancels (see the accepted risks). An `Undo` of a
+  `Follow` cancels and supersedes the same way the answers of the generation it undoes, its edge stored or already ended
+  (its id retracted), and a Misskey pair `Undo` every answer of the pair: the follower withdrew it, so a `Reject` of it
+  sent later could only reach the follower's next request. The kind and the answered `Follow` are read when the answers
+  are found, within the same bounds (RES-6). A leased answer is kept and holds its lane, so the new answer waits behind
+  it when both share that lane (an answer to a follower whose inbox origin has changed since is in another lane, and is
+  not held); its intent is superseded, and from then on it gets no further attempt and no failure backoff, the
   decision reading only `follow_pair` and `superseded`, never the activity's JSON: the claim after its lease expires,
   its confirmation and a failed completion (transient, permanent, the personal-inbox fallback, the last attempt)
   delete it and promote the lane instead of leasing, sending, retrying or giving it up. The same holds
@@ -1625,9 +1635,10 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
   the `Follow` committed still goes (see the accepted risks); `kopje.delivery.stale_follow_answer` records each answer
   caught and each such one delivered (`sent_in_flight`), by type and step only (DATA-5). A `Follow` the target
   refuses because it blocks the follower records its `Reject` and cancels nothing. `cancelFollowAnswers` and
-  `STALE_ANSWER` in `src/domain/deliveries.ts`; `test/follow-answers.test.ts` (each renewal path; "a renewal cancels
-  every answer of the pair that is not leased, claimed before or not"; "a superseded answer under lease gets no
-  further attempt"; "a superseded imported answer without an activity type gets no further attempt"; "the
+  `STALE_ANSWER` in `src/domain/deliveries.ts`, `replacedAnswer` and `cancelUndoneAnswers` in `src/domain/inbox.ts`;
+  `test/follow-answers.test.ts` (each renewal path; "a Follow keeps the Reject of a generation Kopje no longer holds";
+  "a renewal cancels every answer of the pair that is not leased, claimed before or not"; "a superseded answer under
+  lease gets no further attempt"; "a superseded imported answer without an activity type gets no further attempt"; "the
   follow-answer check leaves other superseded activities alone"; both serialized orders against a claim and an
   expansion, and a POST held in flight).
 - **NET-3: every outbound sink has its own policy.** Any URL derived from remote or user input is fetched only through a
@@ -3071,16 +3082,17 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
   pin claims (`MAX_REMOTE_PINS` × `MAX_SYNC_ATTEMPTS`), each of 8 fetches; the network part takes at most 6 a round and
   54 a generation, and 3 documents when nothing fails (`test/remote-collections.test.ts` ("bounds them before and after
   the network part reads the outbox", "the network part within one round")).
-  A `Follow` reads at most 33 unsettled answers of its pair, of them at most 65 delivery rows, including exposed rows,
-  and 33 unexpanded chunks, so it admits at most 32, 64 and 32, and cancels at most those (NET-2); over any bound it
-  answers 503 and writes nothing (`followAnswersOf` in `src/domain/deliveries.ts`). A `Follow` within the bounds
-  clears its pair's given-up answers at once with the rest; a history already over the bound (an imported or upgraded
-  store) clears as its answers deliver and as the sweep deletes their given-up rows (RES-4), and a server whose own
-  retries of the `Follow` run out before then needs its user to follow again (`test/follow-answers.test.ts` ("bounds and
-  refusals")). A Move moves 100 followers per batch and carries at most 100 blocks and mutes; a deleted actor's purge
-  writes at most 500 rows per batch in all, every write counted (SQLite's `total_changes()`): deletions, counter
-  recounts (`followers_count`, `following_count`, `statuses_count`, status counters) and the Undo intent of a withdrawn
-  boost with its target chunks. The account is
+  A `Follow`, or an `Undo` of one, reads at most 33 unsettled answers of its pair, of them at most 65 delivery rows,
+  including exposed rows, and 33 unexpanded chunks, so it admits at most 32, 64 and 32, and cancels at most those
+  (NET-2); over any bound it answers 503 and writes nothing (`followAnswersOf` in `src/domain/deliveries.ts`). A
+  `Follow` within the bounds clears the given-up answers it replaces at once with the rest, and a kept `Reject` that
+  gave up leaves at the 30-day retention; a history already over the bound (an imported or upgraded store) clears as its
+  answers deliver and as the sweep deletes their given-up rows (RES-4), and a server whose own retries of the `Follow`
+  run out before then needs its user to follow again (`test/follow-answers.test.ts` ("bounds and refusals")). A Move
+  moves 100 followers per batch and carries at most 100 blocks and mutes; a deleted actor's purge writes at most 500
+  rows per batch in all, every write counted (SQLite's `total_changes()`): deletions, counter recounts
+  (`followers_count`, `following_count`, `statuses_count`, status counters) and the Undo intent of a withdrawn boost
+  with its target chunks. The account is
   unavailable from the first batch's transaction on (VIS-1), so the order of the steps shows nothing of it, and no
   boost of its statuses is accepted and no status of it fetched while it lasts. Its follows, notifications, mentions
   and other relationships go first; then local boosts of its statuses, each withdrawn once: the Undo intent is recorded, then its targets
@@ -4331,6 +4343,7 @@ OWASP, html5sec and sanitize-html vectors in `test/fixtures/` (`test/html.test.t
 | A local block of a remote actor at its retraction cap does not record the ended Follow as retracted, so after an unblock a redelivery of that Follow is accepted as a new one                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             | The block must apply whatever the blocked actor did to its own cap; while the block lasts its Follows are refused (VIS-13)                                                                                                                                                                                                                                                                                                                               | redelivered Follows are seen after unblocks                                                                              |
 | Deliveries queued before a block or a domain block (retries of them included) are still sent as queued, to the blocked account's inboxes too                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              | Mastodon does not rewrite deliveries already queued either; a re-check at claim cannot tell, for a shared inbox or a follower target, which recipients it serves (VIS-13, VIS-15)                                                                                                                                                                                                                                                                        | deliveries keep their recipients                                                                                         |
 | A follow answer (`Accept`, `Reject`) whose delivery was confirmed before the follower's new `Follow` committed is still POSTed, once per lane of the pair; a server matching answers by account pair may apply it to the new request, so the sides can disagree (NET-2). Misskey 2026.10.0 retries an `Accept` that finds no follow request, so an old `Accept` can meet a later request: a locked account's pending renewal may be authorized there while Kopje still waits for the owner. A `Reject` of a `Follow` refused because the target blocks the follower cancels nothing                                                                                                       | A server's application of a POSTed answer cannot be observed: servers queue, process concurrently and retry, and the POST deadline bounds Kopje's attempt, not the server's processing. Once superseded, an answer gets no further attempt and no failure backoff; `kopje.delivery.stale_follow_answer` with `sent_in_flight` is local evidence of a possible overlap, not an observed disagreement. Recovery: the follower follows again                | a server offers answer correlation, or such a disagreement is seen                                                       |
+| A `Reject` that ends or refuses a generation Kopje no longer holds is kept when a later `Follow` of the pair arrives (NET-2). If the follower undid that generation and followed again, its new `Follow` arrived before its `Undo`, and the `Reject` was POSTed before the `Undo` arrived, a server matching a `Reject` by account pair (Mastodon 4.5's `reject.rb`) ends the new request or follow while Kopje holds it                                                                                                                                                                                                                                                                  | Mastodon parity: Mastodon sends its removal or block `Reject` as a job nothing cancels (`remove_from_followers_service.rb`, `unfollow_service.rb`) and takes the new request (`follow.rb`), so two Mastodon servers diverge alike. Cancelling it instead strands the ended generation at the follower's server when the late `Follow` is older (#1415). An `Undo` arriving before the POST cancels the `Reject`. Recovery: the follower follows again    | a server offers answer correlation, or such a disagreement is seen                                                       |
 | Clients, and browsers viewing a public page or the embed, load from the hosts that name them, which see the viewer's address (a page sends them no referrer): a custom emoji image not yet cached, that the cache refuses (by type, size, host or a policy), or past a snapshot's first 16 entries (edit history included); a remote attachment's file or icon not yet cached, that the cache refuses (Ogg, HEIF, QuickTime, a size past its cap, a host or a policy), that arrived before the retention or was stored longer, and every attachment of the edit history; posters; avatars and headers not yet cached or that the cache refuses; a page's video and audio only once played | The remote URL is the fallback Mastodon's media proxy replaces; the cache takes attachments within `MEDIA_CACHE_RETENTION_DAYS` (NET-3, MEDIA-7); the Store's memory bound (RES-3) holds the emoji cache read with each row to 16 entries; the URLs are http(s) and bounded (HTML-3, RES-2); a page's players ask for nothing before play (`preload="none"`, no autoplay, WEB-2)                                                                         | more cached emoji entries fit the memory bound, the edit history shows cached files, or a remote URL must never be shown |
 | An emoji snapshot goes stale until its object is delivered again: an emoji the author's server changes or removes keeps its old URL                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       | Each object keeps what it tagged; a global (shortcode, domain) registry, as Mastodon keeps, is not stored                                                                                                                                                                                                                                                                                                                                                | emoji are kept in a registry                                                                                             |
 | An uncached emoji's `static_url` is the same as `url`, and so is a cached one's when no still could be remuxed within 256 KiB, so such an animated emoji stays animated where a client asked for still images                                                                                                                                                                                                                                                                                                                                                                                                                                                                             | Mastodon serves a still image it generates; stills are remuxed, never decoded (MEDIA-6)                                                                                                                                                                                                                                                                                                                                                                  | clients need stills of every emoji                                                                                       |
