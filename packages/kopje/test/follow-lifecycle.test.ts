@@ -499,10 +499,11 @@ async function claim(w: World): Promise<Attempt | null> {
 }
 
 // The parts of a body the peer acts on: its type, its actor, the id of a Follow or Block, and its object with the
-// fields an embedded Follow or Block carries. An answer's, an Undo's or an Update's own id is Kopje's to choose, so
-// only its identity is checked (activityIdentity).
+// fields an embedded Follow or Block carries. Every id goes through activityIdentity; a Follow's or a Block's is then
+// compared exactly, while an answer's, an Undo's or an Update's own id is Kopje's to choose, so only its identity is.
 function bodyShape(w: World, body: Body, intent: Intent | null) {
-  const own = body.type === "Follow" || body.type === "Block" ? body.id : activityIdentity(w, body.id, intent);
+  const identity = activityIdentity(w, body.id, intent);
+  const own = (body.type === "Follow" || body.type === "Block") && identity.startsWith("intent ") ? body.id : identity;
   const object =
     typeof body.object === "string"
       ? body.object
@@ -1091,7 +1092,7 @@ describe("follow lifecycle transitions", () => {
     expect(confirmed("Undo")).toHaveLength(2);
     expect(new Set(confirmed("Undo")).size).toBe(1);
     expect(confirmed("Accept")).toHaveLength(1);
-    expect(w.intentOfId.size).toBe(2);
+    expect(w.intentOfId.size).toBe(3);
   });
 
   it("a stale attempt is refused at its confirmation and its completion", async () => {
