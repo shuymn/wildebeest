@@ -2164,12 +2164,12 @@ function nextDueAt(db: Db, now: number, ownLease: string | null = null): number 
 // a failed completion drop a superseded answer (STALE_ANSWER) instead of sending, retrying or giving it up. Only a POST
 // whose confirmation was granted before the Follow committed still goes (the accepted risk in docs/threat-model.md).
 //
-// Bounds (RES-6): a Follow, or an Undo of one, reads at most FOLLOW_ANSWER_INTENTS + 1 unsettled answers of its pair, and of them
-// FOLLOW_ANSWER_ROWS + 1 rows (leased or not) and FOLLOW_ANSWER_CHUNKS + 1 unexpanded chunks; over any bound it is
-// refused (followAnswersOf returns null) before anything is written, and the peer delivers it again. An answer has
-// one target, so one row or chunk: the intent bound bites first, and the others bound stored rows from elsewhere (an
-// imported store). Answers leave the bound as their rows deliver or are cancelled, and as sweepDeliveries deletes the
-// given-up rows of superseded ones at once and those of a kept Reject at the 30-day retention.
+// Bounds (RES-6): a Follow, or an Undo of one, reads at most FOLLOW_ANSWER_INTENTS + 1 unsettled answers of its pair,
+// and of them FOLLOW_ANSWER_ROWS + 1 rows (leased or not) and FOLLOW_ANSWER_CHUNKS + 1 unexpanded chunks; over any
+// bound it is refused (followAnswersOf returns null) before anything is written, and the peer delivers it again. An
+// answer has one target, so one row or chunk: the intent bound bites first, and the others bound stored rows from
+// elsewhere (an imported store). Answers leave the bound as their rows deliver or are cancelled, and as sweepDeliveries
+// deletes the given-up rows of superseded ones at once and those of a kept Reject at the 30-day retention.
 export const FOLLOW_ANSWER_INTENTS = 32;
 export const FOLLOW_ANSWER_ROWS = 64;
 export const FOLLOW_ANSWER_CHUNKS = 32;

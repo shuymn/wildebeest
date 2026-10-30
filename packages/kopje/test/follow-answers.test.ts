@@ -412,9 +412,9 @@ describe("a Follow keeps the Reject of a generation Kopje no longer holds", () =
     expect(answers(await drain(t))).toEqual([["Accept", k.id]]);
   });
 
-  // The accepted risk (docs/threat-model.md): k overtaking the follower's Undo of g cannot be told from an older Follow,
-  // so the Reject of g is sent before k's Accept, as Mastodon sends it, and the Undo of g arriving after it changes
-  // nothing: Kopje holds k, which the Reject may have ended at the follower's server through the pair.
+  // The accepted risk (docs/threat-model.md): k overtaking the follower's Undo of g cannot be told from an older
+  // Follow, so the Reject of g is sent before k's Accept, as Mastodon sends it, and the Undo of g arriving after it
+  // changes nothing: Kopje holds k, which the Reject may have ended at the follower's server through the pair.
   it("a newer Follow k and the Reject of g sent before the Undo of g arrives: Kopje keeps k", async () => {
     const t = await setup();
     const g = await accepted(t);
