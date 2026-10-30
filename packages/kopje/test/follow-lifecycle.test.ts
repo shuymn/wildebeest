@@ -1098,6 +1098,20 @@ describe("follow lifecycle: pair-shaped and unnamed answers against the policy",
     expect(w.policy.rl).toEqual({ state: "accepted", uri: PAIR });
   });
 
+  // An id-only pair Undo of a stored request names its pair through the edge, and cancels every answer of the pair:
+  // the Reject of the earlier request f1 too.
+  it("an id-only pair Undo of a stored request cancels the pair's answers", async () => {
+    const w = await setup();
+    await inbound(w, { k: "lock", locked: true });
+    await inbound(w, { k: "inFollow", id: F1! });
+    await inbound(w, { k: "reject" });
+    await inbound(w, { k: "inFollow", id: PAIR });
+    expect(lane(w)).toEqual([["Reject", F1]]);
+    await inbound(w, { k: "inUndo", id: PAIR, type: null });
+    expect(w.policy.rl).toBeNull();
+    expect(lane(w)).toEqual([]);
+  });
+
   // An untyped pair Undo matches only a follow with that id, and is not recorded (an accepted risk).
   it("an untyped pair Undo that matches nothing is not recorded", async () => {
     const w = await setup();

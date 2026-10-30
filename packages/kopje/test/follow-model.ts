@@ -347,12 +347,13 @@ export class Policy {
     // NET-2: "An Undo of a Follow cancels and supersedes the same way the answers of the generation it undoes, typed,
     // embedded without a type or naming the Follow by its id alone ..., its edge stored or already ended (its id
     // retracted), and a Misskey pair Undo every answer of the pair".
-    // "An Undo naming no local target looks for the pairs through the local accounts": by an answer naming its id.
-    const ofPair = ref.object === this.lUri || this.lane.some((i) => i.answer && i.ref === id);
-    const undoneAnswers = (): Intent[] =>
+    // The pair is known by the Undo's local target or the stored Follow its id names; "An Undo naming no local target
+    // looks for the pairs through the local accounts", by an answer naming its id.
+    const named = ref.object === this.lUri || this.lane.some((i) => i.answer && i.ref === id);
+    const undoneAnswers = (ofPair: boolean): Intent[] =>
       this.cancelAnswers(now, (answer) => (ofPair && pairShaped(id)) || answer.ref === id);
     if (this.retracted.has(id)) {
-      const caught = ref.type === null || ref.type === "Follow" ? undoneAnswers() : [];
+      const caught = ref.type === null || ref.type === "Follow" ? undoneAnswers(named) : [];
       return { applied: false, reason: "retracted", caught };
     }
     const pair = ref.type === "Follow" && pairShaped(id) && ref.object === this.lUri;
@@ -360,7 +361,7 @@ export class Policy {
       (ref.type === null || ref.type === "Follow") && this.rl !== null && (this.rl.uri === id || pair);
     const undoesBlock = ref.type === "Block" || (ref.type === null && !followMatch && this.blockRL === id);
     const undoesFollow = !undoesBlock && (ref.type === null || ref.type === "Follow");
-    const caught = undoesFollow ? undoneAnswers() : [];
+    const caught = undoesFollow ? undoneAnswers(named || this.rl?.uri === id) : [];
     const ended = followMatch ? this.rl!.uri : null;
     let undone = false;
     if (followMatch) {
