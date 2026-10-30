@@ -1622,8 +1622,8 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
   bytes), or already superseded. Any other `Reject` (a removal from the followers, a local block, an inbound `Block`, a
   refused request, a suspension's severing) ends or refuses a generation Kopje no longer holds and is kept and
   delivered, ahead of the new answer while it is still active in its lane (a given-up one holds no lane, so an
-  operator's retry sends it after): the follower's server may still hold that generation, as a `Follow` sent before it
-  and delivered late cannot be told from a newer one, and Mastodon delivers its own `Reject` as a job nothing cancels
+  operator's retry may send it after): the follower's server may still hold that generation, as a `Follow` sent before
+  it and delivered late cannot be told from a newer one, and Mastodon delivers its own `Reject` as a job nothing cancels
   (see the accepted risks). An `Undo` of a `Follow` cancels and supersedes the same way the answers of the generation it
   undoes, typed, embedded without a type or naming the `Follow` by its id alone (Mastodon's `Undo#handle_reference`),
   its edge stored or already ended (its id retracted), and a Misskey pair `Undo` every answer of the pair: the follower
