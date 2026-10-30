@@ -62,7 +62,7 @@ export type Inbound =
 
 // A Misskey pair id (docs/threat-model.md: "a pair-shaped id (`/follows/<a>/<b>`)") names every generation of a
 // follow (ID-7).
-const pairShaped = (id: string): boolean => /^\/follows\/[^/]+\/[^/]+$/.test(URL.parse(id)?.pathname ?? "");
+export const pairShaped = (id: string): boolean => /^\/follows\/[^/]+\/[^/]+$/.test(URL.parse(id)?.pathname ?? "");
 
 // NET-2: a Follow tests the pair shape of the Follow id a Reject names only within 4,096 bytes ("the pair shape is
 // tested on ids of at most 4,096 bytes"); a longer one is kept like any other Reject naming another generation.
@@ -136,7 +136,9 @@ export class Policy {
     },
   ): void {
     const answer = input.answer === true;
-    if (answer) {
+    // ID-7: an answer's id derives from the Follow it answers, so a pair-shaped Follow id, never recorded as retracted,
+    // answers each generation of the pair under the same id; any other id is answered once.
+    if (answer && (input.ref === null || !pairShaped(input.ref))) {
       const key = `${input.type} ${input.ref}`;
       if (this.answerIds.has(key)) {
         throw new Error(`policy: the ${key} answer is recorded twice (ID-7)`);

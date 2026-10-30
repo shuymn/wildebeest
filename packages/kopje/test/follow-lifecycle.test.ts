@@ -5,7 +5,7 @@ import { describe, expect, it } from "vitest";
 import type { DeliveryOutcome } from "../src/domain/deliveries";
 import { bearer, json, sql } from "./api-helpers";
 import { NOW } from "./app-helpers";
-import { type Body, type Inbound, type Intent, PAIR_SHAPE_BYTES, Peer, Policy } from "./follow-model";
+import { type Body, type Inbound, type Intent, PAIR_SHAPE_BYTES, Peer, Policy, pairShaped } from "./follow-model";
 import { BUILD } from "./helpers";
 import { storeReceive } from "./inbox-store-helpers";
 import { runs } from "./policy-world";
@@ -511,7 +511,8 @@ function bodyShape(w: World, body: Body, intent: Intent | null) {
 }
 
 // ID-7: an activity Kopje sends keeps its id across its attempts (a retry, a POST again after its lease), no two
-// activities share one, and each is on L's origin. The identity is the policy's intent while the id holds to that.
+// activities share one (but the answers of a pair-shaped Follow id, whose id derives from it, ID-7), and each is on L's
+// origin. The identity is the policy's intent while the id holds to that.
 function activityIdentity(w: World, id: string, intent: Intent | null): string {
   if (intent === null) {
     return id;
@@ -524,7 +525,8 @@ function activityIdentity(w: World, id: string, intent: Intent | null): string {
   if (known !== undefined && known !== id) {
     return `changed from ${known} to ${id}`;
   }
-  if (other !== undefined && other !== intent.seq) {
+  const pairAnswer = intent.answer && intent.ref !== null && pairShaped(intent.ref);
+  if (other !== undefined && other !== intent.seq && !pairAnswer) {
     return `${id}, already the id of intent ${other}`;
   }
   w.activityIds.set(intent.seq, id);
@@ -1110,6 +1112,21 @@ describe("follow lifecycle: pair-shaped and unnamed answers against the policy",
     await inbound(w, { k: "inUndo", id: PAIR, type: null });
     expect(w.policy.rl).toBeNull();
     expect(lane(w)).toEqual([]);
+  });
+
+  // ID-7: the pair id is never recorded as retracted, so it follows again after its Undo, and its answer, whose id
+  // derives from it, is recorded and sent again under the same id.
+  it("a pair id answered in two generations sends its Accept twice under one id", async () => {
+    const w = await setup();
+    for (let cycle = 0; cycle < 2; cycle++) {
+      await inbound(w, { k: "inFollow", id: PAIR });
+      await act(w, { k: "send" });
+      await inbound(w, { k: "inUndo", id: PAIR, type: "Follow" });
+    }
+    const accepts = w.attempts.filter((a) => a.intent.type === "Accept" && a.body !== null);
+    expect(accepts.map((a) => a.intent.ref)).toEqual([PAIR, PAIR]);
+    expect(new Set(accepts.map((a) => (JSON.parse(a.body!) as Body).id)).size).toBe(1);
+    expect(new Set(accepts.map((a) => a.intent.seq)).size).toBe(2);
   });
 
   // An untyped pair Undo matches only a follow with that id, and is not recorded (an accepted risk).
