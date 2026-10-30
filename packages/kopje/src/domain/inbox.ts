@@ -716,9 +716,9 @@ function replacedAnswer(answer: FollowAnswer): boolean {
 // SQL), and for a Misskey pair id, which names every generation, all of the pair's. The follower withdrew that
 // generation itself, so its Accept or Reject sent later would reach the follower's next request through the pair.
 // Without a target (an Undo naming the Follow by its id alone, as Mastodon's Undo#handle_reference accepts it), the
-// pairs are those of the local accounts with an answer naming `undone` among the follower's first
-// FOLLOW_ANSWER_INTENTS + 1 (UNDONE_ANSWER_SIGNERS_SQL). Returns false over the bound of any pair (RES-6), with
-// nothing written.
+// pairs are those of the local accounts with an answer naming `undone` (UNDONE_ANSWER_SIGNERS_SQL), and the Undo is
+// refused if any local account's pair with the follower is over the intent bound, as its answers are not all read.
+// Returns false over the bound of any pair (RES-6), with nothing written.
 function cancelUndoneAnswers(
   db: Db,
   followerId: string,
@@ -727,12 +727,19 @@ function cancelUndoneAnswers(
   now: number,
 ): boolean {
   const pair = isMisskeyPairId(undone);
-  const targets =
-    targetId !== undefined
-      ? [targetId]
-      : db
-          .all<{ id: string }>(UNDONE_ANSWER_SIGNERS_SQL, followerId, undone, FOLLOW_ANSWER_INTENTS + 1)
-          .map((r) => r.id);
+  let targets = targetId === undefined ? undefined : [targetId];
+  if (targets === undefined) {
+    const pairs = db.all<{ id: string; n: number; named: number }>(
+      UNDONE_ANSWER_SIGNERS_SQL,
+      followerId,
+      undone,
+      FOLLOW_ANSWER_INTENTS + 1,
+    );
+    if (pairs.some((p) => p.n > FOLLOW_ANSWER_INTENTS)) {
+      return false;
+    }
+    targets = pairs.filter((p) => p.named === 1).map((p) => p.id);
+  }
   const found: FollowAnswers[] = [];
   for (const target of targets) {
     const answers = followAnswersOf(db, target, followerId, {
@@ -751,12 +758,15 @@ function cancelUndoneAnswers(
   return true;
 }
 
-// The local accounts (operator-sized, read whole) with an answer to the follower ?1 naming the Follow ?2, byte for
-// byte, among the pair's first ?3 answers in id order (a seek of outbound_activities_follow_pair each).
-export const UNDONE_ANSWER_SIGNERS_SQL = `SELECT l.account_id AS id FROM local_accounts l
-	WHERE EXISTS (SELECT 1 FROM (SELECT o.object_uri FROM outbound_activities o INDEXED BY outbound_activities_follow_pair
-			WHERE o.account_id = l.account_id AND o.follow_pair = ?1 ORDER BY o.id LIMIT ?3) a
-		WHERE a.object_uri = ?2)`;
+// The local accounts (operator-sized, read whole) and their answers to the follower ?1: for each, how many of the pair's
+// answers there are, counted up to ?3 (more than FOLLOW_ANSWER_INTENTS refuses the Undo), and whether one of its first
+// ?3 names the Follow ?2, byte for byte. Each reads at most ?3 entries of outbound_activities_follow_pair, twice.
+export const UNDONE_ANSWER_SIGNERS_SQL = `SELECT l.account_id AS id,
+		(SELECT count(*) FROM (SELECT 1 FROM outbound_activities o INDEXED BY outbound_activities_follow_pair
+			WHERE o.account_id = l.account_id AND o.follow_pair = ?1 LIMIT ?3)) AS n,
+		EXISTS (SELECT 1 FROM (SELECT o.object_uri FROM outbound_activities o INDEXED BY outbound_activities_follow_pair
+			WHERE o.account_id = l.account_id AND o.follow_pair = ?1 ORDER BY o.id LIMIT ?3) a WHERE a.object_uri = ?2) AS named
+	FROM local_accounts l`;
 
 // Our follow of `actor` that an Accept or Reject answers (ID-6: only the followed side answers):
 //   - the Follow's id equals the edge's uri, with the actor as its target; or

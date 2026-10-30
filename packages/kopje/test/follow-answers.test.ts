@@ -1008,6 +1008,47 @@ describe("bounds and refusals (RES-6)", () => {
     expect(await snapshot(t.store)).toEqual(before);
   });
 
+  // An Undo naming the Follow by its id alone finds the pairs through the local accounts: one over the bound refuses
+  // it, wherever the undone answer sits, and within the bound the answer is found wherever it sits.
+  const idOnly = (id: string) => ({
+    type: "Undo",
+    object: { id, type: null, actor: null, object: null, instrument: null },
+  });
+  it.each([
+    ["recorded as retracted", true],
+    ["not recorded", false],
+  ])("answers 503 with nothing written for an id-only Undo past the bound, its Follow %s", async (_, recorded) => {
+    const t = await setup();
+    const count = FOLLOW_ANSWER_INTENTS + 8;
+    await rejects(t, count);
+    const g = `${REMOTE}/follows/earlier-${count}`;
+    if (recorded) {
+      await sql(
+        t.store,
+        "INSERT INTO inbound_retractions (actor_uri, target_uri, expires_at) VALUES (?, ?, ?)",
+        t.rUri,
+        g,
+        LATER,
+      );
+    }
+    const before = await snapshot(t.store);
+    expect(await receive(t.store, t.rUri, idOnly(g))).toMatchObject({ reason: "follow-answer-backlog", retry: true });
+    expect(await snapshot(t.store)).toEqual(before);
+  });
+
+  it("cancels the last answer of a pair at the bound for an id-only Undo", async () => {
+    const t = await setup();
+    await rejects(t, FOLLOW_ANSWER_INTENTS);
+    const last = 1000 + FOLLOW_ANSWER_INTENTS;
+    expect(await receive(t.store, t.rUri, idOnly(`${REMOTE}/follows/earlier-${FOLLOW_ANSWER_INTENTS}`))).toMatchObject({
+      applied: true,
+    });
+    expect(await sql(t.store, "SELECT 1 FROM outbound_activities WHERE id = ?", last)).toEqual([]);
+    expect(await sql(t.store, "SELECT count(*) AS n FROM outbound_activities")).toEqual([
+      { n: FOLLOW_ANSWER_INTENTS - 1 },
+    ]);
+  });
+
   it("cancels nothing for a duplicate Follow or a renewal at the retraction cap", async () => {
     const t = await setup();
     await outage(t);
@@ -1064,6 +1105,10 @@ describe("bounds and refusals (RES-6)", () => {
     expect(await plan(UNDONE_ANSWER_SIGNERS_SQL, "2", "x", 33)).toEqual([
       "SCAN l USING COVERING INDEX sqlite_autoindex_local_accounts_1",
       "CORRELATED SCALAR SUBQUERY 2",
+      "CO-ROUTINE (subquery-1)",
+      "SEARCH o USING COVERING INDEX outbound_activities_follow_pair (account_id=? AND follow_pair=?)",
+      "SCAN (subquery-1)",
+      "CORRELATED SCALAR SUBQUERY 4",
       "CO-ROUTINE a",
       "SEARCH o USING INDEX outbound_activities_follow_pair (account_id=? AND follow_pair=?)",
       "SCAN a",
