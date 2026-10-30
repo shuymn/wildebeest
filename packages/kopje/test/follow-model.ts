@@ -580,8 +580,9 @@ export type Body = {
 export type PeerEvents = {
   // block.rb:16: Kopje's Block dropped R's request g (RejectFollowService, nothing sent).
   blockDroppedRequest: Set<string>;
-  // accept.rb:24 and reject.rb:25: an answer of another generation applied to R's request g by the account pair.
-  pairAnswer: Set<string>;
+  // accept.rb:24 and reject.rb:25: answers of other generations (as `${type} ${the Follow id they name}`) applied to
+  // R's request or follow g by the account pair.
+  pairAnswer: Map<string, Set<string>>;
   // refollow_worker.rb:19-26: R's follow g dropped by a refollow whose replacement FollowService refused (nothing
   // sent).
   refusedRefollow: Set<string>;
@@ -615,7 +616,7 @@ export class Peer {
   readonly sent: PeerMessage[] = [];
   readonly events: PeerEvents = {
     blockDroppedRequest: new Set(),
-    pairAnswer: new Set(),
+    pairAnswer: new Map(),
     refusedRefollow: new Set(),
     undoBeforeFollow: 0,
     replayAfterUndo: new Set(),
@@ -930,13 +931,18 @@ export class Peer {
     }
   }
 
+  private pairApplied(g: string, type: "Accept" | "Reject", answered: string | null): void {
+    const answers = this.events.pairAnswer.get(g) ?? new Set();
+    this.events.pairAnswer.set(g, answers.add(`${type} ${answered}`));
+  }
+
   // accept.rb:4-35: R's request by the Follow's id, else (embedded Follow) by the account pair.
   private processAccept(uri: string | null): void {
     if (this.rl?.state !== "requested") {
       return;
     }
     if (this.rl.uri !== uri) {
-      this.events.pairAnswer.add(this.rl.uri);
+      this.pairApplied(this.rl.uri, "Accept", uri);
     }
     this.rl = { state: "accepted", uri: this.rl.uri };
   }
@@ -948,7 +954,7 @@ export class Peer {
       return;
     }
     if (this.rl.uri !== uri) {
-      this.events.pairAnswer.add(this.rl.uri);
+      this.pairApplied(this.rl.uri, "Reject", uri);
     }
     if (this.rl.state === "requested") {
       this.rl = null;

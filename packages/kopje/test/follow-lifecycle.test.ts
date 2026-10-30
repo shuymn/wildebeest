@@ -130,9 +130,11 @@ async function setup() {
     policy: new Policy(lUri, rUri),
     peer: new Peer(ORIGIN, rUri, lUri),
     attempts: [] as Attempt[],
-    // R's messages Kopje has received, and the step each of R's Follows first reached Kopje.
+    // R's messages Kopje has received, the step each of R's Follows first reached Kopje, and the step an Undo of each
+    // of them first did.
     delivered: [] as Inbound[],
     receivedAt: new Map<string, number>(),
+    undoReceivedAt: new Map<string, number>(),
     // R's generations an older Follow of R's reached Kopje after (its deliveries are independent jobs).
     olderFollowAfter: new Set<string>(),
     // L's newest follow and block ids.
@@ -294,6 +296,9 @@ async function deliverToKopje(w: World, activity: Inbound, label: string): Promi
   w.trace.push(`  -> ${result.reason}`);
   if (activity.type === "Follow" && !w.receivedAt.has(activity.id)) {
     w.receivedAt.set(activity.id, w.step);
+  }
+  if (activity.type === "Undo" && activity.object.id !== null && !w.undoReceivedAt.has(activity.object.id)) {
+    w.undoReceivedAt.set(activity.object.id, w.step);
   }
   if (predicted.reason === "follow-request-updated" || predicted.reason === "follow-reaccepted") {
     tally(w.stats, "renewal");
@@ -773,7 +778,7 @@ async function settle(w: World): Promise<void> {
 // Quiescence: Kopje against the peer
 // ---------------------------------------------------------------------------------------------------------------
 
-type Exception = "net2-answer" | "block-race" | "reordered-follows" | "refused-refollow" | null;
+type Exception = "net2-answer" | "kept-reject" | "block-race" | "reordered-follows" | "refused-refollow" | null;
 
 const peerState = (edge: { state: string; uri: string } | null) =>
   edge === null ? null : { state: edge.state === "pending" ? "requested" : edge.state, uri: edge.uri };
@@ -788,20 +793,35 @@ function rlException(w: World, kopje: { state: string; uri: string } | null): Ex
   }
   const mine = peerState(kopje);
   const theirs = peer.rl;
-  // NET-2's accepted risk: an answer of an earlier generation, POSTed before Kopje received g (its confirmation came
-  // first), applied by the pair to g at R's server (accept.rb:24, reject.rb:25).
-  const answeredEarlier = w.attempts.some(
+  // The answers of earlier generations R's server applied to g by the pair (accept.rb:24, reject.rb:25), as the
+  // attempts that reached it.
+  const pairApplied = peer.events.pairAnswer.get(g);
+  const reachedAnswers = w.attempts.filter(
     (a) =>
       a.intent.answer &&
       a.intent.ref !== g &&
+      pairApplied?.has(`${a.intent.type} ${a.intent.ref}`) === true &&
       a.body !== null &&
-      a.reached &&
-      a.confirmedAt < (w.receivedAt.get(g) ?? Number.POSITIVE_INFINITY),
+      a.reached,
   );
-  if (peer.events.pairAnswer.has(g) && answeredEarlier && mine?.uri === g) {
+  const receivedG = w.receivedAt.get(g) ?? Number.POSITIVE_INFINITY;
+  // NET-2's accepted risk: such an answer POSTed before Kopje received g (its confirmation came first).
+  if (reachedAnswers.some((a) => a.confirmedAt < receivedG) && mine?.uri === g) {
     if ((mine.state === "requested" && theirs?.state === "accepted" && theirs.uri === g) || theirs === null) {
       return "net2-answer";
     }
+  }
+  // NET-2's accepted risk of a kept Reject: g kept the Reject of an earlier generation R had undone, and the Reject
+  // was POSTed before that Undo reached Kopje (its confirmation came first), so R's server ended g by the pair.
+  // Kopje holds g; R's server holds nothing.
+  const keptReject = reachedAnswers.some(
+    (a) =>
+      a.intent.type === "Reject" &&
+      a.confirmedAt >= receivedG &&
+      a.confirmedAt < (w.undoReceivedAt.get(a.intent.ref!) ?? Number.POSITIVE_INFINITY),
+  );
+  if (keptReject && mine?.uri === g && theirs === null) {
+    return "kept-reject";
   }
   // The accepted risk of a block and unblock racing a new Follow: L's Block reached R's server after R sent g, and
   // dropped the request there (block.rb:16), while Kopje, unblocked already, took g.
@@ -1427,6 +1447,29 @@ describe("follow lifecycle kept answers", () => {
     const [, g] = w.peer.generations;
     expect(w.attempts.some((a) => a.intent.type === "Reject" && a.intent.ref === g && a.reached)).toBe(true);
     expect((await project(w)).rl).toBeNull();
+    expect(w.peer.rl).toBeNull();
+  });
+
+  // NET-2's accepted risk of a kept Reject: L removes R's follow h, then R undoes h and follows again (g), and g
+  // reaches Kopje before h's Undo. g keeps the Reject of h, which reaches R's server before h's Undo reaches Kopje, and
+  // Mastodon applies it to g by the pair (reject.rb:25). Kopje holds g; R's server holds nothing.
+  it("a kept Reject of an undone generation ends the next one at R's server", async () => {
+    const w = await run([
+      { k: "peerFollow" },
+      { k: "drainPeer" },
+      { k: "send" },
+      { k: "process", ...at(0) },
+      { k: "removeFollower" },
+      { k: "peerUnfollow" },
+      { k: "peerFollow" },
+      { k: "deliver", ...at(1) },
+      { k: "send" },
+      { k: "process", ...at(0) },
+    ]);
+    const [h, g] = w.peer.generations;
+    expect(w.stats["exception kept-reject"]).toBe(1);
+    expect(w.attempts.some((a) => a.intent.type === "Reject" && a.intent.ref === h && a.reached)).toBe(true);
+    expect((await project(w)).rl).toEqual({ state: "accepted", uri: g });
     expect(w.peer.rl).toBeNull();
   });
 });
