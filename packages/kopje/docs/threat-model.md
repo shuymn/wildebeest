@@ -1620,30 +1620,32 @@ list). VIS-1 to VIS-4 are authorization; VIS-5 is filtering.
   about it. It replaces every `Accept`, and a `Reject` of that generation: one naming its own id or the edge's current
   one, naming no id or a Misskey pair id (which cannot be told from it; the pair shape is tested on ids of at most 4,096
   bytes), or already superseded. Any other `Reject` (a removal from the followers, a local block, an inbound `Block`, a
-  refused request, a suspension's severing) ends or refuses a generation Kopje no longer holds and is kept and delivered
-  ahead of the new answer: the follower's server may still hold that generation, as a `Follow` sent before it and
-  delivered late cannot be told from a newer one, and Mastodon delivers its own `Reject` as a job nothing cancels (see
-  the accepted risks). An `Undo` of a `Follow` cancels and supersedes the same way the answers of the generation it
+  refused request, a suspension's severing) ends or refuses a generation Kopje no longer holds and is kept and
+  delivered, ahead of the new answer while it is still active in its lane (a given-up one holds no lane, so an
+  operator's retry sends it after): the follower's server may still hold that generation, as a `Follow` sent before it
+  and delivered late cannot be told from a newer one, and Mastodon delivers its own `Reject` as a job nothing cancels
+  (see the accepted risks). An `Undo` of a `Follow` cancels and supersedes the same way the answers of the generation it
   undoes, typed, embedded without a type or naming the `Follow` by its id alone (Mastodon's `Undo#handle_reference`),
   its edge stored or already ended (its id retracted), and a Misskey pair `Undo` every answer of the pair: the follower
   withdrew it, so a `Reject` of it sent later could only reach the follower's next request. An `Undo` naming no local
-  target looks for the pairs through the local accounts, each a seek of at most 33 of its answers. The kind is read and
-  the answered `Follow` compared byte for byte in SQL when the answers are found (DATA-6), within the same bounds
-  (RES-6). A leased answer is kept and holds its lane, so the new answer waits behind it when both share that lane (an
-  answer to a follower whose inbox origin has changed since is in another lane, and is not held); its intent is
-  superseded, and from then on it gets no further attempt and no failure backoff, the decision reading only
-  `follow_pair` and `superseded`, never the activity's JSON: the claim after its lease expires, its confirmation and a
-  failed completion (transient, permanent, the personal-inbox fallback, the last attempt) delete it and promote the lane
-  instead of leasing, sending, retrying or giving it up. The same holds for an `Accept` that a block's withdrawing
-  `Reject` superseded. Only a POST whose confirmation was granted before the `Follow` or the `Undo` committed still goes
-  (see the accepted risks); `kopje.delivery.stale_follow_answer` records each answer caught and each such one delivered
-  (`sent_in_flight`), by type and step only (DATA-5). A `Follow` the target refuses because it blocks the follower
-  records its `Reject` and cancels nothing. `cancelFollowAnswers` and `STALE_ANSWER` in `src/domain/deliveries.ts`,
-  `replacedAnswer` and `cancelUndoneAnswers` in `src/domain/inbox.ts`; `test/follow-answers.test.ts` (each renewal path;
-  "a Follow keeps the Reject of a generation Kopje no longer holds"; "a renewal cancels every answer of the pair that is
-  not leased, claimed before or not"; "a superseded answer under lease gets no further attempt"; "a superseded imported
-  answer without an activity type gets no further attempt"; "the follow-answer check leaves other superseded activities
-  alone"; both serialized orders against a claim and an expansion, and a POST held in flight).
+  target looks for the pairs through the local accounts, reading at most 33 answers of each pair twice, and is refused
+  (503, nothing written) if any pair has more than 32. The kind is read and the answered `Follow` compared byte for byte
+  in SQL when the answers are found (DATA-6), within the same bounds (RES-6). A leased answer is kept and holds its
+  lane, so the new answer waits behind it when both share that lane (an answer to a follower whose inbox origin has
+  changed since is in another lane, and is not held); its intent is superseded, and from then on it gets no further
+  attempt and no failure backoff, the decision reading only `follow_pair` and `superseded`, never the activity's JSON:
+  the claim after its lease expires, its confirmation and a failed completion (transient, permanent, the personal-inbox
+  fallback, the last attempt) delete it and promote the lane instead of leasing, sending, retrying or giving it up. The
+  same holds for an `Accept` that a block's withdrawing `Reject` superseded. Only a POST whose confirmation was granted
+  before the `Follow` or the `Undo` committed still goes (see the accepted risks); `kopje.delivery.stale_follow_answer`
+  records each answer caught and each such one delivered (`sent_in_flight`), by type and step only (DATA-5). A `Follow`
+  the target refuses because it blocks the follower records its `Reject` and cancels nothing. `cancelFollowAnswers` and
+  `STALE_ANSWER` in `src/domain/deliveries.ts`, `replacedAnswer` and `cancelUndoneAnswers` in `src/domain/inbox.ts`;
+  `test/follow-answers.test.ts` (each renewal path; "a Follow keeps the Reject of a generation Kopje no longer holds";
+  "a renewal cancels every answer of the pair that is not leased, claimed before or not"; "a superseded answer under
+  lease gets no further attempt"; "a superseded imported answer without an activity type gets no further attempt"; "the
+  follow-answer check leaves other superseded activities alone"; both serialized orders against a claim and an
+  expansion, and a POST held in flight).
 - **NET-3: every outbound sink has its own policy.** Any URL derived from remote or user input is fetched only through a
   sink client that applies NET-1's host rules (https, public address, re-checked hops, a hop limit) plus its own budget:
   documents as NET-1; remote media unsigned, at most 3 redirects to any origin, never the instance's own host, a size
