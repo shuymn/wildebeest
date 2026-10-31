@@ -28,10 +28,80 @@ export function testKernel(
   return new StoreKernel(state, { build: BUILD, migrations, log: () => {}, ...extra });
 }
 
+// A Store the shipped migrations brought up to date. Applying them costs about 0.4 s a Store, most of a typical
+// test's time, so the upgrade runs once in a template Store per worker and each Store replays its schema and rows
+// (test/migrated-store.test.ts compares the two). The image is the same for every test, so it may outlive a suite
+// (vitest.config.ts). Suites of the upgrade itself start from freshStore().
 export async function migratedStore(): Promise<StoreStub> {
+  const image = await (migratedImage ??= takeMigratedImage());
   const store = freshStore();
-  await runInDurableObject(store, (_instance, state) => testKernel(state).upgrade());
+  await runInDurableObject(store, async (_instance, state) => {
+    // As the upgrade records it: this Store's bookmark before the first file, and when each file was applied.
+    const bookmark = await state.storage.getCurrentBookmark();
+    const now = Date.now();
+    const sql = state.storage.sql;
+    state.storage.transactionSync(() => {
+      // Rows before indexes and triggers, so that no trigger fires on a row the upgrade already left.
+      for (const statement of image.tables) {
+        sql.exec(statement);
+      }
+      for (const { insert, values } of image.rows) {
+        for (const row of values) {
+          sql.exec(insert, ...row);
+        }
+      }
+      for (const statement of image.others) {
+        sql.exec(statement);
+      }
+      sql.exec("UPDATE kopje_migrations SET applied_at = ?", now);
+      sql.exec("INSERT OR REPLACE INTO kopje_state (name, value) VALUES ('upgrade_bookmark', ?)", bookmark);
+    });
+  });
   return store;
+}
+
+// The CREATE statements of a migrated Store's tables and of its other objects (indexes, triggers, views), each in
+// the order the upgrade made them, and the rows of each table that has any, with the INSERT that writes them back.
+// workerd's own tables (_cf_*) and SQLite's (sqlite_*), with the indexes SQLite makes for constraints, come with the
+// Store or its statements.
+type MigratedImage = {
+  tables: string[];
+  others: string[];
+  rows: { insert: string; values: SqlStorageValue[][] }[];
+};
+
+let migratedImage: Promise<MigratedImage> | undefined;
+
+async function takeMigratedImage(): Promise<MigratedImage> {
+  const template = freshStore();
+  const result = await runInDurableObject(template, (_instance, state) => testKernel(state).upgrade());
+  if (!result.ok) {
+    throw new Error(`the template Store's upgrade failed: ${result.reason}: ${result.detail}`);
+  }
+  return runInDurableObject(template, (_instance, state) => {
+    const sql = state.storage.sql;
+    const objects = sql
+      .exec<{ type: string; name: string; sql: string }>(
+        "SELECT type, name, sql FROM sqlite_master WHERE sql IS NOT NULL AND substr(name, 1, 4) <> '_cf_' AND substr(name, 1, 7) <> 'sqlite_' ORDER BY rowid",
+      )
+      .toArray();
+    const tables = objects.filter((o) => o.type === "table");
+    const rows: MigratedImage["rows"] = [];
+    for (const { name } of tables) {
+      const cursor = sql.exec(`SELECT * FROM "${name}"`);
+      const values = [...cursor.raw()];
+      if (values.length > 0) {
+        const columns = cursor.columnNames.map((c) => `"${c}"`).join(", ");
+        const params = cursor.columnNames.map(() => "?").join(", ");
+        rows.push({ insert: `INSERT INTO "${name}" (${columns}) VALUES (${params})`, values });
+      }
+    }
+    return {
+      tables: tables.map((o) => o.sql),
+      others: objects.filter((o) => o.type !== "table").map((o) => o.sql),
+      rows,
+    };
+  });
 }
 
 // The Store's part of a jobs round (STORE_JOB_FAMILIES, jobs/queue.ts), each family in turn and without the round's
