@@ -50,7 +50,7 @@ catalog:
   oxlint-tsgolint: 7.0.2005
 
   # TypeScript and type packages.
-  "@types/node": 24.19.2
+  "@types/node": 26.6.5
   "@types/sanitize-html": 2.16.2
   typescript: 7.0.2
 

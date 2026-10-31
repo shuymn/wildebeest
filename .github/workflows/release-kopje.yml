@@ -150,7 +150,7 @@ jobs:
 
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: 24
+          node-version: 26
           registry-url: https://registry.npmjs.org
 
       # Trusted publishing needs npm 11.5.1 or later (and Node.js 22.14.0 or later).
@@ -193,7 +193,7 @@ jobs:
 
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: 24
+          node-version: 26
 
       # A rerun after the release was made leaves it as it is (scripts/kopje-release-lib.mjs, createRelease).
       - name: Create the GitHub release
