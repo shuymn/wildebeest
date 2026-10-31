@@ -102,4 +102,5 @@ Mastodon, decided as [mastodon-deviations.md](mastodon-deviations.md) says.
   colour schemes. Layout, focus, disclosure state and CSP checks are cases there; markup contracts stay in parse5.
 - **A workerd suite shares its worker with the suites run before it** (`vitest.config.ts`, without isolation): a test
   works on a Store of its own name, and what it leaves in module scope (a held call, a cache) is keyed per test or
-  settles before the test ends, also when an assertion fails. The media bucket is emptied before each suite.
+  settles before the test ends, also when an assertion fails, unless it is the same for every test (the migrated schema
+  `migratedStore` replays). The media bucket is emptied before each suite.
