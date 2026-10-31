@@ -26,9 +26,9 @@ catalog:
 
   # Cloudflare Workers: the bundler and dev server, the runtime types and the workerd test pool. deploy/package.json
   # pins the same wrangler.
-  "@cloudflare/vitest-plugin": 1.4.8
+  "@cloudflare/vitest-plugin": 1.4.9
   "@cloudflare/workers-types": 5.20261027.1
-  wrangler: 4.153.0
+  wrangler: 4.154.0
 
   # Tests: the runner, its coverage provider and its vite, property tests, the browser job, image fixtures, the HTML
   # and source scans.
